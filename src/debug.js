@@ -16,6 +16,8 @@ import {
 } from './gameplayConfig.js';
 import './debug.css';
 
+const BASE_URL = import.meta.env.BASE_URL;
+const assetUrl = (path) => `${BASE_URL}${String(path).replace(/^\/+/, '')}`;
 const SHEET_CONFIG_STORAGE_PREFIX = 'superfighters.sheetAnimationConfig';
 const ATTACHMENT_CONFIG_STORAGE_KEY = 'superfighters.attachmentConfig.v1';
 const DEFAULT_SHEET_ID = 'empress';
@@ -57,7 +59,7 @@ const SHEETS = {
   empress: {
     id: 'empress',
     label: 'Empress',
-    url: '/assets/empress.png',
+    url: assetUrl('assets/empress.png'),
     frameSize: 64,
     gap: 1,
     leftOffset: 1,
@@ -77,7 +79,7 @@ const SHEETS = {
   handguns: {
     id: 'handguns',
     label: 'Handguns',
-    url: '/assets/handgun.png',
+    url: assetUrl('assets/handgun.png'),
     frameSize: 64,
     gap: 1,
     leftOffset: 1,
@@ -97,7 +99,7 @@ const SHEETS = {
   girl: {
     id: 'girl',
     label: 'Girl',
-    url: '/assets/girl.png',
+    url: assetUrl('assets/girl.png'),
     frameSize: 24,
     gap: 0,
     leftOffset: 0,
@@ -261,9 +263,9 @@ function loadHandgunImage() {
     }
   };
   handgunImage.onerror = () => {
-    setStatus('Could not load /assets/handgun.png');
+    setStatus(`Could not load ${assetUrl('assets/handgun.png')}`);
   };
-  handgunImage.src = `/assets/handgun.png?v=${Date.now()}`;
+  handgunImage.src = `${assetUrl('assets/handgun.png')}?v=${Date.now()}`;
 }
 
 copyJsonButton.addEventListener('click', async () => {

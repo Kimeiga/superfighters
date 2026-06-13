@@ -10,14 +10,21 @@ const distDir = path.join(rootDir, 'dist');
 const port = Number(process.env.PORT || process.env.GECKOS_PORT || 9208);
 const udpMin = Number(process.env.GECKOS_UDP_MIN || 20000);
 const udpMax = Number(process.env.GECKOS_UDP_MAX || udpMin);
+const basePath = normalizeBasePath(process.env.BASE_PATH || process.env.VITE_BASE_PATH || '/');
 const lobbies = new Map();
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.static(distDir, {
+
+const staticOptions = {
   extensions: ['html'],
   maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0,
-}));
+};
+
+app.use(basePath, express.static(distDir, staticOptions));
+if (basePath !== '/') {
+  app.use(express.static(distDir, staticOptions));
+}
 
 app.get('/health', (_request, response) => {
   response.json({
@@ -43,7 +50,11 @@ app.get('/api/lobbies/:code', (request, response) => {
   });
 });
 
-app.use((_request, response) => {
+app.use((request, response) => {
+  if (basePath !== '/' && request.path === basePath.slice(0, -1)) {
+    response.redirect(308, basePath);
+    return;
+  }
   response.sendFile(path.join(distDir, 'index.html'));
 });
 
@@ -170,8 +181,14 @@ io.onConnection((channel) => {
 
 httpServer.listen(port, () => {
   console.log(`Superfighters server listening on http://0.0.0.0:${port}`);
+  console.log(`Serving game at ${basePath}`);
   console.log(`Geckos UDP port range ${udpMin}-${udpMax}`);
 });
+
+function normalizeBasePath(value) {
+  const cleaned = String(value || '/').trim().replace(/^\/+|\/+$/g, '');
+  return cleaned ? `/${cleaned}/` : '/';
+}
 
 function createLobby(channel) {
   const code = generateLobbyCode();

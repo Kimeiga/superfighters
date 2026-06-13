@@ -5,6 +5,9 @@ import { getGameplayConfig } from './gameplayConfig.js';
 import { TILE_DEFS, TILE_INDEX, mergeTilesToRects } from './levelData.js';
 import './styles.css';
 
+const BASE_URL = import.meta.env.BASE_URL;
+const FUSION_FONT_URL = new URL('./assets/fonts/fusion-pixel-12px-monospaced-latin.woff', import.meta.url).href;
+const assetUrl = (path) => `${BASE_URL}${String(path).replace(/^\/+/, '')}`;
 const GAME_WIDTH = Math.floor(window.innerWidth);
 const GAME_HEIGHT = Math.floor(window.innerHeight);
 const WORLD_WIDTH = Math.max(1900, GAME_WIDTH);
@@ -84,8 +87,8 @@ class FightScene extends Phaser.Scene {
   }
 
   preload() {
-    this.load.image(CHARACTER_SOURCE_KEY, '/assets/empress.png');
-    this.load.image(HANDGUN_SOURCE_KEY, '/assets/handgun.png');
+    this.load.image(CHARACTER_SOURCE_KEY, assetUrl('assets/empress.png'));
+    this.load.image(HANDGUN_SOURCE_KEY, assetUrl('assets/handgun.png'));
   }
 
   create() {
@@ -1112,7 +1115,7 @@ class FightScene extends Phaser.Scene {
   createHud() {
     this.ui = this.add.graphics().setScrollFactor(0).setDepth(50);
     this.hintText = this.add
-      .text(14, 8, 'Esc: Menu / Online  |  Debug: /debug.html  |  Editor: /level-editor.html', {
+      .text(14, 8, 'Esc: Menu / Online  |  Debug  |  Editor', {
         fontFamily: UI_FONT,
         fontSize: '12px',
         color: '#eaf5ff',
@@ -1210,10 +1213,10 @@ class FightScene extends Phaser.Scene {
     this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY - 22, 'Restart Match', () => this.restartMatch()));
     this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY + 26, 'Online Lobby', () => this.openOnlineOverlay()));
     this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY + 74, 'Debug / Tuning', () => {
-      window.location.href = '/debug.html';
+      window.location.href = assetUrl('debug.html');
     }));
     this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY + 122, 'Level Editor', () => {
-      window.location.href = '/level-editor.html';
+      window.location.href = assetUrl('level-editor.html');
     }));
 
     const controls = this.add
@@ -3757,7 +3760,7 @@ async function loadUiFont() {
     return;
   }
 
-  const font = new FontFace(UI_FONT, 'url("/assets/fonts/fusion-pixel-12px-monospaced-latin.woff") format("woff")');
+  const font = new FontFace(UI_FONT, `url("${FUSION_FONT_URL}") format("woff")`);
   const loadedFont = await font.load();
   document.fonts.add(loadedFont);
 }
@@ -3768,7 +3771,7 @@ function registerServiceWorker() {
   }
 
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {
+    navigator.serviceWorker.register(assetUrl('sw.js'), { scope: BASE_URL }).catch(() => {
       // The game should still run normally if PWA registration fails.
     });
   });

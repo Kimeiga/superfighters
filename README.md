@@ -31,6 +31,8 @@ Useful server environment variables:
 
 ```sh
 PORT=9208
+BASE_PATH=/superfighters/
+VITE_BASE_PATH=/superfighters/
 GECKOS_UDP_MIN=20000
 GECKOS_UDP_MAX=20000
 PUBLIC_ORIGIN=https://your-domain.example
@@ -45,6 +47,16 @@ npm ci
 npm run build
 npm start
 ```
+
+To build for `https://hakanalpay.com/superfighters/`, set `BASE_PATH=/superfighters/` for the server and `VITE_BASE_PATH=/superfighters/` during `npm run build`.
+
+This repo includes a GitHub Actions deploy workflow. Configure these repository secrets before relying on automatic deploys:
+
+- `VPS_HOST`
+- `VPS_USER`
+- `VPS_PORT`
+- `VPS_APP_DIR`
+- `VPS_SSH_KEY`
 
 For the first Vultr deployment, New York / New Jersey (EWR) is the best region if the players are in or near New York.
 
