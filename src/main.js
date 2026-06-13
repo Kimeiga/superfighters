@@ -665,6 +665,8 @@ class FightScene extends Phaser.Scene {
       .rectangle(rect.x + rect.width / 2, rect.y + rect.height / 2, rect.width, rect.height, 0xffffff, 0)
       .setOrigin(0.5);
     collider.setData('thin', thin);
+    collider.setData('levelGeometry', true);
+    collider.setData('indestructible', true);
     this.physics.add.existing(collider, true);
     collider.body.setSize(rect.width, rect.height);
     collider.body.updateFromGameObject();
@@ -719,6 +721,8 @@ class FightScene extends Phaser.Scene {
     const color = overrideColor ?? (thin ? COLORS.thinPlatform : COLORS.platformFace);
     const platform = this.add.rectangle(x, y, width, height, color).setOrigin(0.5);
     platform.setData('thin', thin);
+    platform.setData('levelGeometry', true);
+    platform.setData('indestructible', true);
     this.physics.add.existing(platform, true);
     platform.body.setSize(width, height);
     platform.body.updateFromGameObject();
@@ -2562,6 +2566,8 @@ class FightScene extends Phaser.Scene {
         bullet.destroy();
       }
     });
+
+    return bullet;
   }
 
   throwAimedGrenade(player, time) {
@@ -2783,33 +2789,52 @@ class FightScene extends Phaser.Scene {
     bullet.destroy();
   }
 
-  handleBulletWall(bullet) {
-    if (!bullet.active) {
+  getCollisionObjectFromGroup(group, objectA, objectB, dataKey = null) {
+    if (objectA && group?.getChildren().includes(objectA)) {
+      return objectA;
+    }
+    if (objectB && group?.getChildren().includes(objectB)) {
+      return objectB;
+    }
+    if (dataKey && objectA?.getData?.(dataKey) !== undefined) {
+      return objectA;
+    }
+    if (dataKey && objectB?.getData?.(dataKey) !== undefined) {
+      return objectB;
+    }
+    return null;
+  }
+
+  handleBulletWall(objectA, objectB) {
+    const bullet = this.getCollisionObjectFromGroup(this.bullets, objectA, objectB, 'weaponId');
+    if (!bullet?.active) {
       return;
     }
 
     this.spawnHitEffect(bullet.x, bullet.y, bullet.getData('hitColor') ?? 0xfff3a3);
-    const explosiveRadius = bullet.getData('explosiveRadius') ?? 0;
-    if (explosiveRadius > 0) {
-      this.explodeAt(
-        bullet.x,
-        bullet.y,
-        explosiveRadius,
-        bullet.getData('explosiveDamage'),
-        bullet.getData('owner'),
-      );
-    }
     bullet.destroy();
   }
 
-  handleBulletWindow(bullet, windowPane) {
+  handleBulletWindow(objectA, objectB) {
+    const bullet = this.getCollisionObjectFromGroup(this.bullets, objectA, objectB, 'weaponId');
+    const windowPane = bullet === objectA ? objectB : objectA;
+    if (!bullet || !windowPane) {
+      return;
+    }
+
     if (windowPane?.active && windowPane.getData('breakable')) {
       this.breakWindow(windowPane, bullet.x, bullet.y);
     }
     this.handleBulletWall(bullet);
   }
 
-  handleGrenadeWindow(grenade, windowPane) {
+  handleGrenadeWindow(objectA, objectB) {
+    const grenade = this.getCollisionObjectFromGroup(this.grenades, objectA, objectB, 'owner');
+    const windowPane = grenade === objectA ? objectB : objectA;
+    if (!grenade || !windowPane) {
+      return;
+    }
+
     this.breakWindow(windowPane, grenade.x, grenade.y);
   }
 
@@ -2831,6 +2856,7 @@ class FightScene extends Phaser.Scene {
       onComplete: () => burst.destroy(),
     });
 
+    // Level platforms are intentionally indestructible. Explosions can break glass and hurt players only.
     this.breakWindowsInRadius(x, y, radius);
 
     for (const player of this.players) {

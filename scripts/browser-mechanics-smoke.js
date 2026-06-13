@@ -14,11 +14,25 @@ window.__superfightersMechanicsSmoke = (async () => {
   };
 
   const clearGroup = (group) => {
-    for (const child of group.getChildren()) {
+    for (const child of [...group.getChildren()]) {
       child.getData?.('labelObj')?.destroy?.();
       child.destroy();
     }
   };
+
+  const snapshotPlatforms = () => scene.platforms.map((platform) => ({
+    active: platform.active,
+    visible: platform.visible,
+    x: Math.round(platform.x * 100) / 100,
+    y: Math.round(platform.y * 100) / 100,
+    width: Math.round(platform.displayWidth * 100) / 100,
+    height: Math.round(platform.displayHeight * 100) / 100,
+    bodyEnabled: platform.body?.enable !== false,
+    levelGeometry: platform.getData('levelGeometry') === true,
+    indestructible: platform.getData('indestructible') === true,
+  }));
+
+  const samePlatformSnapshot = (before, after) => JSON.stringify(before) === JSON.stringify(after);
 
   const resetPlayer = (player, x, y, facing) => {
     player.sprite.setPosition(x, y);
@@ -40,6 +54,7 @@ window.__superfightersMechanicsSmoke = (async () => {
     player.currentPickup = null;
     player.invulnerableUntil = 0;
     player.knockedUntil = 0;
+    player.sprite.body?.setAllowGravity?.(true);
     player.nextMeleeAt = 0;
     player.meleeAnimationUntil = 0;
     player.pickupAnimationUntil = 0;
@@ -131,7 +146,8 @@ window.__superfightersMechanicsSmoke = (async () => {
 
   for (const id of weaponIds) {
     clearGroup(scene.bullets);
-    resetPlayer(p1, 700, 484, 1);
+    resetPlayer(p1, 700, 220, 1);
+    p1.sprite.body.setAllowGravity(false);
     p1.weapon = scene.makeWeaponState(id);
     p1.aimMode = 'gun';
     p1.aiming = true;
@@ -140,11 +156,23 @@ window.__superfightersMechanicsSmoke = (async () => {
     p1.nextShotAt = 0;
     const weapon = scene.configData.weapons[id];
     const ammoBefore = p1.weapon.ammo;
-    scene.fireWeapon(p1, scene.time.now + 100 + weaponIds.indexOf(id) * 1000);
-    await wait(Math.max(90, weapon.burst * weapon.burstDelayMs + 80));
+    const originalSpawnBullet = scene.spawnBullet.bind(scene);
+    const spawnedBullets = [];
+    scene.spawnBullet = (...args) => {
+      const spawnedBullet = originalSpawnBullet(...args);
+      spawnedBullets.push(spawnedBullet);
+      return spawnedBullet;
+    };
+    try {
+      scene.fireWeapon(p1, scene.time.now + 100 + weaponIds.indexOf(id) * 1000);
+      await wait(Math.max(90, weapon.burst * weapon.burstDelayMs + 80));
+    } finally {
+      scene.spawnBullet = originalSpawnBullet;
+    }
     const bullets = active(scene.bullets);
-    check(`shooting spawns ${id} projectile(s)`, bullets.length >= weapon.burst * weapon.pellets, {
-      bullets: bullets.length,
+    check(`shooting spawns ${id} projectile(s)`, spawnedBullets.length >= weapon.burst * weapon.pellets, {
+      bullets: spawnedBullets.length,
+      activeBullets: bullets.length,
       expected: weapon.burst * weapon.pellets,
       ammoBefore,
       ammoAfter: p1.weapon?.ammo,
@@ -153,8 +181,8 @@ window.__superfightersMechanicsSmoke = (async () => {
       ammoBefore,
       ammoAfter: p1.weapon?.ammo,
     });
-    check(`projectiles fly straight for ${id}`, bullets.every((bullet) => !bullet.body.allowGravity && bullet.body.velocity.x > 0), {
-      velocities: bullets.map((bullet) => ({ x: Math.round(bullet.body.velocity.x), y: Math.round(bullet.body.velocity.y) })),
+    check(`projectiles fly straight for ${id}`, spawnedBullets.every((bullet) => bullet?.body && !bullet.body.allowGravity && bullet.body.velocity.x > 0), {
+      velocities: spawnedBullets.map((bullet) => bullet?.body ? { x: Math.round(bullet.body.velocity.x), y: Math.round(bullet.body.velocity.y) } : null),
     });
   }
   clearGroup(scene.bullets);
@@ -176,6 +204,43 @@ window.__superfightersMechanicsSmoke = (async () => {
   check('bullet breaks glass window', !windowPane.active && !bullet.active, {
     windowActive: windowPane.active,
     bulletActive: bullet.active,
+  });
+
+  const targetPlatform = scene.platforms.find((platform) => platform.active && platform.getData('levelGeometry'));
+  const taggedPlatforms = snapshotPlatforms();
+  check('platform geometry is tagged indestructible', taggedPlatforms.length > 0 && taggedPlatforms.every((platform) => platform.levelGeometry && platform.indestructible), {
+    platformCount: taggedPlatforms.length,
+    taggedPlatforms,
+  });
+
+  const bulletPlatformBefore = snapshotPlatforms();
+  if (targetPlatform) {
+    p1.weapon = scene.makeWeaponState('launcher');
+    scene.spawnBullet(
+      p1,
+      scene.configData.weapons.launcher,
+      Math.PI / 2,
+      targetPlatform.x,
+      targetPlatform.y - targetPlatform.displayHeight / 2 - 8,
+    );
+    bullet = active(scene.bullets).at(-1);
+    scene.handleBulletWall(bullet, targetPlatform);
+  }
+  const bulletPlatformAfter = snapshotPlatforms();
+  check('bullet impacts do not destroy platform geometry', Boolean(targetPlatform) && bullet && samePlatformSnapshot(bulletPlatformBefore, bulletPlatformAfter) && !bullet.active, {
+    bulletActive: bullet?.active,
+    before: bulletPlatformBefore,
+    after: bulletPlatformAfter,
+  });
+
+  const grenadePlatformBefore = snapshotPlatforms();
+  if (targetPlatform) {
+    scene.explodeAt(targetPlatform.x, targetPlatform.y, 140, 1, p1.id, true);
+  }
+  const grenadePlatformAfter = snapshotPlatforms();
+  check('grenade explosions do not destroy platform geometry', Boolean(targetPlatform) && samePlatformSnapshot(grenadePlatformBefore, grenadePlatformAfter), {
+    before: grenadePlatformBefore,
+    after: grenadePlatformAfter,
   });
 
   resetPlayer(p1, 700, 484, 1);
