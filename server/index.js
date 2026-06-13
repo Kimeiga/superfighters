@@ -47,6 +47,7 @@ app.get('/api/lobbies/:code', (request, response) => {
     code,
     players: [...lobby.players.values()].map(publicPlayer),
     ready: lobby.players.size === 2,
+    started: lobby.started,
   });
 });
 
@@ -80,6 +81,8 @@ io.onConnection((channel) => {
     channel.emit('lobby-created', {
       code: lobby.code,
       playerId: 'p1',
+      hostPlayerId: 'p1',
+      started: lobby.started,
       players: [...lobby.players.values()].map(publicPlayer),
     }, { reliable: true });
     emitLobbyState(lobby);
@@ -104,22 +107,44 @@ io.onConnection((channel) => {
     channel.emit('lobby-joined', {
       code,
       playerId,
+      hostPlayerId: 'p1',
+      started: lobby.started,
       players: [...lobby.players.values()].map(publicPlayer),
     }, { reliable: true });
     emitLobbyState(lobby);
+  });
 
-    if (lobby.players.size === 2) {
-      io.room(code).emit('match-start', {
-        code,
-        players: [...lobby.players.values()].map(publicPlayer),
-        serverTime: Date.now(),
-      }, { reliable: true });
+  channel.on('start-match', () => {
+    const lobby = getLobbyForChannel(channel);
+    if (!lobby) {
+      channel.emit('lobby-error', { message: 'Lobby not found' }, { reliable: true });
+      return;
     }
+    const player = lobby.players.get(channel.id);
+    if (player?.playerId !== 'p1') {
+      channel.emit('lobby-error', { message: 'Only the host can start the game' }, { reliable: true });
+      return;
+    }
+    if (lobby.players.size < 2) {
+      channel.emit('lobby-error', { message: 'Waiting for opponent' }, { reliable: true });
+      return;
+    }
+
+    lobby.started = true;
+    emitLobbyState(lobby);
+    io.room(lobby.code).emit('match-start', {
+      code: lobby.code,
+      players: [...lobby.players.values()].map(publicPlayer),
+      serverTime: Date.now(),
+    }, { reliable: true });
   });
 
   channel.on('player-input', (data) => {
     const lobby = getLobbyForChannel(channel);
     if (!lobby) {
+      return;
+    }
+    if (!lobby.started) {
       return;
     }
     const player = lobby.players.get(channel.id);
@@ -140,6 +165,9 @@ io.onConnection((channel) => {
   channel.on('player-snapshot', (data) => {
     const lobby = getLobbyForChannel(channel);
     if (!lobby) {
+      return;
+    }
+    if (!lobby.started) {
       return;
     }
     const player = lobby.players.get(channel.id);
@@ -198,6 +226,7 @@ function createLobby(channel) {
     players: new Map(),
     inputs: new Map(),
     snapshots: new Map(),
+    started: false,
   };
   lobbies.set(code, lobby);
   addPlayerToLobby(lobby, channel, 'p1');
@@ -227,6 +256,8 @@ function emitLobbyState(lobby) {
     code: lobby.code,
     players: [...lobby.players.values()].map(publicPlayer),
     ready: lobby.players.size === 2,
+    started: lobby.started,
+    hostPlayerId: 'p1',
     serverTime: Date.now(),
   }, { reliable: true });
 }

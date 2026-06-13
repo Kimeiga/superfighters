@@ -32,7 +32,8 @@ canvas {
 }
 
 .mobile-controls,
-.online-overlay {
+.online-overlay,
+.start-overlay {
   font-family: "FusionPixel12", monospace;
 }
 
@@ -144,10 +145,10 @@ canvas {
   pointer-events: none;
 }
 
+.start-overlay,
 .online-overlay {
   position: fixed;
   inset: 0;
-  z-index: 50;
   display: grid;
   place-items: center;
   padding: 20px;
@@ -155,10 +156,20 @@ canvas {
   color: #eaf5ff;
 }
 
+.start-overlay {
+  z-index: 45;
+}
+
+.online-overlay {
+  z-index: 50;
+}
+
+.start-overlay[hidden],
 .online-overlay[hidden] {
   display: none;
 }
 
+.start-panel,
 .online-panel {
   width: min(620px, calc(100vw - 32px));
   border: 2px solid #344257;
@@ -166,6 +177,50 @@ canvas {
   background: #151e2b;
   padding: 22px;
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+}
+
+.start-panel {
+  width: min(520px, calc(100vw - 32px));
+  display: grid;
+  gap: 12px;
+  text-align: center;
+}
+
+.start-panel h1 {
+  margin: 0;
+  font-size: 38px;
+}
+
+.start-panel p {
+  margin: 0 0 8px;
+  color: #b7c2d2;
+  font-size: 14px;
+}
+
+.start-panel button {
+  min-height: 42px;
+  border: 1px solid #5ea8ff;
+  border-radius: 6px;
+  background: #223149;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.start-panel button:hover {
+  background: #2e4263;
+}
+
+.start-links {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.start-links a {
+  color: #8de7ff;
+  text-decoration: none;
 }
 
 .online-panel h2 {
@@ -228,6 +283,13 @@ canvas {
 
 .online-panel button:hover {
   background: #2e4263;
+}
+
+.online-panel button:disabled {
+  border-color: #40516a;
+  background: #171f2e;
+  color: #6f7f96;
+  cursor: default;
 }
 
 .online-close {

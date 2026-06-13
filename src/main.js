@@ -102,10 +102,14 @@ class FightScene extends Phaser.Scene {
     this.worldWidth = WORLD_WIDTH;
     this.worldHeight = WORLD_HEIGHT;
     this.configData = getGameplayConfig();
-    this.matchPaused = false;
+    this.modeSelected = false;
+    this.matchPaused = true;
     this.matchOver = false;
     this.onlineMode = false;
     this.onlineReady = false;
+    this.onlineIsHost = false;
+    this.onlineLobbyPlayerCount = 0;
+    this.onlineLobbyStarted = false;
     this.localOnlinePlayerId = null;
     this.onlineLobbyCode = null;
     this.onlineChannel = null;
@@ -184,14 +188,17 @@ class FightScene extends Phaser.Scene {
     this.createHud();
     this.createMenuOverlay();
     this.createGlobalMenuInput();
+    this.createStartOverlay();
     this.createOnlineOverlay();
     this.spawnInitialPickups();
-    this.initializeOnlineFromUrl();
+    const openedFromUrl = this.initializeOnlineFromUrl();
+    if (!openedFromUrl) {
+      this.showStartOverlay();
+    }
+    this.physics.world.pause();
     this.updateCamera(1000);
     this.updateUiLayer();
     this.drawHud(this.time.now);
-
-    this.showMessage('Fight', 900);
   }
 
   update(time, delta) {
@@ -893,7 +900,7 @@ class FightScene extends Phaser.Scene {
   getInputDownForPlayer(player) {
     if (this.onlineMode) {
       if (player.id === this.localOnlinePlayerId) {
-        return mergeInputDown(this.readKeyboardInput(player), this.touchInputDown);
+        return mergeInputDown(this.readOnlineKeyboardInput(), this.touchInputDown);
       }
       return player.remoteInputDown;
     }
@@ -902,6 +909,10 @@ class FightScene extends Phaser.Scene {
       return mergeInputDown(this.readKeyboardInput(player), this.touchInputDown);
     }
     return this.readKeyboardInput(player);
+  }
+
+  readOnlineKeyboardInput() {
+    return this.p1 ? this.readKeyboardInput(this.p1) : createInputDown();
   }
 
   readKeyboardInput(player) {
@@ -1237,6 +1248,68 @@ class FightScene extends Phaser.Scene {
     this.addToUiLayer(this.menuContainer);
   }
 
+  createStartOverlay() {
+    this.startOverlayEl?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'start-overlay';
+    overlay.innerHTML = `
+      <div class="start-panel">
+        <h1>Superfighters</h1>
+        <p>Choose how to play.</p>
+        <button class="start-local" type="button">Local Multiplayer</button>
+        <button class="start-online" type="button">Online Multiplayer</button>
+        <div class="start-links">
+          <a href="./debug.html">Debug</a>
+          <a href="./level-editor.html">Level Editor</a>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    this.startOverlayEl = overlay;
+    overlay.querySelector('.start-local')?.addEventListener('click', () => this.beginLocalGame());
+    overlay.querySelector('.start-online')?.addEventListener('click', () => this.beginOnlineFlow());
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => overlay.remove());
+  }
+
+  showStartOverlay() {
+    if (this.startOverlayEl) {
+      this.startOverlayEl.hidden = false;
+    }
+    this.modeSelected = false;
+    this.matchPaused = true;
+    this.physics.world.pause();
+  }
+
+  closeStartOverlay() {
+    if (this.startOverlayEl) {
+      this.startOverlayEl.hidden = true;
+    }
+  }
+
+  beginLocalGame() {
+    this.disconnectOnlineChannel();
+    this.onlineMode = false;
+    this.onlineReady = false;
+    this.localOnlinePlayerId = null;
+    this.modeSelected = true;
+    this.matchPaused = false;
+    this.closeStartOverlay();
+    this.closeOnlineOverlay();
+    this.roundEndsAt = this.time.now + this.configData.round.seconds * 1000;
+    this.physics.world.resume();
+    this.showMessage('Fight', 900);
+  }
+
+  beginOnlineFlow(prefillCode = '') {
+    this.modeSelected = true;
+    this.onlineMode = true;
+    this.onlineReady = false;
+    this.matchPaused = true;
+    this.closeStartOverlay();
+    this.physics.world.pause();
+    this.openOnlineOverlay(prefillCode);
+  }
+
   createGlobalMenuInput() {
     this.menuKeyHandler = (event) => {
       if (event.key === 'Escape') {
@@ -1277,6 +1350,9 @@ class FightScene extends Phaser.Scene {
     if (this.matchOver) {
       return;
     }
+    if (!this.modeSelected || (this.onlineMode && !this.onlineReady)) {
+      return;
+    }
 
     if (this.matchPaused) {
       this.closeMenu();
@@ -1292,8 +1368,13 @@ class FightScene extends Phaser.Scene {
   }
 
   closeMenu() {
-    this.matchPaused = false;
     this.menuContainer.setVisible(false);
+    if (!this.modeSelected || (this.onlineMode && !this.onlineReady)) {
+      this.matchPaused = true;
+      this.physics.world.pause();
+      return;
+    }
+    this.matchPaused = false;
     this.physics.world.resume();
   }
 
@@ -1329,6 +1410,7 @@ class FightScene extends Phaser.Scene {
         <div class="online-lobby-result" hidden>
           <div class="online-code-display">----</div>
           <button class="online-copy-link" type="button">Copy Invite Link</button>
+          <button class="online-start" type="button" hidden disabled>Start Game</button>
         </div>
         <p class="online-status">Offline</p>
         <p class="online-mobile-note">On iPhone, open the invite link in Safari, Share, Add to Home Screen, then launch from the icon for landscape PWA play.</p>
@@ -1342,9 +1424,10 @@ class FightScene extends Phaser.Scene {
     this.onlineLobbyResultEl = overlay.querySelector('.online-lobby-result');
     this.onlineCodeDisplayEl = overlay.querySelector('.online-code-display');
     this.onlineCopyLinkButtonEl = overlay.querySelector('.online-copy-link');
+    this.onlineStartButtonEl = overlay.querySelector('.online-start');
     this.onlineServerInputEl.value = getDefaultOnlineServerText();
 
-    overlay.querySelector('.online-close')?.addEventListener('click', () => this.closeOnlineOverlay());
+    overlay.querySelector('.online-close')?.addEventListener('click', () => this.handleOnlineClose());
     overlay.querySelector('.online-create')?.addEventListener('click', () => this.createOnlineLobby());
     overlay.querySelector('.online-join')?.addEventListener('click', () => this.joinOnlineLobby(this.onlineCodeInputEl.value));
     this.onlineCodeInputEl.addEventListener('input', () => {
@@ -1357,6 +1440,7 @@ class FightScene extends Phaser.Scene {
       }
     });
     this.onlineCopyLinkButtonEl?.addEventListener('click', () => this.copyOnlineInviteLink());
+    this.onlineStartButtonEl?.addEventListener('click', () => this.startOnlineMatch());
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => overlay.remove());
   }
@@ -1378,6 +1462,22 @@ class FightScene extends Phaser.Scene {
     }
   }
 
+  handleOnlineClose() {
+    this.closeOnlineOverlay();
+    if (this.onlineReady) {
+      return;
+    }
+    this.disconnectOnlineChannel();
+    this.onlineMode = false;
+    this.onlineIsHost = false;
+    this.onlineLobbyPlayerCount = 0;
+    this.onlineLobbyStarted = false;
+    this.localOnlinePlayerId = null;
+    this.onlineLobbyCode = null;
+    this.updateOnlineStartButton();
+    this.showStartOverlay();
+  }
+
   setOnlineStatus(message) {
     if (this.onlineStatusEl) {
       this.onlineStatusEl.textContent = message;
@@ -1392,9 +1492,11 @@ class FightScene extends Phaser.Scene {
       this.onlineServerInputEl.value = server;
     }
     if (code) {
-      this.openOnlineOverlay(code);
+      this.beginOnlineFlow(code);
       this.time.delayedCall(250, () => this.joinOnlineLobby(code));
+      return true;
     }
+    return false;
   }
 
   async createOnlineLobby() {
@@ -1421,6 +1523,20 @@ class FightScene extends Phaser.Scene {
     } catch (error) {
       this.setOnlineStatus(error.message || 'Could not connect');
     }
+  }
+
+  startOnlineMatch() {
+    if (!this.onlineChannel || !this.onlineIsHost) {
+      this.setOnlineStatus('Only the host can start the game.');
+      return;
+    }
+    if (this.onlineLobbyPlayerCount < 2) {
+      this.setOnlineStatus('Waiting for opponent.');
+      return;
+    }
+
+    this.setOnlineStatus('Starting game...');
+    this.onlineChannel.emit('start-match', { lobbyCode: this.onlineLobbyCode }, { reliable: true });
   }
 
   ensureOnlineConnection() {
@@ -1486,14 +1602,21 @@ class FightScene extends Phaser.Scene {
   handleOnlineLobbyAssigned(data, action) {
     this.onlineMode = true;
     this.onlineReady = false;
+    this.modeSelected = true;
+    this.matchPaused = true;
+    this.physics.world.pause();
     this.localOnlinePlayerId = data.playerId;
+    this.onlineIsHost = data.playerId === 'p1';
     this.onlineLobbyCode = data.code;
+    this.onlineLobbyStarted = Boolean(data.started);
+    this.onlineLobbyPlayerCount = data.players?.length ?? 1;
     this.onlineInputSeq = 0;
     this.onlineLastInputPayload = '';
     this.onlineLastInputSentAt = 0;
     this.onlineLastSnapshotSentAt = 0;
     this.resetOnlineInputs();
     this.updateOnlineInviteDisplay();
+    this.updateOnlineStartButton();
     this.setOnlineStatus(
       action === 'created'
         ? `Lobby ${data.code} created. Waiting for opponent...`
@@ -1508,22 +1631,33 @@ class FightScene extends Phaser.Scene {
       this.updateOnlineInviteDisplay();
     }
     const count = data?.players?.length ?? 0;
+    this.onlineLobbyPlayerCount = count;
+    this.onlineLobbyStarted = Boolean(data?.started);
+    this.updateOnlineStartButton();
     if (count < 2) {
       this.onlineReady = false;
       this.setOnlineStatus(`Lobby ${this.onlineLobbyCode ?? '----'}: waiting for opponent (${count}/2).`);
+    } else if (this.onlineLobbyStarted) {
+      this.setOnlineStatus(`Lobby ${this.onlineLobbyCode}: starting...`);
+    } else if (this.onlineIsHost) {
+      this.setOnlineStatus(`Lobby ${this.onlineLobbyCode}: both players connected. Start when ready.`);
     } else {
-      this.setOnlineStatus(`Lobby ${this.onlineLobbyCode}: both players connected.`);
+      this.setOnlineStatus(`Lobby ${this.onlineLobbyCode}: waiting for host to start.`);
     }
   }
 
   handleOnlineMatchStart(data) {
     this.onlineMode = true;
     this.onlineReady = true;
+    this.modeSelected = true;
+    this.matchPaused = false;
     this.onlineLobbyCode = data?.code ?? this.onlineLobbyCode;
     this.resetMatchForOnline();
     this.setOnlineStatus(`Playing online lobby ${this.onlineLobbyCode} as ${this.localOnlinePlayerId?.toUpperCase()}.`);
+    this.closeStartOverlay();
     this.closeOnlineOverlay();
     this.closeMenu();
+    this.physics.world.resume();
     this.showMessage('Online fight', 1000);
   }
 
@@ -1555,6 +1689,17 @@ class FightScene extends Phaser.Scene {
     }
     this.onlineLobbyResultEl.hidden = false;
     this.onlineCodeDisplayEl.textContent = this.onlineLobbyCode;
+    this.updateOnlineStartButton();
+  }
+
+  updateOnlineStartButton() {
+    if (!this.onlineStartButtonEl) {
+      return;
+    }
+    const canShow = Boolean(this.onlineLobbyCode && this.onlineIsHost);
+    const canStart = canShow && this.onlineLobbyPlayerCount >= 2 && !this.onlineLobbyStarted;
+    this.onlineStartButtonEl.hidden = !canShow;
+    this.onlineStartButtonEl.disabled = !canStart;
   }
 
   async copyOnlineInviteLink() {
