@@ -1,0 +1,19 @@
+{
+  "name": "Superfighters",
+  "short_name": "Superfighters",
+  "description": "Local and online 1v1 browser fighting game.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#151e2b",
+  "theme_color": "#151e2b",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

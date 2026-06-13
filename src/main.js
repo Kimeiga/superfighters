@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import geckos from '@geckos.io/client';
 import { ANIMATION_ORDER, DEFAULT_EMPRESS_ANIMATION_CONFIG, makeFrameList1Based } from './animationConfig.js';
 import { getGameplayConfig } from './gameplayConfig.js';
 import { TILE_DEFS, TILE_INDEX, mergeTilesToRects } from './levelData.js';
@@ -14,6 +15,9 @@ const UI_FONT = 'FusionPixel12';
 const PLAYER_MAX_HEALTH = 100;
 const DROP_DURATION = 310;
 const AIM_HALF_ARC = Math.PI / 2;
+const INPUT_ACTIONS = ['left', 'right', 'jump', 'crouch', 'melee', 'shoot', 'grenade', 'powerup'];
+const ONLINE_INPUT_SEND_MS = 50;
+const ONLINE_SNAPSHOT_SEND_MS = 90;
 const CHARACTER_SOURCE_KEY = 'empress-source';
 const CHARACTER_TEXTURE_PREFIX = 'empress-frame';
 const HANDGUN_SOURCE_KEY = 'handgun-source';
@@ -45,6 +49,11 @@ const CHARACTER_HAND_POINTS = {
   55: { x: 32, y: 46 },
   56: { x: 38, y: 50 },
   57: { x: 42, y: 64 },
+  59: { x: 42, y: 52 },
+  60: { x: 42, y: 67 },
+  61: { x: 42, y: 66 },
+  133: { x: 41, y: 57 },
+  143: { x: 41, y: 57 },
 };
 const DEFAULT_GUN_GRIP_POINT = { x: 18, y: 35 };
 
@@ -92,6 +101,16 @@ class FightScene extends Phaser.Scene {
     this.configData = getGameplayConfig();
     this.matchPaused = false;
     this.matchOver = false;
+    this.onlineMode = false;
+    this.onlineReady = false;
+    this.localOnlinePlayerId = null;
+    this.onlineLobbyCode = null;
+    this.onlineChannel = null;
+    this.onlineInputSeq = 0;
+    this.onlineLastInputPayload = '';
+    this.onlineLastInputSentAt = 0;
+    this.onlineLastSnapshotSentAt = 0;
+    this.touchInputDown = createInputDown();
     this.pickupSpawnTimer = 0;
     this.roundEndsAt = this.time.now + this.configData.round.seconds * 1000;
 
@@ -111,6 +130,7 @@ class FightScene extends Phaser.Scene {
     this.createLevel();
     this.createInputs();
     this.createGroups();
+    this.createMobileControls();
 
     this.p1 = this.createPlayer({
       id: 'p1',
@@ -161,7 +181,9 @@ class FightScene extends Phaser.Scene {
     this.createHud();
     this.createMenuOverlay();
     this.createGlobalMenuInput();
+    this.createOnlineOverlay();
     this.spawnInitialPickups();
+    this.initializeOnlineFromUrl();
     this.updateCamera(1000);
     this.updateUiLayer();
     this.drawHud(this.time.now);
@@ -185,6 +207,15 @@ class FightScene extends Phaser.Scene {
       return;
     }
 
+    this.refreshInputStates(time);
+
+    if (this.onlineMode && !this.onlineReady) {
+      this.updateCamera(delta);
+      this.updateUiLayer();
+      this.drawHud(time);
+      return;
+    }
+
     for (const player of this.players) {
       this.updatePlayer(player, time, delta);
     }
@@ -193,6 +224,7 @@ class FightScene extends Phaser.Scene {
     this.updatePickups(time);
     this.checkKillZones();
     this.checkRoundTimer(time);
+    this.syncOnlineState(time);
     this.updateCamera(delta);
     this.updateUiLayer();
     this.drawHud(time);
@@ -846,6 +878,131 @@ class FightScene extends Phaser.Scene {
     ]);
   }
 
+  refreshInputStates(time) {
+    for (const player of this.players) {
+      const down = this.getInputDownForPlayer(player);
+      updateInputState(player.inputState, down);
+    }
+
+    this.sendOnlineInput(time);
+  }
+
+  getInputDownForPlayer(player) {
+    if (this.onlineMode) {
+      if (player.id === this.localOnlinePlayerId) {
+        return mergeInputDown(this.readKeyboardInput(player), this.touchInputDown);
+      }
+      return player.remoteInputDown;
+    }
+
+    if (player.id === 'p1') {
+      return mergeInputDown(this.readKeyboardInput(player), this.touchInputDown);
+    }
+    return this.readKeyboardInput(player);
+  }
+
+  readKeyboardInput(player) {
+    const down = createInputDown();
+    if (!player.controls) {
+      return down;
+    }
+
+    for (const action of INPUT_ACTIONS) {
+      down[action] = Boolean(player.controls[action]?.isDown);
+    }
+    return down;
+  }
+
+  createMobileControls() {
+    if (this.mobileControlsEl) {
+      this.mobileControlsEl.remove();
+    }
+
+    const root = document.createElement('div');
+    root.className = `mobile-controls${isMobileLike() ? ' is-visible' : ''}`;
+    root.innerHTML = `
+      <div class="mobile-dpad" aria-label="Movement controls">
+        <button class="mobile-control mobile-up" data-action="jump" aria-label="Jump">UP</button>
+        <button class="mobile-control mobile-left" data-action="left" aria-label="Move left">L</button>
+        <button class="mobile-control mobile-down" data-action="crouch" aria-label="Crouch">D</button>
+        <button class="mobile-control mobile-right" data-action="right" aria-label="Move right">R</button>
+      </div>
+      <div class="mobile-actions" aria-label="Action controls">
+        <button class="mobile-control" data-action="melee" aria-label="Melee">M</button>
+        <button class="mobile-control" data-action="shoot" aria-label="Shoot">Fire</button>
+        <button class="mobile-control" data-action="grenade" aria-label="Grenade">Grenade</button>
+        <button class="mobile-control" data-action="powerup" aria-label="Powerup">Power</button>
+      </div>
+      <button class="mobile-fullscreen" type="button">Fullscreen</button>
+      <div class="pwa-install-tip" hidden>
+        iOS Safari: Share, Add to Home Screen, then open from the icon for the best landscape play.
+      </div>
+    `;
+    document.body.appendChild(root);
+    this.mobileControlsEl = root;
+    this.pwaInstallTipEl = root.querySelector('.pwa-install-tip');
+
+    const bindButton = (button) => {
+      const action = button.dataset.action;
+      if (!action) {
+        return;
+      }
+
+      const setDown = (event, down) => {
+        event.preventDefault();
+        this.touchInputDown[action] = down;
+        button.classList.toggle('is-active', down);
+      };
+
+      button.addEventListener('pointerdown', (event) => {
+        button.setPointerCapture?.(event.pointerId);
+        setDown(event, true);
+      });
+      button.addEventListener('pointerup', (event) => setDown(event, false));
+      button.addEventListener('pointercancel', (event) => setDown(event, false));
+      button.addEventListener('lostpointercapture', () => {
+        this.touchInputDown[action] = false;
+        button.classList.remove('is-active');
+      });
+    };
+
+    for (const button of root.querySelectorAll('[data-action]')) {
+      bindButton(button);
+    }
+
+    root.querySelector('.mobile-fullscreen')?.addEventListener('click', (event) => {
+      event.preventDefault();
+      this.requestFullscreenOrShowInstallTip();
+    });
+
+    root.addEventListener('contextmenu', (event) => event.preventDefault());
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => root.remove());
+  }
+
+  requestFullscreenOrShowInstallTip() {
+    const target = document.documentElement;
+    const requestFullscreen = target.requestFullscreen || target.webkitRequestFullscreen;
+    if (requestFullscreen) {
+      requestFullscreen.call(target).catch?.(() => this.showPwaInstallTip());
+      return;
+    }
+
+    this.showPwaInstallTip();
+  }
+
+  showPwaInstallTip() {
+    if (!this.pwaInstallTipEl) {
+      return;
+    }
+    this.pwaInstallTipEl.hidden = false;
+    window.clearTimeout(this.pwaInstallTipTimeout);
+    this.pwaInstallTipTimeout = window.setTimeout(() => {
+      if (this.pwaInstallTipEl) {
+        this.pwaInstallTipEl.hidden = true;
+      }
+    }, 7000);
+  }
+
   createPlayer(config) {
     const sprite = this.physics.add
       .sprite(config.spawnX, config.spawnY, this.getCharacterTextureKey(23))
@@ -881,6 +1038,9 @@ class FightScene extends Phaser.Scene {
       lives: this.configData.round.lives,
       kills: 0,
       facing: config.facing,
+      inputState: createInputState(),
+      keyboardInputDown: createInputDown(),
+      remoteInputDown: createInputDown(),
       aimAngle: config.facing > 0 ? 0 : Math.PI,
       aimFacing: config.facing > 0 ? 1 : -1,
       aimOffset: 0,
@@ -952,7 +1112,7 @@ class FightScene extends Phaser.Scene {
   createHud() {
     this.ui = this.add.graphics().setScrollFactor(0).setDepth(50);
     this.hintText = this.add
-      .text(14, 8, 'Esc: Menu  |  Debug: /debug.html  |  Editor: /level-editor.html', {
+      .text(14, 8, 'Esc: Menu / Online  |  Debug: /debug.html  |  Editor: /level-editor.html', {
         fontFamily: UI_FONT,
         fontSize: '12px',
         color: '#eaf5ff',
@@ -1048,17 +1208,18 @@ class FightScene extends Phaser.Scene {
     this.menuContainer.add([shade, panel, title, subtitle]);
     this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY - 70, 'Resume', () => this.closeMenu()));
     this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY - 22, 'Restart Match', () => this.restartMatch()));
-    this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY + 26, 'Debug / Tuning', () => {
+    this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY + 26, 'Online Lobby', () => this.openOnlineOverlay()));
+    this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY + 74, 'Debug / Tuning', () => {
       window.location.href = '/debug.html';
     }));
-    this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY + 74, 'Level Editor', () => {
+    this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY + 122, 'Level Editor', () => {
       window.location.href = '/level-editor.html';
     }));
 
     const controls = this.add
       .text(
         GAME_WIDTH / 2,
-        panelY + 142,
+        panelY + 172,
         'P1: WASD + 1 melee, 2 shoot, 3 grenade, 4 power\nP2: Arrows + M melee, , shoot, . grenade, / power\nHold shoot/grenade to aim. Release to fire/throw.',
         {
           fontFamily: UI_FONT,
@@ -1134,7 +1295,416 @@ class FightScene extends Phaser.Scene {
   }
 
   restartMatch() {
+    if (this.onlineMode && this.onlineChannel) {
+      this.onlineChannel.emit('restart-match', { lobbyCode: this.onlineLobbyCode }, { reliable: true });
+    }
     window.location.reload();
+  }
+
+  createOnlineOverlay() {
+    this.onlineOverlayEl?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'online-overlay';
+    overlay.hidden = true;
+    overlay.innerHTML = `
+      <div class="online-panel">
+        <button class="online-close" type="button" aria-label="Close online lobby">Close</button>
+        <h2>Online Lobby</h2>
+        <p class="online-copy">Create a lobby and share the four-letter code, or join a lobby from a code.</p>
+        <label class="online-field">
+          <span>Server</span>
+          <input class="online-server-input" type="text" autocomplete="off" spellcheck="false">
+        </label>
+        <div class="online-actions-row">
+          <button class="online-create" type="button">Create Lobby</button>
+          <label class="online-code-field">
+            <span>Code</span>
+            <input class="online-code-input" type="text" maxlength="4" autocomplete="off" spellcheck="false">
+          </label>
+          <button class="online-join" type="button">Join</button>
+        </div>
+        <div class="online-lobby-result" hidden>
+          <div class="online-code-display">----</div>
+          <button class="online-copy-link" type="button">Copy Invite Link</button>
+        </div>
+        <p class="online-status">Offline</p>
+        <p class="online-mobile-note">On iPhone, open the invite link in Safari, Share, Add to Home Screen, then launch from the icon for landscape PWA play.</p>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    this.onlineOverlayEl = overlay;
+    this.onlineStatusEl = overlay.querySelector('.online-status');
+    this.onlineServerInputEl = overlay.querySelector('.online-server-input');
+    this.onlineCodeInputEl = overlay.querySelector('.online-code-input');
+    this.onlineLobbyResultEl = overlay.querySelector('.online-lobby-result');
+    this.onlineCodeDisplayEl = overlay.querySelector('.online-code-display');
+    this.onlineCopyLinkButtonEl = overlay.querySelector('.online-copy-link');
+    this.onlineServerInputEl.value = getDefaultOnlineServerText();
+
+    overlay.querySelector('.online-close')?.addEventListener('click', () => this.closeOnlineOverlay());
+    overlay.querySelector('.online-create')?.addEventListener('click', () => this.createOnlineLobby());
+    overlay.querySelector('.online-join')?.addEventListener('click', () => this.joinOnlineLobby(this.onlineCodeInputEl.value));
+    this.onlineCodeInputEl.addEventListener('input', () => {
+      this.onlineCodeInputEl.value = normalizeLobbyCode(this.onlineCodeInputEl.value);
+    });
+    this.onlineCodeInputEl.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        this.joinOnlineLobby(this.onlineCodeInputEl.value);
+      }
+    });
+    this.onlineCopyLinkButtonEl?.addEventListener('click', () => this.copyOnlineInviteLink());
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => overlay.remove());
+  }
+
+  openOnlineOverlay(prefillCode = '') {
+    if (!this.onlineOverlayEl) {
+      return;
+    }
+    this.onlineOverlayEl.hidden = false;
+    if (prefillCode) {
+      this.onlineCodeInputEl.value = normalizeLobbyCode(prefillCode);
+      this.onlineCodeInputEl.focus();
+    }
+  }
+
+  closeOnlineOverlay() {
+    if (this.onlineOverlayEl) {
+      this.onlineOverlayEl.hidden = true;
+    }
+  }
+
+  setOnlineStatus(message) {
+    if (this.onlineStatusEl) {
+      this.onlineStatusEl.textContent = message;
+    }
+  }
+
+  initializeOnlineFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('join') || params.get('code');
+    const server = params.get('server');
+    if (server && this.onlineServerInputEl) {
+      this.onlineServerInputEl.value = server;
+    }
+    if (code) {
+      this.openOnlineOverlay(code);
+      this.time.delayedCall(250, () => this.joinOnlineLobby(code));
+    }
+  }
+
+  async createOnlineLobby() {
+    try {
+      const channel = await this.ensureOnlineConnection();
+      this.setOnlineStatus('Creating lobby...');
+      channel.emit('create-lobby', {}, { reliable: true });
+    } catch (error) {
+      this.setOnlineStatus(error.message || 'Could not connect');
+    }
+  }
+
+  async joinOnlineLobby(code) {
+    const lobbyCode = normalizeLobbyCode(code);
+    if (lobbyCode.length !== 4) {
+      this.setOnlineStatus('Enter a four-letter code.');
+      return;
+    }
+
+    try {
+      const channel = await this.ensureOnlineConnection();
+      this.setOnlineStatus(`Joining ${lobbyCode}...`);
+      channel.emit('join-lobby', { code: lobbyCode }, { reliable: true });
+    } catch (error) {
+      this.setOnlineStatus(error.message || 'Could not connect');
+    }
+  }
+
+  ensureOnlineConnection() {
+    if (this.onlineChannel && this.onlineConnected) {
+      return Promise.resolve(this.onlineChannel);
+    }
+
+    this.disconnectOnlineChannel();
+    const config = parseOnlineServerConfig(this.onlineServerInputEl?.value);
+    this.setOnlineStatus(`Connecting to ${config.label}...`);
+    const channel = geckos(config.options);
+    this.onlineChannel = channel;
+
+    return new Promise((resolve, reject) => {
+      channel.onConnect((error) => {
+        if (error) {
+          this.onlineConnected = false;
+          reject(error);
+          return;
+        }
+
+        this.onlineConnected = true;
+        this.bindOnlineChannel(channel);
+        this.setOnlineStatus('Connected. Create or join a lobby.');
+        resolve(channel);
+      });
+    });
+  }
+
+  bindOnlineChannel(channel) {
+    if (this.onlineHandlersBound) {
+      return;
+    }
+    this.onlineHandlersBound = true;
+
+    channel.on('lobby-created', (data) => this.handleOnlineLobbyAssigned(data, 'created'));
+    channel.on('lobby-joined', (data) => this.handleOnlineLobbyAssigned(data, 'joined'));
+    channel.on('lobby-state', (data) => this.handleOnlineLobbyState(data));
+    channel.on('match-start', (data) => this.handleOnlineMatchStart(data));
+    channel.on('player-input', (data) => this.handleOnlinePlayerInput(data));
+    channel.on('player-snapshot', (data) => this.handleOnlinePlayerSnapshot(data));
+    channel.on('restart-match', () => window.location.reload());
+    channel.on('lobby-error', (data) => {
+      this.setOnlineStatus(data?.message || 'Lobby error');
+      this.showMessage(data?.message || 'Lobby error', 900);
+    });
+    channel.onDisconnect(() => {
+      this.onlineConnected = false;
+      this.onlineReady = false;
+      this.onlineMode = false;
+      this.setOnlineStatus('Disconnected from online server.');
+      this.showMessage('Online disconnected', 1200);
+    });
+  }
+
+  disconnectOnlineChannel() {
+    this.onlineChannel?.close();
+    this.onlineChannel = null;
+    this.onlineConnected = false;
+    this.onlineHandlersBound = false;
+  }
+
+  handleOnlineLobbyAssigned(data, action) {
+    this.onlineMode = true;
+    this.onlineReady = false;
+    this.localOnlinePlayerId = data.playerId;
+    this.onlineLobbyCode = data.code;
+    this.onlineInputSeq = 0;
+    this.onlineLastInputPayload = '';
+    this.onlineLastInputSentAt = 0;
+    this.onlineLastSnapshotSentAt = 0;
+    this.resetOnlineInputs();
+    this.updateOnlineInviteDisplay();
+    this.setOnlineStatus(
+      action === 'created'
+        ? `Lobby ${data.code} created. Waiting for opponent...`
+        : `Joined lobby ${data.code}. Waiting for match start...`,
+    );
+    this.showMessage(`Online ${data.playerId.toUpperCase()} - ${data.code}`, 1200);
+  }
+
+  handleOnlineLobbyState(data) {
+    if (data?.code) {
+      this.onlineLobbyCode = data.code;
+      this.updateOnlineInviteDisplay();
+    }
+    const count = data?.players?.length ?? 0;
+    if (count < 2) {
+      this.onlineReady = false;
+      this.setOnlineStatus(`Lobby ${this.onlineLobbyCode ?? '----'}: waiting for opponent (${count}/2).`);
+    } else {
+      this.setOnlineStatus(`Lobby ${this.onlineLobbyCode}: both players connected.`);
+    }
+  }
+
+  handleOnlineMatchStart(data) {
+    this.onlineMode = true;
+    this.onlineReady = true;
+    this.onlineLobbyCode = data?.code ?? this.onlineLobbyCode;
+    this.resetMatchForOnline();
+    this.setOnlineStatus(`Playing online lobby ${this.onlineLobbyCode} as ${this.localOnlinePlayerId?.toUpperCase()}.`);
+    this.closeOnlineOverlay();
+    this.closeMenu();
+    this.showMessage('Online fight', 1000);
+  }
+
+  handleOnlinePlayerInput(data) {
+    if (!data || data.playerId === this.localOnlinePlayerId) {
+      return;
+    }
+    const player = this.getPlayerById(data.playerId);
+    if (!player) {
+      return;
+    }
+    player.remoteInputDown = sanitizeInputDown(data.input);
+  }
+
+  handleOnlinePlayerSnapshot(data) {
+    if (!data || data.playerId === this.localOnlinePlayerId) {
+      return;
+    }
+    const player = this.getPlayerById(data.playerId);
+    if (!player || !data.snapshot) {
+      return;
+    }
+    this.applyRemoteSnapshot(player, data.snapshot);
+  }
+
+  updateOnlineInviteDisplay() {
+    if (!this.onlineLobbyCode || !this.onlineLobbyResultEl || !this.onlineCodeDisplayEl) {
+      return;
+    }
+    this.onlineLobbyResultEl.hidden = false;
+    this.onlineCodeDisplayEl.textContent = this.onlineLobbyCode;
+  }
+
+  async copyOnlineInviteLink() {
+    if (!this.onlineLobbyCode) {
+      return;
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set('join', this.onlineLobbyCode);
+    const serverText = this.onlineServerInputEl?.value?.trim();
+    if (serverText && serverText !== getDefaultOnlineServerText()) {
+      url.searchParams.set('server', serverText);
+    }
+    await navigator.clipboard?.writeText(url.toString());
+    this.setOnlineStatus(`Copied invite link for ${this.onlineLobbyCode}.`);
+  }
+
+  resetOnlineInputs() {
+    for (const player of this.players) {
+      player.inputState = createInputState();
+      player.remoteInputDown = createInputDown();
+    }
+    this.touchInputDown = createInputDown();
+  }
+
+  resetMatchForOnline() {
+    this.matchOver = false;
+    this.physics.world.resume();
+    this.roundEndsAt = this.time.now + this.configData.round.seconds * 1000;
+    this.pickupSpawnTimer = 0;
+    for (const player of this.players) {
+      player.health = PLAYER_MAX_HEALTH;
+      player.lives = this.configData.round.lives;
+      player.kills = 0;
+      player.weapon = null;
+      player.grenadeAmmo = this.configData.grenades.startCount;
+      player.powerup = null;
+      player.knockedUntil = 0;
+      player.invulnerableUntil = 0;
+      player.facing = player.id === 'p1' ? 1 : -1;
+      this.respawn(player);
+    }
+  }
+
+  sendOnlineInput(time) {
+    if (!this.onlineMode || !this.onlineReady || !this.onlineChannel || !this.localOnlinePlayerId) {
+      return;
+    }
+    const player = this.getPlayerById(this.localOnlinePlayerId);
+    if (!player) {
+      return;
+    }
+
+    const payload = JSON.stringify(player.inputState.down);
+    const shouldSend =
+      payload !== this.onlineLastInputPayload ||
+      time - this.onlineLastInputSentAt >= ONLINE_INPUT_SEND_MS;
+
+    if (!shouldSend) {
+      return;
+    }
+
+    this.onlineLastInputPayload = payload;
+    this.onlineLastInputSentAt = time;
+    this.onlineInputSeq += 1;
+    this.onlineChannel.emit('player-input', {
+      seq: this.onlineInputSeq,
+      input: player.inputState.down,
+      t: Math.round(time),
+    });
+  }
+
+  syncOnlineState(time) {
+    if (!this.onlineMode || !this.onlineReady || !this.onlineChannel || !this.localOnlinePlayerId) {
+      return;
+    }
+    if (time - this.onlineLastSnapshotSentAt < ONLINE_SNAPSHOT_SEND_MS) {
+      return;
+    }
+    const player = this.getPlayerById(this.localOnlinePlayerId);
+    if (!player) {
+      return;
+    }
+    this.onlineLastSnapshotSentAt = time;
+    this.onlineChannel.emit('player-snapshot', {
+      t: Math.round(time),
+      snapshot: this.serializePlayerSnapshot(player),
+    });
+  }
+
+  serializePlayerSnapshot(player) {
+    return {
+      x: roundForNetwork(player.sprite.x),
+      y: roundForNetwork(player.sprite.y),
+      vx: roundForNetwork(player.sprite.body.velocity.x),
+      vy: roundForNetwork(player.sprite.body.velocity.y),
+      health: player.health,
+      lives: player.lives,
+      kills: player.kills,
+      facing: player.facing,
+      aimFacing: player.aimFacing,
+      aimOffset: roundForNetwork(player.aimOffset),
+      aimAngle: roundForNetwork(player.aimAngle),
+      aiming: player.aiming,
+      aimMode: player.aimMode,
+      crouching: player.crouching,
+      climbing: player.climbing,
+      weapon: player.weapon,
+      grenadeAmmo: player.grenadeAmmo,
+      powerup: player.powerup,
+    };
+  }
+
+  applyRemoteSnapshot(player, snapshot) {
+    const x = Number(snapshot.x);
+    const y = Number(snapshot.y);
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      player.sprite.x = Phaser.Math.Linear(player.sprite.x, x, 0.55);
+      player.sprite.y = Phaser.Math.Linear(player.sprite.y, y, 0.55);
+    }
+
+    if (Number.isFinite(snapshot.vx) && Number.isFinite(snapshot.vy)) {
+      player.sprite.body.setVelocity(snapshot.vx, snapshot.vy);
+    }
+
+    player.health = clampNetworkNumber(snapshot.health, 0, PLAYER_MAX_HEALTH, player.health);
+    player.lives = clampNetworkNumber(snapshot.lives, 0, this.configData.round.lives, player.lives);
+    player.kills = clampNetworkNumber(snapshot.kills, 0, 99, player.kills);
+    player.facing = snapshot.facing === -1 ? -1 : 1;
+    player.aimFacing = snapshot.aimFacing === -1 ? -1 : 1;
+    player.aimOffset = clampNetworkNumber(snapshot.aimOffset, -AIM_HALF_ARC, AIM_HALF_ARC, player.aimOffset);
+    player.aimAngle = Number.isFinite(snapshot.aimAngle) ? snapshot.aimAngle : player.aimAngle;
+    player.aiming = Boolean(snapshot.aiming);
+    player.aimMode = snapshot.aimMode === 'gun' || snapshot.aimMode === 'grenade' ? snapshot.aimMode : player.aimMode;
+    player.crouching = Boolean(snapshot.crouching);
+    player.climbing = Boolean(snapshot.climbing);
+    if (Object.hasOwn(snapshot, 'weapon')) {
+      player.weapon = snapshot.weapon?.id ? snapshot.weapon : null;
+    }
+    player.grenadeAmmo = clampNetworkNumber(snapshot.grenadeAmmo, 0, this.configData.grenades.maxCount, player.grenadeAmmo);
+    player.powerup = snapshot.powerup ?? player.powerup;
+    player.sprite.setFlipX(player.facing < 0);
+    this.applyBodyPose(player);
+    this.updateAimVisuals(player);
+  }
+
+  getPlayerById(playerId) {
+    if (playerId === 'p1') {
+      return this.p1;
+    }
+    if (playerId === 'p2') {
+      return this.p2;
+    }
+    return null;
   }
 
   updatePlayer(player, time, delta) {
@@ -1142,11 +1712,11 @@ class FightScene extends Phaser.Scene {
     const grounded = body.blocked.down || body.touching.down;
     const justLanded = grounded && !player.wasGrounded;
     player.wasGrounded = grounded;
-    const controls = player.controls;
-    const leftHeld = controls.left.isDown;
-    const rightHeld = controls.right.isDown;
-    const upHeld = controls.jump.isDown;
-    const downHeld = controls.crouch.isDown;
+    const input = player.inputState;
+    const leftHeld = input.down.left;
+    const rightHeld = input.down.right;
+    const upHeld = input.down.jump;
+    const downHeld = input.down.crouch;
     const horizontal = (rightHeld ? 1 : 0) - (leftHeld ? 1 : 0);
     const vertical = (downHeld ? 1 : 0) - (upHeld ? 1 : 0);
 
@@ -1169,7 +1739,7 @@ class FightScene extends Phaser.Scene {
     player.sprite.setAngle(0);
     player.sprite.setAlpha(time < player.invulnerableUntil && Math.floor(time / 80) % 2 === 0 ? 0.42 : 1);
 
-    if (Phaser.Input.Keyboard.JustDown(controls.powerup)) {
+    if (input.pressed.powerup) {
       this.activatePowerup(player, time);
     }
 
@@ -1178,9 +1748,9 @@ class FightScene extends Phaser.Scene {
     }
 
     if (!player.aiming) {
-      if (Phaser.Input.Keyboard.JustDown(controls.shoot)) {
+      if (input.pressed.shoot) {
         this.beginAim(player, 'gun', time);
-      } else if (!this.isInShootStance(player, time) && Phaser.Input.Keyboard.JustDown(controls.grenade)) {
+      } else if (!this.isInShootStance(player, time) && input.pressed.grenade) {
         this.beginAim(player, 'grenade', time);
       }
     }
@@ -1189,10 +1759,10 @@ class FightScene extends Phaser.Scene {
       this.updateCrouchState(player, grounded, downHeld, time);
       this.applyBodyPose(player, grounded);
       this.updateAim(player, horizontal, vertical, delta);
-      this.updateJumpPhysics(player, grounded, controls, time);
+      this.updateJumpPhysics(player, grounded, input, time);
       if (
-        (player.aimMode === 'gun' && Phaser.Input.Keyboard.JustUp(controls.shoot)) ||
-        (player.aimMode === 'grenade' && Phaser.Input.Keyboard.JustUp(controls.grenade))
+        (player.aimMode === 'gun' && input.released.shoot) ||
+        (player.aimMode === 'grenade' && input.released.grenade)
       ) {
         this.releaseAim(player, time);
       }
@@ -1205,7 +1775,7 @@ class FightScene extends Phaser.Scene {
       if (grounded) {
         player.sprite.setVelocityX(0);
       }
-      this.updateJumpPhysics(player, grounded, controls, time);
+      this.updateJumpPhysics(player, grounded, input, time);
       this.applyBodyPose(player, grounded);
       this.updateAimVisuals(player);
       this.updatePlayerAnimation(player, grounded, 0, time);
@@ -1213,7 +1783,7 @@ class FightScene extends Phaser.Scene {
     }
 
     if (
-      Phaser.Input.Keyboard.JustDown(controls.crouch) &&
+      input.pressed.crouch &&
       grounded &&
       player.onThinPlatform
     ) {
@@ -1228,7 +1798,7 @@ class FightScene extends Phaser.Scene {
     }
     if (player.climbing) {
       this.resetJumpState(player);
-      this.updateClimbing(player, ladder, vertical, horizontal, time);
+      this.updateClimbing(player, ladder, vertical, horizontal, time, input);
       this.updatePlayerAnimation(player, true, horizontal, time);
       return;
     }
@@ -1248,7 +1818,7 @@ class FightScene extends Phaser.Scene {
     }
 
     if (
-      Phaser.Input.Keyboard.JustDown(controls.jump) &&
+      input.pressed.jump &&
       grounded &&
       !player.crouching &&
       time >= player.dropUntil
@@ -1256,9 +1826,9 @@ class FightScene extends Phaser.Scene {
       this.startJump(player, time);
     }
 
-    this.updateJumpPhysics(player, grounded, controls, time);
+    this.updateJumpPhysics(player, grounded, input, time);
 
-    if (Phaser.Input.Keyboard.JustDown(controls.melee)) {
+    if (input.pressed.melee) {
       this.handleMeleePressed(player, time);
     }
 
@@ -1294,7 +1864,7 @@ class FightScene extends Phaser.Scene {
     player.sprite.play(this.getPlayerAnimationKey(animationName));
   }
 
-  updateJumpPhysics(player, grounded, controls, time) {
+  updateJumpPhysics(player, grounded, input, time) {
     const body = player.sprite.body;
     const movement = this.configData.movement;
     body.setAllowGravity(true);
@@ -1307,14 +1877,14 @@ class FightScene extends Phaser.Scene {
 
     if (
       !player.jumpReleased &&
-      Phaser.Input.Keyboard.JustUp(controls.jump) &&
+      input.released.jump &&
       body.velocity.y < movement.jumpReleaseVelocity
     ) {
       body.setVelocityY(movement.jumpReleaseVelocity);
       player.jumpReleased = true;
     }
 
-    const holdingJump = controls.jump.isDown && !player.jumpReleased && time < player.jumpHeldUntil;
+    const holdingJump = input.down.jump && !player.jumpReleased && time < player.jumpHeldUntil;
     const gravityMultiplier =
       body.velocity.y < 0 && holdingJump
         ? movement.jumpHoldGravityMultiplier
@@ -1967,7 +2537,7 @@ class FightScene extends Phaser.Scene {
     }
   }
 
-  updateClimbing(player, ladder, vertical, horizontal, time) {
+  updateClimbing(player, ladder, vertical, horizontal, time, input) {
     if (!ladder) {
       player.climbing = false;
       player.sprite.body.setAllowGravity(true);
@@ -1982,7 +2552,7 @@ class FightScene extends Phaser.Scene {
       player.sprite.setFlipX(horizontal < 0);
     }
 
-    if (Phaser.Input.Keyboard.JustDown(player.controls.jump)) {
+    if (input.pressed.jump) {
       player.climbing = false;
       player.sprite.body.setAllowGravity(true);
       player.sprite.setVelocityY(-this.configData.movement.jumpSpeed * 0.75);
@@ -2655,6 +3225,102 @@ class FightScene extends Phaser.Scene {
   }
 }
 
+function createInputDown() {
+  return INPUT_ACTIONS.reduce((state, action) => {
+    state[action] = false;
+    return state;
+  }, {});
+}
+
+function createInputState() {
+  return {
+    down: createInputDown(),
+    pressed: createInputDown(),
+    released: createInputDown(),
+  };
+}
+
+function updateInputState(state, nextDown) {
+  for (const action of INPUT_ACTIONS) {
+    const isDown = Boolean(nextDown?.[action]);
+    state.pressed[action] = isDown && !state.down[action];
+    state.released[action] = !isDown && state.down[action];
+    state.down[action] = isDown;
+  }
+}
+
+function mergeInputDown(...sources) {
+  const merged = createInputDown();
+  for (const source of sources) {
+    for (const action of INPUT_ACTIONS) {
+      merged[action] = merged[action] || Boolean(source?.[action]);
+    }
+  }
+  return merged;
+}
+
+function sanitizeInputDown(input) {
+  const sanitized = createInputDown();
+  for (const action of INPUT_ACTIONS) {
+    sanitized[action] = Boolean(input?.[action]);
+  }
+  return sanitized;
+}
+
+function normalizeLobbyCode(code) {
+  return String(code ?? '')
+    .replace(/[^a-z0-9]/gi, '')
+    .slice(0, 4)
+    .toUpperCase();
+}
+
+function getDefaultOnlineServerText() {
+  const envUrl = import.meta.env.VITE_GECKOS_URL;
+  const envPort = import.meta.env.VITE_GECKOS_PORT;
+  if (envUrl) {
+    return envPort ? `${envUrl}:${envPort}` : envUrl;
+  }
+  if (window.location.port && window.location.port !== '5173' && window.location.port !== '5174') {
+    return window.location.origin;
+  }
+  if (window.location.protocol === 'https:' && !window.location.port) {
+    return window.location.origin;
+  }
+  return `${window.location.protocol}//${window.location.hostname}:9208`;
+}
+
+function parseOnlineServerConfig(text) {
+  const value = text?.trim() || getDefaultOnlineServerText();
+  const parsed = new URL(value.includes('://') ? value : `${window.location.protocol}//${value}`);
+  return {
+    label: parsed.host,
+    options: {
+      url: `${parsed.protocol}//${parsed.hostname}`,
+      port: Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80)),
+    },
+  };
+}
+
+function roundForNetwork(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function clampNetworkNumber(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return fallback;
+  }
+  return Phaser.Math.Clamp(number, min, max);
+}
+
+function isMobileLike() {
+  return (
+    window.matchMedia?.('(pointer: coarse)').matches ||
+    window.matchMedia?.('(max-width: 860px)').matches ||
+    /Android|iPhone|iPad|iPod/i.test(window.navigator.userAgent)
+  );
+}
+
 function detectSheetFrameGeometry(sourceImage, sheet, options = {}) {
   const pixels = getImagePixels(sourceImage);
   const rowStarts = detectAssetRowStarts(sourceImage, sheet, pixels);
@@ -3061,6 +3727,7 @@ function getEmpressFrameNumber(textureKey) {
 }
 
 loadUiFont().finally(() => {
+  registerServiceWorker();
   window.__superfightersGame?.destroy(true);
   window.__superfightersGame = new Phaser.Game({
     type: Phaser.AUTO,
@@ -3093,4 +3760,16 @@ async function loadUiFont() {
   const font = new FontFace(UI_FONT, 'url("/assets/fonts/fusion-pixel-12px-monospaced-latin.woff") format("woff")');
   const loadedFont = await font.load();
   document.fonts.add(loadedFont);
+}
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator) || !window.isSecureContext) {
+    return;
+  }
+
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // The game should still run normally if PWA registration fails.
+    });
+  });
 }
