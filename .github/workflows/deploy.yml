@@ -27,7 +27,7 @@ jobs:
           . ./.env
           set +a
           npm ci
-          npm run build
+          NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=1024}" npm run build
           systemctl restart superfighters
           systemctl --no-pager --full status superfighters
           EOF

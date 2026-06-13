@@ -33,6 +33,7 @@ Useful server environment variables:
 PORT=9208
 BASE_PATH=/superfighters/
 VITE_BASE_PATH=/superfighters/
+NODE_OPTIONS=--max-old-space-size=1024
 GECKOS_UDP_MIN=20000
 GECKOS_UDP_MAX=20000
 PUBLIC_ORIGIN=https://your-domain.example
@@ -48,7 +49,7 @@ npm run build
 npm start
 ```
 
-To build for `https://hakanalpay.com/superfighters/`, set `BASE_PATH=/superfighters/` for the server and `VITE_BASE_PATH=/superfighters/` during `npm run build`.
+To build for `https://hakanalpay.com/superfighters/`, set `BASE_PATH=/superfighters/` for the server and `VITE_BASE_PATH=/superfighters/` during `npm run build`. On 512 MB VPS instances, also set `NODE_OPTIONS=--max-old-space-size=1024` for the build.
 
 This repo includes a GitHub Actions deploy workflow. Configure these repository secrets before relying on automatic deploys:
 
