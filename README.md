@@ -78,3 +78,13 @@ For iPhone PWA play, serve over HTTPS, open the invite link in Safari, then use 
 5. When both players are connected, the match starts.
 
 The current online implementation has the server own lobby membership/player slots and relay timestamped input/snapshot packets over Geckos. The browser still runs Phaser gameplay locally so local play remains unchanged. Full server-side physics authority should be the next network hardening step once the core mechanics settle.
+
+## Cloudflare Worker Proxy
+
+Wrangler can publish a friendly URL without moving the VPS app:
+
+```sh
+wrangler deploy
+```
+
+The Worker routes `https://hakanalpay.com/superfighters*` and `https://hakanalpay.com/.wrtc*` to the Vultr server through the free `sslip.io` hostname for the VPS IP. The `/.wrtc*` route is required for Geckos WebRTC signaling.

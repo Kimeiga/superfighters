@@ -1,0 +1,11 @@
+name = "superfighters-proxy"
+main = "cloudflare/superfighters-proxy.js"
+compatibility_date = "2026-06-13"
+
+routes = [
+  { pattern = "hakanalpay.com/superfighters*", zone_name = "hakanalpay.com" },
+  { pattern = "hakanalpay.com/.wrtc*", zone_name = "hakanalpay.com" },
+]
+
+[vars]
+ORIGIN = "http://45-77-204-19.sslip.io:9208"
