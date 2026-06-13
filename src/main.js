@@ -367,6 +367,35 @@ class FightScene extends Phaser.Scene {
         fixedCanvas: false,
       }),
     );
+
+    this.generateSimpleWeaponTexture('smg', 0xf7d56b, 26, 6, 4);
+    this.generateSimpleWeaponTexture('shotgun', 0xffb85f, 32, 8, 6);
+    this.generateSimpleWeaponTexture('rifle', 0xffffff, 34, 6, 7);
+    this.generateSimpleWeaponTexture('sniper', 0xfffbdf, 38, 5, 10);
+    this.generateSimpleWeaponTexture('launcher', 0xa7ff8a, 30, 10, 7);
+  }
+
+  generateSimpleWeaponTexture(id, color, barrelLength, bodyHeight, barrelY) {
+    const textureKey = `weapon-${id}`;
+    if (this.textures.exists(textureKey)) {
+      this.textures.remove(textureKey);
+    }
+
+    const graphics = this.make.graphics({ x: 0, y: 0, add: false });
+    const gripX = DEFAULT_GUN_GRIP_POINT.x;
+    const gripY = DEFAULT_GUN_GRIP_POINT.y;
+    graphics.fillStyle(0x0e1723, 1);
+    graphics.fillRect(gripX - 2, gripY - 1, 8, 14);
+    graphics.fillStyle(0x2f3c4f, 1);
+    graphics.fillRect(gripX + 1, gripY - bodyHeight, 18, bodyHeight + 3);
+    graphics.fillStyle(color, 1);
+    graphics.fillRect(gripX + 14, gripY - barrelY, barrelLength, Math.max(3, Math.floor(bodyHeight * 0.58)));
+    graphics.fillStyle(0xffffff, 0.7);
+    graphics.fillRect(gripX + 16, gripY - barrelY, Math.max(8, barrelLength - 12), 1);
+    graphics.fillStyle(0x0e1723, 1);
+    graphics.fillRect(gripX + 14 + barrelLength, gripY - barrelY + 1, 3, 2);
+    graphics.generateTexture(textureKey, 64, 64);
+    graphics.destroy();
   }
 
   drawBackground() {
@@ -2511,7 +2540,9 @@ class FightScene extends Phaser.Scene {
       .image(originX, originY, PROJECTILE_TEXTURE_KEY)
       .setDepth(9)
       .setRotation(angle)
-      .setBlendMode(Phaser.BlendModes.ADD);
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setTint(color);
+    bullet.setDisplaySize(weapon.bulletWidth ?? 18, weapon.bulletHeight ?? 18);
     this.bullets.add(bullet);
     bullet.body.setAllowGravity(false);
     bullet.body.setCircle(7, 2, 2);
@@ -2523,6 +2554,8 @@ class FightScene extends Phaser.Scene {
     bullet.setData('knockback', weapon.knockback);
     bullet.setData('directionX', Math.cos(angle) >= 0 ? 1 : -1);
     bullet.setData('hitColor', color);
+    bullet.setData('explosiveRadius', weapon.explosiveRadius ?? 0);
+    bullet.setData('explosiveDamage', weapon.explosiveDamage ?? weapon.damage);
 
     this.time.delayedCall(weapon.bulletLifeMs, () => {
       if (bullet.active) {
@@ -2605,8 +2638,9 @@ class FightScene extends Phaser.Scene {
     player.comboIndex = (player.comboIndex + 1) % this.configData.melee.hits.length;
     this.startMeleeAnimation(player, animationName, time, animationDuration);
 
-    const centerX = player.sprite.x + player.facing * 34;
-    const centerY = player.sprite.y - 9;
+    const pivot = this.getAimPivot(player);
+    const centerX = pivot.x + player.facing * 34;
+    const centerY = pivot.y;
     this.flashHitbox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, player.facing, 0xffffff, 0.28);
     this.breakWindowsInBox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, hit.damage);
 
@@ -2661,7 +2695,8 @@ class FightScene extends Phaser.Scene {
     player.dashHitTargets.clear();
     player.sprite.setVelocityX(player.facing * this.configData.movement.dashAttackSpeed);
     player.sprite.setVelocityY(-this.configData.movement.dashAttackLift);
-    this.flashHitbox(player.sprite.x + player.facing * 40, player.sprite.y - 8, 64, 44, player.facing, 0xffd166, 0.3);
+    const pivot = this.getAimPivot(player);
+    this.flashHitbox(pivot.x + player.facing * 40, pivot.y, 64, 44, player.facing, 0xffd166, 0.3);
   }
 
   updateDashAttacks(time) {
@@ -2670,8 +2705,9 @@ class FightScene extends Phaser.Scene {
         continue;
       }
 
-      const centerX = player.sprite.x + player.dashDirection * 40;
-      const centerY = player.sprite.y - 8;
+      const pivot = this.getAimPivot(player);
+      const centerX = pivot.x + player.dashDirection * 40;
+      const centerY = pivot.y;
       this.breakWindowsInBox(centerX, centerY, 70, 48, this.configData.melee.dashDamage);
 
       const opponent = this.getOpponent(player);
@@ -2725,6 +2761,20 @@ class FightScene extends Phaser.Scene {
       return;
     }
 
+    const explosiveRadius = bullet.getData('explosiveRadius') ?? 0;
+    if (explosiveRadius > 0) {
+      this.spawnHitEffect(bullet.x, bullet.y, bullet.getData('hitColor') ?? 0xfff3a3);
+      this.explodeAt(
+        bullet.x,
+        bullet.y,
+        explosiveRadius,
+        bullet.getData('explosiveDamage'),
+        bullet.getData('owner'),
+      );
+      bullet.destroy();
+      return;
+    }
+
     this.damagePlayer(player, bullet.getData('damage'), bullet.getData('directionX'), bullet.getData('knockback'), 125, {
       source: bullet.getData('weaponId'),
     });
@@ -2739,10 +2789,23 @@ class FightScene extends Phaser.Scene {
     }
 
     this.spawnHitEffect(bullet.x, bullet.y, bullet.getData('hitColor') ?? 0xfff3a3);
+    const explosiveRadius = bullet.getData('explosiveRadius') ?? 0;
+    if (explosiveRadius > 0) {
+      this.explodeAt(
+        bullet.x,
+        bullet.y,
+        explosiveRadius,
+        bullet.getData('explosiveDamage'),
+        bullet.getData('owner'),
+      );
+    }
     bullet.destroy();
   }
 
-  handleBulletWindow(bullet) {
+  handleBulletWindow(bullet, windowPane) {
+    if (windowPane?.active && windowPane.getData('breakable')) {
+      this.breakWindow(windowPane, bullet.x, bullet.y);
+    }
     this.handleBulletWall(bullet);
   }
 
@@ -2948,7 +3011,7 @@ class FightScene extends Phaser.Scene {
 
     const guaranteedGunPoints = this.pickupSpawnPoints.slice(0, Math.max(0, this.configData.pickups.maxOnMap - spawnedCount));
     for (const point of guaranteedGunPoints) {
-      this.createPickup(point.x, point.y, 'weapon', 'pistol');
+      this.createPickup(point.x, point.y, 'weapon', this.pickWeightedWeapon());
       spawnedCount += 1;
     }
 
@@ -2967,7 +3030,7 @@ class FightScene extends Phaser.Scene {
     const roll = Math.random();
 
     if (roll < 0.75) {
-      this.createPickup(point.x, point.y, 'weapon', 'pistol');
+      this.createPickup(point.x, point.y, 'weapon', this.pickWeightedWeapon());
     } else if (roll < 0.78) {
       this.createPickup(point.x, point.y, 'grenade', 'grenade');
     } else {
@@ -3114,7 +3177,16 @@ class FightScene extends Phaser.Scene {
   }
 
   pickWeightedWeapon() {
-    return 'pistol';
+    const entries = Object.entries(this.configData.weapons);
+    const totalWeight = entries.reduce((total, [, weapon]) => total + Math.max(0, weapon.weight ?? 1), 0);
+    let roll = Math.random() * Math.max(1, totalWeight);
+    for (const [id, weapon] of entries) {
+      roll -= Math.max(0, weapon.weight ?? 1);
+      if (roll <= 0) {
+        return id;
+      }
+    }
+    return entries[0]?.[0] ?? 'pistol';
   }
 
   activatePowerup(player, time) {
