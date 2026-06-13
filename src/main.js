@@ -1,0 +1,3096 @@
+import Phaser from 'phaser';
+import { ANIMATION_ORDER, DEFAULT_EMPRESS_ANIMATION_CONFIG, makeFrameList1Based } from './animationConfig.js';
+import { getGameplayConfig } from './gameplayConfig.js';
+import { TILE_DEFS, TILE_INDEX, mergeTilesToRects } from './levelData.js';
+import './styles.css';
+
+const GAME_WIDTH = Math.floor(window.innerWidth);
+const GAME_HEIGHT = Math.floor(window.innerHeight);
+const WORLD_WIDTH = Math.max(1900, GAME_WIDTH);
+const WORLD_HEIGHT = Math.max(720, GAME_HEIGHT);
+const FRAME_SIZE = 64;
+const PLAYER_SCALE = 1;
+const UI_FONT = 'FusionPixel12';
+const PLAYER_MAX_HEALTH = 100;
+const DROP_DURATION = 310;
+const AIM_HALF_ARC = Math.PI / 2;
+const CHARACTER_SOURCE_KEY = 'empress-source';
+const CHARACTER_TEXTURE_PREFIX = 'empress-frame';
+const HANDGUN_SOURCE_KEY = 'handgun-source';
+const HANDGUN_FRAME = 30;
+const HANDGUN_TEXTURE_KEY = 'weapon-pistol';
+const PROJECTILE_TEXTURE_KEY = 'projectile-glow';
+const CHARACTER_SHEET = {
+  frameSize: 64,
+  gap: 1,
+  leftOffset: 1,
+  rowLightThreshold: 20,
+  cellLightThreshold: 100,
+  cellBackground: [147, 187, 236],
+  extensionBackground: [58, 111, 51],
+  sheetBackground: [27, 89, 153],
+  maxExtension: 96,
+};
+const HANDGUN_SHEET = {
+  frameSize: 64,
+  gap: 1,
+  leftOffset: 1,
+  rowLightThreshold: 20,
+  cellLightThreshold: 100,
+  cellBackground: [147, 187, 236],
+  sheetBackground: [27, 89, 153],
+};
+const DEFAULT_CHARACTER_HAND_POINT = { x: 39, y: 50 };
+const CHARACTER_HAND_POINTS = {
+  55: { x: 32, y: 46 },
+  56: { x: 38, y: 50 },
+  57: { x: 42, y: 64 },
+};
+const DEFAULT_GUN_GRIP_POINT = { x: 18, y: 35 };
+
+const COLORS = {
+  p1: 0x55a7ff,
+  p2: 0xff6f91,
+  p1Dark: 0x1d5f99,
+  p2Dark: 0xa43154,
+  platformTop: 0x78c073,
+  platformFace: 0x57495f,
+  platformTrim: 0x30283b,
+  thinPlatform: 0xd8bd72,
+  glass: 0xbfeaff,
+  ladder: 0xb88751,
+  grenade: 0x89e072,
+  explosion: 0xffb84d,
+  panel: 0x101622,
+};
+
+class FightScene extends Phaser.Scene {
+  constructor() {
+    super('fight');
+    this.players = [];
+    this.playerBySprite = new Map();
+    this.platforms = [];
+    this.ladders = [];
+    this.clouds = [];
+  }
+
+  preload() {
+    this.load.image(CHARACTER_SOURCE_KEY, '/assets/empress.png');
+    this.load.image(HANDGUN_SOURCE_KEY, '/assets/handgun.png');
+  }
+
+  create() {
+    this.players = [];
+    this.playerBySprite.clear();
+    this.platforms = [];
+    this.ladders = [];
+    this.clouds = [];
+    this.levelSpawns = null;
+    this.editorLevel = null;
+    this.worldWidth = WORLD_WIDTH;
+    this.worldHeight = WORLD_HEIGHT;
+    this.configData = getGameplayConfig();
+    this.matchPaused = false;
+    this.matchOver = false;
+    this.pickupSpawnTimer = 0;
+    this.roundEndsAt = this.time.now + this.configData.round.seconds * 1000;
+
+    this.physics.world.setBounds(0, -160, this.worldWidth, this.worldHeight + 240);
+    this.cameras.main.setBounds(
+      -GAME_WIDTH,
+      -GAME_HEIGHT,
+      this.worldWidth + GAME_WIDTH * 2,
+      this.worldHeight + GAME_HEIGHT * 2,
+    );
+    this.cameras.main.setBackgroundColor('#8dd8ff');
+
+    this.createCharacterTextures();
+    this.createGeneratedTextures();
+    this.drawBackground();
+    this.createAnimations();
+    this.createLevel();
+    this.createInputs();
+    this.createGroups();
+
+    this.p1 = this.createPlayer({
+      id: 'p1',
+      label: 'P1',
+      spawnX: this.levelSpawns?.p1?.x ?? 430,
+      spawnY: this.levelSpawns?.p1?.y ?? 392,
+      color: COLORS.p1,
+      darkColor: COLORS.p1Dark,
+      facing: 1,
+      controls: {
+        left: this.keys.a,
+        right: this.keys.d,
+        jump: this.keys.w,
+        crouch: this.keys.s,
+        melee: this.keys.one,
+        shoot: this.keys.two,
+        grenade: this.keys.three,
+        powerup: this.keys.four,
+      },
+    });
+
+    this.p2 = this.createPlayer({
+      id: 'p2',
+      label: 'P2',
+      spawnX: this.levelSpawns?.p2?.x ?? 1580,
+      spawnY: this.levelSpawns?.p2?.y ?? 392,
+      color: COLORS.p2,
+      darkColor: COLORS.p2Dark,
+      facing: -1,
+      controls: {
+        left: this.keys.left,
+        right: this.keys.right,
+        jump: this.keys.up,
+        crouch: this.keys.down,
+        melee: this.keys.m,
+        shoot: this.keys.comma,
+        grenade: this.keys.period,
+        powerup: this.keys.slash,
+      },
+    });
+
+    this.players = [this.p1, this.p2];
+    this.playerBySprite.set(this.p1.sprite, this.p1);
+    this.playerBySprite.set(this.p2.sprite, this.p2);
+
+    this.createColliders();
+    this.createUiLayer();
+    this.createHud();
+    this.createMenuOverlay();
+    this.createGlobalMenuInput();
+    this.spawnInitialPickups();
+    this.updateCamera(1000);
+    this.updateUiLayer();
+    this.drawHud(this.time.now);
+
+    this.showMessage('Fight', 900);
+  }
+
+  update(time, delta) {
+    this.updateBackground(delta);
+
+    if (this.matchOver) {
+      if (Phaser.Input.Keyboard.JustDown(this.keys.enter) || Phaser.Input.Keyboard.JustDown(this.keys.space)) {
+        this.restartMatch();
+      }
+      this.updateUiLayer();
+      return;
+    }
+
+    if (this.matchPaused) {
+      this.updateUiLayer();
+      return;
+    }
+
+    for (const player of this.players) {
+      this.updatePlayer(player, time, delta);
+    }
+
+    this.updateDashAttacks(time);
+    this.updatePickups(time);
+    this.checkKillZones();
+    this.checkRoundTimer(time);
+    this.updateCamera(delta);
+    this.updateUiLayer();
+    this.drawHud(time);
+  }
+
+  createGeneratedTextures() {
+    this.generateArmTexture();
+    this.generateCrosshairTexture();
+    this.generateProjectileTexture();
+    this.generateGrenadeTexture();
+    this.generatePowerupTextures();
+    this.generateWeaponTextures();
+  }
+
+  createCharacterTextures() {
+    const sourceImage = this.textures.get(CHARACTER_SOURCE_KEY).getSourceImage();
+    const geometry = detectSheetFrameGeometry(sourceImage, CHARACTER_SHEET, {
+      includeExtensions: true,
+    });
+
+    this.characterFrames = geometry.frameCells;
+    this.characterFrameCount = geometry.frameCells.length;
+    for (let index = 0; index < geometry.frameCells.length; index += 1) {
+      const key = this.getCharacterTextureKey(index + 1);
+      if (this.textures.exists(key)) {
+        this.textures.remove(key);
+      }
+      this.textures.addCanvas(
+        key,
+        makeFrameCanvas(sourceImage, CHARACTER_SHEET, geometry.frameCells[index], {
+          fixedCanvas: true,
+        }),
+      );
+    }
+  }
+
+  getCharacterTextureKey(frame) {
+    return `${CHARACTER_TEXTURE_PREFIX}-${frame}`;
+  }
+
+  generateArmTexture() {
+    const graphics = this.make.graphics({ x: 0, y: 0, add: false });
+    graphics.fillStyle(0xf5c39b, 1);
+    graphics.fillRect(0, 1, 25, 6);
+    graphics.fillStyle(0x7a4d3f, 1);
+    graphics.fillRect(0, 0, 25, 1);
+    graphics.fillRect(0, 7, 25, 1);
+    graphics.fillStyle(0xffe0bd, 1);
+    graphics.fillRect(3, 2, 11, 2);
+    graphics.generateTexture('arm-pixel', 26, 8);
+    graphics.destroy();
+  }
+
+  generateCrosshairTexture() {
+    const graphics = this.make.graphics({ x: 0, y: 0, add: false });
+    graphics.lineStyle(2, 0xffffff, 1);
+    graphics.strokeCircle(10, 10, 7);
+    graphics.lineBetween(10, 0, 10, 5);
+    graphics.lineBetween(10, 15, 10, 20);
+    graphics.lineBetween(0, 10, 5, 10);
+    graphics.lineBetween(15, 10, 20, 10);
+    graphics.generateTexture('crosshair-pixel', 20, 20);
+    graphics.destroy();
+  }
+
+  generateProjectileTexture() {
+    const graphics = this.make.graphics({ x: 0, y: 0, add: false });
+    graphics.fillStyle(0xfff3a3, 0.2);
+    graphics.fillCircle(9, 9, 9);
+    graphics.fillStyle(0xffe45c, 0.55);
+    graphics.fillCircle(9, 9, 6);
+    graphics.fillStyle(0xffffff, 0.95);
+    graphics.fillCircle(7, 7, 3);
+    graphics.generateTexture(PROJECTILE_TEXTURE_KEY, 18, 18);
+    graphics.destroy();
+  }
+
+  generateGrenadeTexture() {
+    const graphics = this.make.graphics({ x: 0, y: 0, add: false });
+    graphics.fillStyle(0x264e35, 1);
+    graphics.fillRect(4, 2, 7, 2);
+    graphics.fillStyle(COLORS.grenade, 1);
+    graphics.fillRect(3, 4, 10, 9);
+    graphics.fillStyle(0x183322, 1);
+    graphics.fillRect(4, 5, 2, 7);
+    graphics.fillRect(8, 5, 2, 7);
+    graphics.fillRect(12, 6, 1, 5);
+    graphics.generateTexture('grenade-pixel', 16, 16);
+    graphics.destroy();
+  }
+
+  generatePowerupTextures() {
+    const powerups = {
+      slowmo: 0x9ee7ff,
+      heal: 0xff6f91,
+      shield: 0x8cffab,
+      haste: 0xffd166,
+    };
+
+    for (const [id, color] of Object.entries(powerups)) {
+      const graphics = this.make.graphics({ x: 0, y: 0, add: false });
+      graphics.fillStyle(0x101622, 1);
+      graphics.fillRect(2, 2, 20, 20);
+      graphics.fillStyle(color, 1);
+      graphics.fillRect(5, 5, 14, 14);
+      graphics.fillStyle(0xffffff, 0.8);
+      graphics.fillRect(10, 4, 4, 16);
+      graphics.fillRect(4, 10, 16, 4);
+      graphics.generateTexture(`powerup-${id}`, 24, 24);
+      graphics.destroy();
+    }
+  }
+
+  generateWeaponTextures() {
+    const sourceImage = this.textures.get(HANDGUN_SOURCE_KEY).getSourceImage();
+    const geometry = detectSheetFrameGeometry(sourceImage, HANDGUN_SHEET, {
+      includeExtensions: false,
+    });
+    const handgunCell = geometry.frameCells[HANDGUN_FRAME - 1] ?? geometry.frameCells[0];
+    if (!handgunCell) {
+      return;
+    }
+
+    if (this.textures.exists(HANDGUN_TEXTURE_KEY)) {
+      this.textures.remove(HANDGUN_TEXTURE_KEY);
+    }
+    this.textures.addCanvas(
+      HANDGUN_TEXTURE_KEY,
+      makeFrameCanvas(sourceImage, HANDGUN_SHEET, handgunCell, {
+        fixedCanvas: false,
+      }),
+    );
+  }
+
+  drawBackground() {
+    const sky = this.add.graphics().setDepth(-30);
+    const worldWidth = this.worldWidth ?? WORLD_WIDTH;
+    const worldHeight = this.worldHeight ?? WORLD_HEIGHT;
+
+    for (let y = 0; y < worldHeight; y += 8) {
+      const t = y / worldHeight;
+      const color = Phaser.Display.Color.Interpolate.ColorWithColor(
+        Phaser.Display.Color.ValueToColor(0x72c7ff),
+        Phaser.Display.Color.ValueToColor(0xf6dda4),
+        1,
+        t,
+      );
+      sky.fillStyle(Phaser.Display.Color.GetColor(color.r, color.g, color.b), 1);
+      sky.fillRect(0, y, worldWidth, 8);
+    }
+
+    sky.fillStyle(0x60748d, 0.42);
+    sky.fillRect(0, 440, worldWidth, worldHeight - 440);
+    sky.fillStyle(0x3d4a5f, 0.28);
+    for (let x = 0; x < worldWidth; x += 56) {
+      const h = 42 + ((x * 17) % 46);
+      sky.fillRect(x, 438 - h, 38, h);
+    }
+
+    this.clouds.push(this.createCloud(88, 82, 1.2, 7));
+    this.clouds.push(this.createCloud(418, 58, 0.86, 10));
+    this.clouds.push(this.createCloud(742, 112, 1.05, 8));
+    this.clouds.push(this.createCloud(1160, 72, 1.1, 6));
+    this.clouds.push(this.createCloud(1570, 118, 0.94, 9));
+  }
+
+  createCloud(x, y, scale, speed) {
+    const container = this.add.container(x, y).setDepth(-20);
+    const parts = [
+      this.add.rectangle(0, 10 * scale, 72 * scale, 16 * scale, 0xffffff, 0.9),
+      this.add.rectangle(12 * scale, 0, 22 * scale, 26 * scale, 0xffffff, 0.9),
+      this.add.rectangle(38 * scale, 4 * scale, 28 * scale, 22 * scale, 0xffffff, 0.9),
+    ];
+    container.add(parts);
+    container.setData('speed', speed);
+    return container;
+  }
+
+  updateBackground(delta) {
+    const worldWidth = this.worldWidth ?? WORLD_WIDTH;
+    for (const cloud of this.clouds) {
+      cloud.x += cloud.getData('speed') * (delta / 1000);
+      if (cloud.x > worldWidth + 80) {
+        cloud.x = -110;
+      }
+    }
+  }
+
+  createAnimations() {
+    const frameCount = this.characterFrameCount;
+    const config = DEFAULT_EMPRESS_ANIMATION_CONFIG;
+    this.animationConfig = config;
+    this.animationFrameCount = frameCount;
+    const animationKeys = {
+      idle: 'girl-idle',
+      idleAimStraight: 'girl-idle-gun',
+      run: 'girl-run',
+      runGun: 'girl-run-gun',
+      aim: 'girl-aim',
+      melee: 'girl-melee',
+      crouchDown: 'girl-crouch-down',
+      crouchDownGun: 'girl-crouch-down-gun',
+      crouch: 'girl-crouch',
+      crouchMelee: 'girl-crouch-melee',
+      standUp: 'girl-stand-up',
+      standUpGun: 'girl-stand-up-gun',
+      jumpPrep: 'girl-jump-prep',
+      crouchWalk: 'girl-crouch-walk',
+      jumpUp: 'girl-jump-up',
+      jumpPeak: 'girl-jump-peak',
+      jumpDown: 'girl-jump-down',
+      jumpLand: 'girl-jump-land',
+      jumpPrepGun: 'girl-jump-prep-gun',
+      jumpGunUp: 'girl-jump-up-gun',
+      jumpGunPeak: 'girl-jump-peak-gun',
+      jumpGunDown: 'girl-jump-down-gun',
+      jumpGunLand: 'girl-jump-land-gun',
+      jumpMelee: 'girl-jump-melee',
+      pickup: 'girl-pickup',
+    };
+
+    for (const name of ANIMATION_ORDER) {
+      if (!animationKeys[name]) {
+        continue;
+      }
+      const setting = config[name];
+      this.anims.create({
+        key: animationKeys[name],
+        frames: makeFrameList1Based(setting, frameCount).map((frame) => ({
+          key: this.getCharacterTextureKey(frame),
+        })),
+        frameRate: setting.fps,
+        repeat: setting.repeat ? -1 : 0,
+      });
+    }
+  }
+
+  createLevel() {
+    this.glassWindows = this.physics.add.staticGroup();
+    this.levelSpawns = null;
+
+    if (this.editorLevel) {
+      this.createTileLevel(this.editorLevel);
+      return;
+    }
+
+    const centerX = this.worldWidth / 2;
+    const mainY = Math.min(this.worldHeight - 150, 540);
+    const mainHeight = 52;
+    const mainTop = mainY - mainHeight / 2;
+    const mainWidth = Math.min(1120, this.worldWidth - 360);
+    const leftPlatform = { x: centerX - 310, y: mainY - 150, width: 230 };
+    const topPlatform = { x: centerX, y: mainY - 245, width: 230 };
+    const rightPlatform = { x: centerX + 310, y: mainY - 150, width: 230 };
+
+    this.levelSpawns = {
+      p1: {
+        x: centerX - mainWidth * 0.28,
+        y: mainTop - this.getStandingBodyBottomOffset(),
+      },
+      p2: {
+        x: centerX + mainWidth * 0.28,
+        y: mainTop - this.getStandingBodyBottomOffset(),
+      },
+    };
+
+    this.pickupSpawnPoints = [
+      { x: centerX - 420, y: mainTop - 28 },
+      { x: centerX - 170, y: mainTop - 28 },
+      { x: centerX + 170, y: mainTop - 28 },
+      { x: centerX + 420, y: mainTop - 28 },
+      { x: leftPlatform.x, y: leftPlatform.y - 42 },
+      { x: topPlatform.x, y: topPlatform.y - 42 },
+      { x: rightPlatform.x, y: rightPlatform.y - 42 },
+    ];
+
+    this.createPlatform(centerX, mainY, mainWidth, mainHeight, false, COLORS.platformTrim);
+    this.createPlatform(leftPlatform.x, leftPlatform.y, leftPlatform.width, 14, true);
+    this.createPlatform(topPlatform.x, topPlatform.y, topPlatform.width, 14, true);
+    this.createPlatform(rightPlatform.x, rightPlatform.y, rightPlatform.width, 14, true);
+
+    this.add.rectangle(centerX, mainY - 34, mainWidth - 28, 12, COLORS.platformTop, 0.92).setOrigin(0.5);
+    this.add.rectangle(centerX, mainY + 34, mainWidth + 42, 18, 0x30283b, 0.88).setOrigin(0.5);
+  }
+
+  createTileLevel(level) {
+    this.pickupSpawnPoints = [];
+    this.levelSpawns = {};
+    this.drawTileLevel(level);
+
+    for (const rect of mergeTilesToRects(level, ['solid'])) {
+      this.createTileCollider(rect, false);
+    }
+
+    for (const rect of mergeTilesToRects(level, ['platform'])) {
+      this.createTileCollider(rect, true);
+    }
+
+    for (const rect of mergeTilesToRects(level, ['glass'])) {
+      this.createWindow(rect.x + rect.width / 2, rect.y + rect.height / 2, rect.width, rect.height);
+    }
+
+    for (const rect of mergeTilesToRects(level, ['ladder'])) {
+      this.createLadder(rect.x + rect.width / 2, rect.y + rect.height / 2, rect.height);
+    }
+
+    for (let y = 0; y < level.height; y += 1) {
+      for (let x = 0; x < level.width; x += 1) {
+        const tile = level.grid[y * level.width + x];
+        const worldX = x * level.tileSize + level.tileSize / 2;
+        const worldY = y * level.tileSize + level.tileSize / 2;
+
+        if (tile === TILE_INDEX.pickup) {
+          this.pickupSpawnPoints.push({ x: worldX, y: worldY });
+        } else if (tile === TILE_INDEX.p1) {
+          this.levelSpawns.p1 = this.resolveEditorSpawn(level, worldX, worldY);
+        } else if (tile === TILE_INDEX.p2) {
+          this.levelSpawns.p2 = this.resolveEditorSpawn(level, worldX, worldY);
+        }
+      }
+    }
+  }
+
+  resolveEditorSpawn(level, worldX, worldY) {
+    const tileSize = level.tileSize;
+    const centerColumn = Math.floor(worldX / tileSize);
+    const startRow = Math.floor(worldY / tileSize);
+    const solidTiles = new Set([TILE_INDEX.solid, TILE_INDEX.platform]);
+
+    for (let y = startRow; y < level.height; y += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const x = centerColumn + dx;
+        if (x < 0 || x >= level.width) {
+          continue;
+        }
+        if (solidTiles.has(level.grid[y * level.width + x])) {
+          return {
+            x: worldX,
+            y: y * tileSize - this.getStandingBodyBottomOffset(),
+          };
+        }
+      }
+    }
+
+    return { x: worldX, y: worldY };
+  }
+
+  getStandingBodyBottomOffset() {
+    const body = this.configData.playerBody.standing;
+    return (-FRAME_SIZE / 2 + body.offsetY + body.height) * PLAYER_SCALE;
+  }
+
+  drawTileLevel(level) {
+    const graphics = this.add.graphics().setDepth(-8);
+    const tileSize = level.tileSize;
+
+    for (let y = 0; y < level.height; y += 1) {
+      for (let x = 0; x < level.width; x += 1) {
+        const tile = level.grid[y * level.width + x];
+        if (
+          tile === TILE_INDEX.empty ||
+          tile === TILE_INDEX.pickup ||
+          tile === TILE_INDEX.p1 ||
+          tile === TILE_INDEX.p2 ||
+          tile === TILE_INDEX.glass ||
+          tile === TILE_INDEX.ladder
+        ) {
+          continue;
+        }
+
+        const def = TILE_DEFS[tile];
+        const drawX = x * tileSize;
+        const drawY = y * tileSize;
+        const color = parseHexColor(def.color, 0x30283b);
+        const alpha = def.id === 'backdrop' ? 0.78 : def.id === 'void' ? 0.96 : 1;
+        graphics.fillStyle(color, alpha);
+        graphics.fillRect(drawX, drawY, tileSize, tileSize);
+
+        if (def.id === 'solid') {
+          const tileAbove = y > 0 ? level.grid[(y - 1) * level.width + x] : TILE_INDEX.empty;
+          if (tileAbove !== TILE_INDEX.solid) {
+            graphics.fillStyle(COLORS.platformTop, 0.88);
+            graphics.fillRect(drawX, drawY, tileSize, 4);
+          }
+          graphics.fillStyle(0x000000, 0.18);
+          graphics.fillRect(drawX, drawY + tileSize - 3, tileSize, 3);
+        } else if (def.id === 'platform') {
+          graphics.fillStyle(0xf6e39a, 1);
+          graphics.fillRect(drawX, drawY, tileSize, 4);
+          graphics.fillStyle(0x7a6641, 1);
+          graphics.fillRect(drawX, drawY + tileSize - 4, tileSize, 4);
+        }
+      }
+    }
+  }
+
+  createTileCollider(rect, thin) {
+    const collider = this.add
+      .rectangle(rect.x + rect.width / 2, rect.y + rect.height / 2, rect.width, rect.height, 0xffffff, 0)
+      .setOrigin(0.5);
+    collider.setData('thin', thin);
+    this.physics.add.existing(collider, true);
+    collider.body.setSize(rect.width, rect.height);
+    collider.body.updateFromGameObject();
+    this.platforms.push(collider);
+    return collider;
+  }
+
+  createBuilding({ x, width, floorY, floors, ladders, windows }) {
+    const bodyHeight = 300;
+    this.add.rectangle(x, floorY - bodyHeight / 2 + 24, width, bodyHeight, 0x5b5366, 0.88).setOrigin(0.5);
+    this.add.rectangle(x, floorY - bodyHeight + 70, width - 26, 18, 0x463d52, 0.86).setOrigin(0.5);
+
+    for (const floor of floors) {
+      this.createPlatform(
+        x,
+        floor.y,
+        floor.width,
+        floor.solid ? 46 : 14,
+        Boolean(floor.thin),
+        floor.solid ? undefined : COLORS.thinPlatform,
+      );
+      if (floor.solid) {
+        this.createPlatform(x, floor.y + 24, floor.width + 42, 22, false, COLORS.platformTrim);
+      }
+    }
+
+    for (const ladder of ladders) {
+      this.createLadder(ladder.x, ladder.y, ladder.height);
+    }
+
+    for (const windowSpec of windows) {
+      const bottomFloorWindow = windowSpec.y > floorY - 80;
+      this.createWindow(windowSpec.x, windowSpec.y, windowSpec.width, windowSpec.height, {
+        breakable: windowSpec.breakable ?? !bottomFloorWindow,
+      });
+    }
+  }
+
+  drawChasm(leftEdge, rightEdge) {
+    const graphics = this.add.graphics().setDepth(-10);
+    const worldHeight = this.worldHeight ?? WORLD_HEIGHT;
+    graphics.fillStyle(0x171923, 0.95);
+    graphics.fillRect(leftEdge, 450, rightEdge - leftEdge, worldHeight - 450);
+    graphics.fillStyle(0x090d14, 1);
+    graphics.fillRect(leftEdge + 20, 465, rightEdge - leftEdge - 40, worldHeight - 465);
+    graphics.lineStyle(5, 0x2d2438, 1);
+    graphics.lineBetween(leftEdge, 450, leftEdge + 40, worldHeight);
+    graphics.lineBetween(rightEdge, 450, rightEdge - 40, worldHeight);
+  }
+
+  createPlatform(x, y, width, height, thin, overrideColor = null) {
+    const color = overrideColor ?? (thin ? COLORS.thinPlatform : COLORS.platformFace);
+    const platform = this.add.rectangle(x, y, width, height, color).setOrigin(0.5);
+    platform.setData('thin', thin);
+    this.physics.add.existing(platform, true);
+    platform.body.setSize(width, height);
+    platform.body.updateFromGameObject();
+
+    if (!thin && overrideColor === null) {
+      this.add.rectangle(x, y - height / 2 - 3, width + 14, 8, COLORS.platformTop).setOrigin(0.5);
+    }
+
+    if (thin) {
+      this.add.rectangle(x, y - height / 2 - 2, width + 10, 5, 0xf6e39a).setOrigin(0.5);
+      this.add.rectangle(x, y + height / 2 + 2, width + 6, 4, 0x7a6641).setOrigin(0.5);
+    }
+
+    this.platforms.push(platform);
+    return platform;
+  }
+
+  updateCamera(delta) {
+    if (!this.players.length) {
+      return;
+    }
+
+    const trackedPlayers = this.players.filter((player) => player.sprite?.active);
+    if (!trackedPlayers.length) {
+      return;
+    }
+
+    const bounds = trackedPlayers.map((player) => {
+      const body = player.sprite.body;
+      const halfWidth = (body?.width ?? 34) / 2;
+      const halfHeight = (body?.height ?? 46) / 2;
+      return {
+        left: player.sprite.x - halfWidth,
+        right: player.sprite.x + halfWidth,
+        top: player.sprite.y - halfHeight,
+        bottom: player.sprite.y + halfHeight,
+      };
+    });
+    const minX = Math.min(...bounds.map((box) => box.left));
+    const maxX = Math.max(...bounds.map((box) => box.right));
+    const minY = Math.min(...bounds.map((box) => box.top));
+    const maxY = Math.max(...bounds.map((box) => box.bottom));
+    const marginX = Phaser.Math.Clamp(GAME_WIDTH * 0.075, 70, 125);
+    const marginY = Phaser.Math.Clamp(GAME_HEIGHT * 0.11, 70, 135);
+    const fitWidth = Math.max(1, maxX - minX);
+    const fitHeight = Math.max(1, maxY - minY);
+    const usableWidth = Math.max(320, GAME_WIDTH - marginX * 2);
+    const usableHeight = Math.max(220, GAME_HEIGHT - marginY * 2);
+    const targetZoom = Phaser.Math.Clamp(
+      Math.min(usableWidth / fitWidth, usableHeight / fitHeight),
+      0.4,
+      1.45,
+    );
+    const viewWidth = GAME_WIDTH / targetZoom;
+    const viewHeight = GAME_HEIGHT / targetZoom;
+    const centerX = trackedPlayers.reduce((sum, player) => sum + player.sprite.x, 0) / trackedPlayers.length;
+    const centerY = trackedPlayers.reduce((sum, player) => sum + player.sprite.y, 0) / trackedPlayers.length;
+    const originOffsetX = GAME_WIDTH * this.cameras.main.originX * (1 - 1 / targetZoom);
+    const originOffsetY = GAME_HEIGHT * this.cameras.main.originY * (1 - 1 / targetZoom);
+    const targetScrollX = Math.round(centerX - viewWidth / 2 - originOffsetX);
+    const targetScrollY = Math.round(centerY - viewHeight / 2 - originOffsetY);
+    const lerp = Math.min(1, delta / 140);
+
+    this.cameras.main.setZoom(Phaser.Math.Linear(this.cameras.main.zoom, targetZoom, lerp));
+    this.cameras.main.scrollX = Math.round(Phaser.Math.Linear(this.cameras.main.scrollX, targetScrollX, lerp));
+    this.cameras.main.scrollY = Math.round(Phaser.Math.Linear(this.cameras.main.scrollY, targetScrollY, lerp));
+  }
+
+  screenX(x) {
+    return x / this.cameras.main.zoom + this.cameras.main.scrollX;
+  }
+
+  screenY(y) {
+    return y / this.cameras.main.zoom + this.cameras.main.scrollY;
+  }
+
+  createUiLayer() {
+    this.uiLayer = this.add.container(0, 0).setDepth(10000);
+    this.uiCamera = this.cameras.add(0, 0, GAME_WIDTH, GAME_HEIGHT).setScroll(0, 0).setZoom(1);
+    this.cameras.main.ignore(this.uiLayer);
+    this.syncUiCameraIgnore();
+  }
+
+  updateUiLayer() {
+    if (!this.uiLayer) {
+      return;
+    }
+
+    this.uiLayer.setScale(1);
+    this.uiLayer.setPosition(0, 0);
+    this.uiCamera?.setScroll(0, 0).setZoom(1);
+    this.syncUiCameraIgnore();
+  }
+
+  syncUiCameraIgnore() {
+    if (!this.uiCamera || !this.uiLayer) {
+      return;
+    }
+
+    this.cameras.main.ignore(this.uiLayer);
+    this.uiCamera.ignore(this.children.list.filter((child) => child !== this.uiLayer));
+  }
+
+  addToUiLayer(objects) {
+    const list = Array.isArray(objects) ? objects : [objects];
+    for (const object of list) {
+      this.lockToScreen(object);
+    }
+    this.uiLayer.add(list);
+  }
+
+  lockToScreen(gameObject) {
+    gameObject?.setScrollFactor?.(0);
+    if (gameObject?.list) {
+      for (const child of gameObject.list) {
+        this.lockToScreen(child);
+      }
+    }
+    return gameObject;
+  }
+
+  createLadder(x, y, height) {
+    const ladder = this.add.rectangle(x, y, 28, height, COLORS.ladder, 0.36).setOrigin(0.5);
+    const railLeft = this.add.rectangle(x - 10, y, 4, height, COLORS.ladder, 0.9).setOrigin(0.5);
+    const railRight = this.add.rectangle(x + 10, y, 4, height, COLORS.ladder, 0.9).setOrigin(0.5);
+    for (let rungY = y - height / 2 + 10; rungY < y + height / 2; rungY += 16) {
+      this.add.rectangle(x, rungY, 24, 4, COLORS.ladder, 0.9).setOrigin(0.5);
+    }
+    ladder.setData('bounds', new Phaser.Geom.Rectangle(x - 16, y - height / 2, 32, height));
+    ladder.setData('visuals', [railLeft, railRight]);
+    this.ladders.push(ladder);
+  }
+
+  createWindow(x, y, width, height, options = {}) {
+    const breakable = options.breakable ?? true;
+    const pane = this.add.rectangle(x, y, width, height, COLORS.glass, breakable ? 0.48 : 0.34).setOrigin(0.5);
+    const shine = this.add.rectangle(x - width * 0.2, y - height * 0.15, 3, height * 0.55, 0xffffff, 0.4);
+    pane.setData('health', 18);
+    pane.setData('breakable', breakable);
+    pane.setData('shine', shine);
+    this.physics.add.existing(pane, true);
+    pane.body.setSize(width, height);
+    pane.body.updateFromGameObject();
+    this.glassWindows.add(pane);
+    return pane;
+  }
+
+  createGroups() {
+    this.bullets = this.physics.add.group({ runChildUpdate: false, allowGravity: false });
+    this.grenades = this.physics.add.group({ bounceX: this.configData.grenades.bounce, bounceY: this.configData.grenades.bounce });
+    this.pickups = this.physics.add.staticGroup();
+  }
+
+  createInputs() {
+    const K = Phaser.Input.Keyboard.KeyCodes;
+    this.keys = this.input.keyboard.addKeys({
+      w: K.W,
+      a: K.A,
+      s: K.S,
+      d: K.D,
+      one: K.ONE,
+      two: K.TWO,
+      three: K.THREE,
+      four: K.FOUR,
+      up: K.UP,
+      left: K.LEFT,
+      down: K.DOWN,
+      right: K.RIGHT,
+      m: K.M,
+      comma: K.COMMA,
+      period: K.PERIOD,
+      slash: 191,
+      esc: K.ESC,
+      enter: K.ENTER,
+      space: K.SPACE,
+    });
+
+    this.input.keyboard.addCapture([
+      K.W,
+      K.A,
+      K.S,
+      K.D,
+      K.ONE,
+      K.TWO,
+      K.THREE,
+      K.FOUR,
+      K.UP,
+      K.LEFT,
+      K.DOWN,
+      K.RIGHT,
+      K.M,
+      K.COMMA,
+      K.PERIOD,
+      191,
+      K.SPACE,
+    ]);
+  }
+
+  createPlayer(config) {
+    const sprite = this.physics.add
+      .sprite(config.spawnX, config.spawnY, this.getCharacterTextureKey(23))
+      .setScale(PLAYER_SCALE)
+      .setDepth(10)
+      .setOrigin(0.5)
+      .setCollideWorldBounds(false)
+      .setDragX(1850)
+      .setMaxVelocity(620, 920);
+
+    this.applyBodyConfig(sprite, this.configData.playerBody.standing);
+    sprite.play('girl-idle');
+    sprite.setFlipX(config.facing < 0);
+
+    const arm = this.add.image(sprite.x, sprite.y, 'arm-pixel').setOrigin(0, 0.5).setDepth(12).setVisible(false);
+    const weaponSprite = this.add
+      .image(sprite.x, sprite.y, 'weapon-pistol')
+      .setOrigin(DEFAULT_GUN_GRIP_POINT.x / HANDGUN_SHEET.frameSize, DEFAULT_GUN_GRIP_POINT.y / HANDGUN_SHEET.frameSize)
+      .setScale(0.74)
+      .setDepth(13)
+      .setVisible(false);
+    const crosshair = this.add.image(sprite.x, sprite.y, 'crosshair-pixel').setDepth(14).setVisible(false);
+    const aimGraphics = this.add.graphics().setDepth(11).setVisible(false);
+
+    return {
+      ...config,
+      sprite,
+      arm,
+      weaponSprite,
+      crosshair,
+      aimGraphics,
+      health: PLAYER_MAX_HEALTH,
+      lives: this.configData.round.lives,
+      kills: 0,
+      facing: config.facing,
+      aimAngle: config.facing > 0 ? 0 : Math.PI,
+      aimFacing: config.facing > 0 ? 1 : -1,
+      aimOffset: 0,
+      aimMode: null,
+      aiming: false,
+      crouching: false,
+      climbing: false,
+      onThinPlatform: false,
+      dropUntil: 0,
+      currentPickup: null,
+      weapon: null,
+      grenadeAmmo: this.configData.grenades.startCount,
+      powerup: null,
+      comboIndex: 0,
+      comboResetAt: 0,
+      nextMeleeAt: 0,
+      nextShotAt: 0,
+      nextGrenadeAt: 0,
+      nextPowerupAt: 0,
+      runningUntil: 0,
+      runDirection: config.facing,
+      lastTapLeftAt: -Infinity,
+      lastTapRightAt: -Infinity,
+      crouchTransitionUntil: 0,
+      crouchTransitionGun: false,
+      standTransitionUntil: 0,
+      standTransitionGun: false,
+      dashAttackUntil: 0,
+      dashDirection: 0,
+      dashHitTargets: new Set(),
+      meleeAnimationUntil: 0,
+      meleeAnimationKey: null,
+      pickupAnimationUntil: 0,
+      shootStanceUntil: 0,
+      jumpHeldUntil: 0,
+      jumpReleased: true,
+      jumpPrepUntil: 0,
+      jumpLandUntil: 0,
+      wasGrounded: true,
+      knockedUntil: 0,
+      invulnerableUntil: 0,
+      slowedUntil: 0,
+      shieldUntil: 0,
+      hasteUntil: 0,
+    };
+  }
+
+  createColliders() {
+    for (const player of this.players) {
+      this.physics.add.collider(
+        player.sprite,
+        this.platforms,
+        this.handlePlatformContact,
+        this.platformProcess,
+        this,
+      );
+      this.physics.add.collider(player.sprite, this.glassWindows);
+      this.physics.add.collider(player.sprite, this.grenades);
+    }
+
+    this.physics.add.collider(this.p1.sprite, this.p2.sprite);
+    this.physics.add.collider(this.bullets, this.platforms, this.handleBulletWall, undefined, this);
+    this.physics.add.collider(this.bullets, this.glassWindows, this.handleBulletWindow, undefined, this);
+    this.physics.add.collider(this.grenades, this.platforms);
+    this.physics.add.collider(this.grenades, this.glassWindows, this.handleGrenadeWindow, undefined, this);
+    this.physics.add.overlap(this.bullets, [this.p1.sprite, this.p2.sprite], this.handleBulletHit, undefined, this);
+  }
+
+  createHud() {
+    this.ui = this.add.graphics().setScrollFactor(0).setDepth(50);
+    this.hintText = this.add
+      .text(14, 8, 'Esc: Menu  |  Debug: /debug.html  |  Editor: /level-editor.html', {
+        fontFamily: UI_FONT,
+        fontSize: '12px',
+        color: '#eaf5ff',
+        stroke: '#172033',
+        strokeThickness: 1,
+      })
+      .setScrollFactor(0)
+      .setDepth(51);
+    this.hintText.setInteractive({ useHandCursor: true });
+    this.hintText.on('pointerdown', () => this.toggleMenu());
+
+    this.timerText = this.add
+      .text(GAME_WIDTH / 2, 17, '', {
+        fontFamily: UI_FONT,
+        fontSize: '24px',
+        color: '#ffffff',
+        stroke: '#172033',
+        strokeThickness: 2,
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(51);
+
+    this.p1StatusText = this.add
+      .text(24, 47, '', {
+        fontFamily: UI_FONT,
+        fontSize: '12px',
+        color: '#d8ecff',
+        stroke: '#172033',
+        strokeThickness: 1,
+      })
+      .setScrollFactor(0)
+      .setDepth(51);
+
+    this.p2StatusText = this.add
+      .text(GAME_WIDTH - 24, 47, '', {
+        fontFamily: UI_FONT,
+        fontSize: '12px',
+        color: '#ffd7e0',
+        stroke: '#172033',
+        strokeThickness: 1,
+        align: 'right',
+      })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(51);
+
+    this.messageText = this.add
+      .text(GAME_WIDTH / 2, 92, '', {
+        fontFamily: UI_FONT,
+        fontSize: '24px',
+        color: '#ffffff',
+        stroke: '#172033',
+        strokeThickness: 2,
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(51);
+
+    this.addToUiLayer([
+      this.ui,
+      this.hintText,
+      this.timerText,
+      this.p1StatusText,
+      this.p2StatusText,
+      this.messageText,
+    ]);
+  }
+
+  createMenuOverlay() {
+    this.menuContainer = this.add.container(0, 0).setScrollFactor(0).setDepth(200).setVisible(false);
+    const panelY = GAME_HEIGHT / 2;
+    const shade = this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x090d14, 0.78).setOrigin(0);
+    const panel = this.add.rectangle(GAME_WIDTH / 2, panelY, 500, 455, 0x151e2b, 0.96).setStrokeStyle(2, 0x344257);
+    const title = this.add
+      .text(GAME_WIDTH / 2, panelY - 155, 'SUPERFIGHTERS', {
+        fontFamily: UI_FONT,
+        fontSize: '34px',
+        color: '#ffffff',
+        stroke: '#000000',
+        strokeThickness: 2,
+      })
+      .setOrigin(0.5);
+
+    const subtitle = this.add
+      .text(GAME_WIDTH / 2, panelY - 117, 'Local multiplayer arena fight', {
+        fontFamily: UI_FONT,
+        fontSize: '14px',
+        color: '#b7c2d2',
+      })
+      .setOrigin(0.5);
+
+    this.menuContainer.add([shade, panel, title, subtitle]);
+    this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY - 70, 'Resume', () => this.closeMenu()));
+    this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY - 22, 'Restart Match', () => this.restartMatch()));
+    this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY + 26, 'Debug / Tuning', () => {
+      window.location.href = '/debug.html';
+    }));
+    this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY + 74, 'Level Editor', () => {
+      window.location.href = '/level-editor.html';
+    }));
+
+    const controls = this.add
+      .text(
+        GAME_WIDTH / 2,
+        panelY + 142,
+        'P1: WASD + 1 melee, 2 shoot, 3 grenade, 4 power\nP2: Arrows + M melee, , shoot, . grenade, / power\nHold shoot/grenade to aim. Release to fire/throw.',
+        {
+          fontFamily: UI_FONT,
+          fontSize: '13px',
+          color: '#dbe7ff',
+          align: 'center',
+          lineSpacing: 5,
+        },
+      )
+      .setOrigin(0.5);
+    this.menuContainer.add(controls);
+    this.addToUiLayer(this.menuContainer);
+  }
+
+  createGlobalMenuInput() {
+    this.menuKeyHandler = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.toggleMenu();
+      }
+    };
+    window.addEventListener('keydown', this.menuKeyHandler);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      window.removeEventListener('keydown', this.menuKeyHandler);
+    });
+  }
+
+  createMenuButton(x, y, label, callback) {
+    const container = this.add.container(x, y);
+    const bg = this.add.rectangle(0, 0, 230, 34, 0x223149, 1).setStrokeStyle(1, 0x5ea8ff);
+    const text = this.add
+      .text(0, 0, label, {
+        fontFamily: UI_FONT,
+        fontSize: '16px',
+        color: '#ffffff',
+      })
+      .setOrigin(0.5);
+    container.add([bg, text]);
+    container.setSize(230, 34);
+    container.setInteractive(
+      new Phaser.Geom.Rectangle(-115, -17, 230, 34),
+      Phaser.Geom.Rectangle.Contains,
+    );
+    container.input.cursor = 'pointer';
+    container.on('pointerdown', callback);
+    container.on('pointerover', () => bg.setFillStyle(0x2e4263));
+    container.on('pointerout', () => bg.setFillStyle(0x223149));
+    return this.lockToScreen(container);
+  }
+
+  toggleMenu() {
+    if (this.matchOver) {
+      return;
+    }
+
+    if (this.matchPaused) {
+      this.closeMenu();
+    } else {
+      this.openMenu();
+    }
+  }
+
+  openMenu() {
+    this.matchPaused = true;
+    this.physics.world.pause();
+    this.menuContainer.setVisible(true);
+  }
+
+  closeMenu() {
+    this.matchPaused = false;
+    this.menuContainer.setVisible(false);
+    this.physics.world.resume();
+  }
+
+  restartMatch() {
+    window.location.reload();
+  }
+
+  updatePlayer(player, time, delta) {
+    const body = player.sprite.body;
+    const grounded = body.blocked.down || body.touching.down;
+    const justLanded = grounded && !player.wasGrounded;
+    player.wasGrounded = grounded;
+    const controls = player.controls;
+    const leftHeld = controls.left.isDown;
+    const rightHeld = controls.right.isDown;
+    const upHeld = controls.jump.isDown;
+    const downHeld = controls.crouch.isDown;
+    const horizontal = (rightHeld ? 1 : 0) - (leftHeld ? 1 : 0);
+    const vertical = (downHeld ? 1 : 0) - (upHeld ? 1 : 0);
+
+    player.currentPickup = this.findNearbyPickup(player);
+    this.tryAutoPickup(player);
+    if (!grounded) {
+      player.onThinPlatform = false;
+    }
+    if (justLanded) {
+      this.startJumpLand(player, time);
+    }
+
+    if (time < player.knockedUntil) {
+      this.resetJumpState(player);
+      this.endShootStance(player);
+      this.updateKnockedPlayer(player);
+      return;
+    }
+
+    player.sprite.setAngle(0);
+    player.sprite.setAlpha(time < player.invulnerableUntil && Math.floor(time / 80) % 2 === 0 ? 0.42 : 1);
+
+    if (Phaser.Input.Keyboard.JustDown(controls.powerup)) {
+      this.activatePowerup(player, time);
+    }
+
+    if (!player.aiming && player.shootStanceUntil > 0 && time >= player.shootStanceUntil) {
+      this.endShootStance(player);
+    }
+
+    if (!player.aiming) {
+      if (Phaser.Input.Keyboard.JustDown(controls.shoot)) {
+        this.beginAim(player, 'gun', time);
+      } else if (!this.isInShootStance(player, time) && Phaser.Input.Keyboard.JustDown(controls.grenade)) {
+        this.beginAim(player, 'grenade', time);
+      }
+    }
+
+    if (player.aiming) {
+      this.updateCrouchState(player, grounded, downHeld, time);
+      this.applyBodyPose(player, grounded);
+      this.updateAim(player, horizontal, vertical, delta);
+      this.updateJumpPhysics(player, grounded, controls, time);
+      if (
+        (player.aimMode === 'gun' && Phaser.Input.Keyboard.JustUp(controls.shoot)) ||
+        (player.aimMode === 'grenade' && Phaser.Input.Keyboard.JustUp(controls.grenade))
+      ) {
+        this.releaseAim(player, time);
+      }
+      this.updatePlayerAnimation(player, grounded, horizontal, time);
+      return;
+    }
+
+    if (this.isInShootStance(player, time)) {
+      this.updateCrouchState(player, grounded, downHeld, time);
+      if (grounded) {
+        player.sprite.setVelocityX(0);
+      }
+      this.updateJumpPhysics(player, grounded, controls, time);
+      this.applyBodyPose(player, grounded);
+      this.updateAimVisuals(player);
+      this.updatePlayerAnimation(player, grounded, 0, time);
+      return;
+    }
+
+    if (
+      Phaser.Input.Keyboard.JustDown(controls.crouch) &&
+      grounded &&
+      player.onThinPlatform
+    ) {
+      player.dropUntil = time + DROP_DURATION;
+      player.sprite.setVelocityY(110);
+      player.onThinPlatform = false;
+    }
+
+    const ladder = this.getIntersectingLadder(player);
+    if (ladder && vertical !== 0) {
+      player.climbing = true;
+    }
+    if (player.climbing) {
+      this.resetJumpState(player);
+      this.updateClimbing(player, ladder, vertical, horizontal, time);
+      this.updatePlayerAnimation(player, true, horizontal, time);
+      return;
+    }
+
+    body.setAllowGravity(true);
+    this.updateCrouchState(player, grounded, downHeld, time);
+    this.applyBodyPose(player, grounded);
+
+    if (player.crouching) {
+      player.sprite.setVelocityX(0);
+    } else if (horizontal !== 0) {
+      player.facing = horizontal;
+      player.sprite.setFlipX(horizontal < 0);
+      player.sprite.setVelocityX(horizontal * this.getMoveSpeed(player, time));
+    } else {
+      player.sprite.setVelocityX(0);
+    }
+
+    if (
+      Phaser.Input.Keyboard.JustDown(controls.jump) &&
+      grounded &&
+      !player.crouching &&
+      time >= player.dropUntil
+    ) {
+      this.startJump(player, time);
+    }
+
+    this.updateJumpPhysics(player, grounded, controls, time);
+
+    if (Phaser.Input.Keyboard.JustDown(controls.melee)) {
+      this.handleMeleePressed(player, time);
+    }
+
+    this.updatePlayerAnimation(player, grounded, horizontal, time);
+    this.updateAimVisuals(player);
+  }
+
+  updateKnockedPlayer(player) {
+    player.aiming = false;
+    this.endShootStance(player);
+    player.climbing = false;
+    player.sprite.body.setAllowGravity(true);
+    player.sprite.setAngle(player.facing > 0 ? 82 : -82);
+    player.sprite.play('girl-crouch', true);
+    player.sprite.setVelocityX(player.sprite.body.velocity.x * 0.96);
+  }
+
+  startJump(player, time) {
+    player.sprite.setVelocityY(-this.configData.movement.jumpSpeed);
+    player.jumpHeldUntil = time + this.configData.movement.jumpHoldMs;
+    player.jumpReleased = false;
+    const animationName = player.weapon ? 'jumpPrepGun' : 'jumpPrep';
+    player.jumpPrepUntil = time + this.getAnimationDurationMs(animationName);
+    player.jumpLandUntil = 0;
+    player.onThinPlatform = false;
+    player.sprite.play(this.getPlayerAnimationKey(animationName));
+  }
+
+  startJumpLand(player, time) {
+    player.jumpPrepUntil = 0;
+    const animationName = player.weapon ? 'jumpGunLand' : 'jumpLand';
+    player.jumpLandUntil = time + this.getAnimationDurationMs(animationName);
+    player.sprite.play(this.getPlayerAnimationKey(animationName));
+  }
+
+  updateJumpPhysics(player, grounded, controls, time) {
+    const body = player.sprite.body;
+    const movement = this.configData.movement;
+    body.setAllowGravity(true);
+
+    if (grounded && body.velocity.y >= 0) {
+      this.resetJumpState(player);
+      body.setGravityY(0);
+      return;
+    }
+
+    if (
+      !player.jumpReleased &&
+      Phaser.Input.Keyboard.JustUp(controls.jump) &&
+      body.velocity.y < movement.jumpReleaseVelocity
+    ) {
+      body.setVelocityY(movement.jumpReleaseVelocity);
+      player.jumpReleased = true;
+    }
+
+    const holdingJump = controls.jump.isDown && !player.jumpReleased && time < player.jumpHeldUntil;
+    const gravityMultiplier =
+      body.velocity.y < 0 && holdingJump
+        ? movement.jumpHoldGravityMultiplier
+        : movement.fallGravityMultiplier;
+
+    body.setGravityY(this.physics.world.gravity.y * (gravityMultiplier - 1));
+  }
+
+  resetJumpState(player) {
+    player.jumpHeldUntil = 0;
+    player.jumpReleased = true;
+    player.sprite.body?.setGravityY(0);
+  }
+
+  isInShootStance(player, time) {
+    return !player.aiming && player.aimMode === 'gun' && time < player.shootStanceUntil;
+  }
+
+  endShootStance(player) {
+    player.shootStanceUntil = 0;
+    player.aiming = false;
+    player.aimMode = null;
+    this.setAimVisible(player, false);
+  }
+
+  getMoveSpeed(player, time) {
+    let speed = this.configData.movement.walkSpeed;
+    if (time < player.slowedUntil) {
+      speed *= this.configData.powerups.slowmo.slowMultiplier;
+    }
+    if (time < player.hasteUntil) {
+      speed *= this.configData.powerups.haste.speedMultiplier;
+    }
+
+    return speed;
+  }
+
+  updateCrouchState(player, grounded, downHeld, time) {
+    const wasCrouching = player.crouching;
+    player.crouching = Boolean(downHeld && grounded);
+    if (player.crouching && !wasCrouching) {
+      this.startCrouchTransition(player, time);
+    } else if (!player.crouching && wasCrouching) {
+      this.startStandTransition(player, time);
+    } else if (!player.crouching) {
+      player.crouchTransitionUntil = 0;
+    }
+  }
+
+  startCrouchTransition(player, time) {
+    player.crouchTransitionGun = false;
+    player.standTransitionUntil = 0;
+    const animationName = 'crouchDown';
+    player.crouchTransitionUntil = time + this.getAnimationDurationMs(animationName);
+    player.sprite.play(this.getPlayerAnimationKey(animationName));
+  }
+
+  startStandTransition(player, time) {
+    player.standTransitionGun = Boolean(player.weapon);
+    player.crouchTransitionUntil = 0;
+    const animationName = player.standTransitionGun ? 'standUpGun' : 'standUp';
+    player.standTransitionUntil = time + this.getAnimationDurationMs(animationName);
+    player.sprite.play(this.getPlayerAnimationKey(animationName));
+  }
+
+  getPlayerAnimationKey(animationName) {
+    const animationKeys = {
+      idle: 'girl-idle',
+      idleAimStraight: 'girl-idle-gun',
+      run: 'girl-run',
+      runGun: 'girl-run-gun',
+      aim: 'girl-aim',
+      melee: 'girl-melee',
+      crouchDown: 'girl-crouch-down',
+      crouchDownGun: 'girl-crouch-down-gun',
+      crouch: 'girl-crouch',
+      crouchMelee: 'girl-crouch-melee',
+      standUp: 'girl-stand-up',
+      standUpGun: 'girl-stand-up-gun',
+      jumpPrep: 'girl-jump-prep',
+      jumpPrepGun: 'girl-jump-prep-gun',
+      jumpUp: 'girl-jump-up',
+      jumpPeak: 'girl-jump-peak',
+      jumpDown: 'girl-jump-down',
+      jumpLand: 'girl-jump-land',
+      jumpGunUp: 'girl-jump-up-gun',
+      jumpGunPeak: 'girl-jump-peak-gun',
+      jumpGunDown: 'girl-jump-down-gun',
+      jumpGunLand: 'girl-jump-land-gun',
+      jumpMelee: 'girl-jump-melee',
+      pickup: 'girl-pickup',
+    };
+    return animationKeys[animationName] ?? 'girl-idle';
+  }
+
+  continueOneShotAnimation(sprite, animationKey) {
+    if (sprite.anims.currentAnim?.key !== animationKey) {
+      sprite.play(animationKey);
+    }
+  }
+
+  getAnimationDurationMs(animationName) {
+    const setting = this.animationConfig?.[animationName];
+    if (!setting) {
+      return 220;
+    }
+
+    const frames = makeFrameList1Based(setting, this.animationFrameCount ?? 1);
+    return Math.max(80, (frames.length / Math.max(1, setting.fps)) * 1000);
+  }
+
+  applyBodyPose(player) {
+    const { sprite } = player;
+    if (player.crouching || this.time.now < player.knockedUntil) {
+      const crouchBody = this.configData.playerBody.crouch;
+      if (sprite.body.height !== crouchBody.height * sprite.scaleY) {
+        this.applyBodyConfig(sprite, crouchBody);
+      }
+      return;
+    }
+
+    const standingBody = this.configData.playerBody.standing;
+    if (sprite.body.height !== standingBody.height * sprite.scaleY) {
+      this.applyBodyConfig(sprite, standingBody);
+    }
+  }
+
+  applyBodyConfig(sprite, bodyConfig) {
+    sprite.body.setSize(bodyConfig.width, bodyConfig.height);
+    sprite.body.setOffset(
+      getCharacterCanvasPadding() + bodyConfig.offsetX,
+      getCharacterCanvasPadding() + bodyConfig.offsetY,
+    );
+  }
+
+  updatePlayerAnimation(player, grounded, horizontal, time) {
+    const { sprite } = player;
+    const gunStanceActive = player.aiming || this.isInShootStance(player, time);
+
+    if (gunStanceActive && !player.crouching && time < player.standTransitionUntil) {
+      this.continueOneShotAnimation(sprite, player.standTransitionGun ? 'girl-stand-up-gun' : 'girl-stand-up');
+      return;
+    }
+
+    if (gunStanceActive && player.crouching && time < player.crouchTransitionUntil) {
+      this.continueOneShotAnimation(sprite, 'girl-crouch-down');
+      return;
+    }
+
+    if (gunStanceActive) {
+      sprite.play(player.crouching ? 'girl-crouch' : 'girl-aim', true);
+      return;
+    }
+
+    if (time < player.pickupAnimationUntil) {
+      this.continueOneShotAnimation(sprite, 'girl-pickup');
+      return;
+    }
+
+    if (time < player.meleeAnimationUntil && player.meleeAnimationKey) {
+      if (sprite.anims.currentAnim?.key !== player.meleeAnimationKey) {
+        sprite.play(player.meleeAnimationKey);
+      }
+      return;
+    }
+
+    if (time < player.dashAttackUntil) {
+      sprite.play('girl-run', true);
+      return;
+    }
+
+    if (time < player.jumpPrepUntil) {
+      this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player.weapon ? 'jumpPrepGun' : 'jumpPrep'));
+      return;
+    }
+
+    if (!grounded || sprite.body.velocity.y < -8) {
+      const velocityY = sprite.body.velocity.y;
+      const animationName = player.weapon
+        ? velocityY < -95
+          ? 'jumpGunUp'
+          : velocityY < 95
+            ? 'jumpGunPeak'
+            : 'jumpGunDown'
+        : velocityY < -95
+          ? 'jumpUp'
+          : velocityY < 95
+            ? 'jumpPeak'
+            : 'jumpDown';
+      sprite.play(this.getPlayerAnimationKey(animationName), true);
+      return;
+    }
+
+    if (time < player.jumpLandUntil) {
+      this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player.weapon ? 'jumpGunLand' : 'jumpLand'));
+      return;
+    }
+
+    if (!player.crouching && time < player.standTransitionUntil) {
+      this.continueOneShotAnimation(sprite, player.standTransitionGun ? 'girl-stand-up-gun' : 'girl-stand-up');
+      return;
+    }
+
+    if (player.crouching && time < player.crouchTransitionUntil) {
+      this.continueOneShotAnimation(sprite, player.crouchTransitionGun ? 'girl-crouch-down-gun' : 'girl-crouch-down');
+      return;
+    }
+
+    if (player.crouching) {
+      sprite.play('girl-crouch', true);
+      return;
+    }
+
+    if (horizontal !== 0) {
+      sprite.play(this.getPlayerAnimationKey(player.weapon ? 'runGun' : 'run'), true);
+      return;
+    }
+
+    sprite.play(this.getPlayerAnimationKey(player.weapon ? 'idleAimStraight' : 'idle'), true);
+  }
+
+  beginAim(player, mode, time) {
+    const continuingGunStance = mode === 'gun' && this.isInShootStance(player, time);
+
+    if (mode === 'gun') {
+      if (!player.weapon || player.weapon.ammo <= 0) {
+        this.showMessage(player.weapon ? 'Out of ammo' : 'No weapon', 450);
+        this.endShootStance(player);
+        return;
+      }
+    }
+
+    if (mode === 'grenade') {
+      if (player.grenadeAmmo <= 0 || time < player.nextGrenadeAt) {
+        this.showMessage('No grenades', 450);
+        return;
+      }
+    }
+
+    player.aiming = true;
+    player.aimMode = mode;
+    player.shootStanceUntil = 0;
+    if (continuingGunStance) {
+      player.aimFacing = player.aimFacing || (player.facing >= 0 ? 1 : -1);
+      player.aimOffset = this.getAimOffsetFromAngle(player.aimAngle, player.aimFacing);
+    } else {
+      player.aimFacing = player.facing >= 0 ? 1 : -1;
+      player.aimOffset = 0;
+      player.aimAngle = this.getAimAngle(player.aimFacing, player.aimOffset);
+    }
+    player.sprite.setFlipX(player.aimFacing < 0);
+    this.setAimVisible(player, true);
+  }
+
+  updateAim(player, horizontal, vertical, delta) {
+    const rotateSpeed = Phaser.Math.DegToRad(this.configData.movement.aimRotateDegPerSecond);
+    const aimFacing = player.aimFacing || (player.facing >= 0 ? 1 : -1);
+    const nextOffset = (player.aimOffset ?? 0) + vertical * aimFacing * rotateSpeed * (delta / 1000);
+    player.aimFacing = aimFacing;
+    player.aimOffset = Phaser.Math.Clamp(nextOffset, -AIM_HALF_ARC, AIM_HALF_ARC);
+    player.aimAngle = this.getAimAngle(player.aimFacing, player.aimOffset);
+
+    player.facing = aimFacing;
+    player.sprite.setFlipX(aimFacing < 0);
+
+    const grounded = player.sprite.body.blocked.down || player.sprite.body.touching.down;
+    if (horizontal !== 0 && !(player.crouching && grounded)) {
+      player.sprite.setVelocityX(horizontal * this.configData.movement.aimSpeed);
+    } else if (grounded) {
+      player.sprite.setVelocityX(0);
+    }
+
+    this.updateAimVisuals(player);
+  }
+
+  getAimAngle(facing, offset) {
+    const baseAngle = facing >= 0 ? 0 : Math.PI;
+    return Phaser.Math.Angle.Normalize(baseAngle + offset);
+  }
+
+  getAimOffsetFromAngle(angle, facing) {
+    const baseAngle = facing >= 0 ? 0 : Math.PI;
+    const wrapped = Math.atan2(Math.sin(angle - baseAngle), Math.cos(angle - baseAngle));
+    return Phaser.Math.Clamp(wrapped, -AIM_HALF_ARC, AIM_HALF_ARC);
+  }
+
+  releaseAim(player, time) {
+    const mode = player.aimMode;
+    player.aiming = false;
+
+    if (mode === 'gun') {
+      this.fireWeapon(player, time);
+      player.aimMode = 'gun';
+      player.shootStanceUntil = time + this.configData.movement.shootStanceMs;
+      this.setAimVisible(player, true);
+    } else if (mode === 'grenade') {
+      player.aimMode = null;
+      this.setAimVisible(player, false);
+      this.throwAimedGrenade(player, time);
+    } else {
+      player.aimMode = null;
+      this.setAimVisible(player, false);
+    }
+  }
+
+  setAimVisible(player, visible) {
+    player.arm.setVisible(false);
+    player.weaponSprite.setVisible(visible && player.aimMode === 'gun' && Boolean(player.weapon));
+    player.crosshair.setVisible(visible);
+    player.aimGraphics.setVisible(visible);
+    if (!visible) {
+      player.aimGraphics.clear();
+    }
+  }
+
+  updateAimVisuals(player) {
+    const aimVisualActive = player.aiming || this.isInShootStance(player, this.time.now);
+    const heldGunVisible = Boolean(player.weapon) && (aimVisualActive || this.isGunCarryAnimation(player));
+    const visualFacing = aimVisualActive ? player.aimFacing : player.facing;
+    const visualAngle = aimVisualActive ? player.aimAngle : visualFacing > 0 ? 0 : Math.PI;
+    const pivot = this.getAimPivot(player);
+    const carryAnchor = this.getAimAnchor(player, visualAngle);
+    const direction = new Phaser.Math.Vector2(Math.cos(visualAngle), Math.sin(visualAngle));
+    const reticle = this.getAimReticlePosition(player, visualAngle);
+    const weaponAnchor = aimVisualActive ? pivot : carryAnchor;
+
+    player.arm.setVisible(false);
+    player.weaponSprite.setTexture(player.weapon ? `weapon-${player.weapon.id}` : 'weapon-pistol');
+    player.weaponSprite.setPosition(weaponAnchor.x, weaponAnchor.y);
+    player.weaponSprite.setRotation(visualAngle);
+    player.weaponSprite.setFlipY(visualFacing < 0);
+    player.weaponSprite.setVisible(heldGunVisible);
+    player.crosshair.setPosition(reticle.x, reticle.y);
+    player.crosshair.setVisible(aimVisualActive);
+    player.aimGraphics.setVisible(aimVisualActive);
+
+    player.aimGraphics.clear();
+    if (!aimVisualActive) {
+      return;
+    }
+
+    if (player.aimMode === 'gun' && player.weapon?.id === 'sniper') {
+      player.aimGraphics.lineStyle(1, 0xff304b, 0.75);
+      player.aimGraphics.lineBetween(reticle.x, reticle.y, reticle.x + direction.x * 620, reticle.y + direction.y * 620);
+    }
+
+    if (player.aimMode === 'grenade') {
+      this.drawGrenadeArc(player, reticle, direction);
+    }
+  }
+
+  isGunCarryAnimation(player) {
+    const key = player.sprite.anims.currentAnim?.key;
+    return [
+      'girl-idle-gun',
+      'girl-run-gun',
+      'girl-crouch-down',
+      'girl-crouch',
+      'girl-stand-up',
+      'girl-crouch-down-gun',
+      'girl-stand-up-gun',
+      'girl-jump-prep-gun',
+      'girl-jump-up-gun',
+      'girl-jump-peak-gun',
+      'girl-jump-down-gun',
+      'girl-jump-land-gun',
+    ].includes(key);
+  }
+
+  getShoulder(player) {
+    return this.getAimPivot(player);
+  }
+
+  getAimPivot(player) {
+    const body = player.sprite.body;
+    if (!body) {
+      return { x: player.sprite.x, y: player.sprite.y };
+    }
+    return {
+      x: body.x + body.width / 2,
+      y: body.y + body.height / 2,
+    };
+  }
+
+  getAimReticlePosition(player, angle = player.aimAngle) {
+    const pivot = this.getAimPivot(player);
+    const distance = this.configData.visuals.crosshairDistance;
+    return {
+      x: pivot.x + Math.cos(angle) * distance,
+      y: pivot.y + Math.sin(angle) * distance,
+    };
+  }
+
+  getAimAnchor(player, angle = player.aimAngle) {
+    const direction = Math.cos(angle) >= 0 ? 1 : -1;
+    const hand = this.getCharacterHandPoint(player, direction);
+    const handX = direction > 0
+      ? hand.x
+      : CHARACTER_SHEET.frameSize - hand.x;
+    return {
+      x: player.sprite.x + (handX - CHARACTER_SHEET.frameSize / 2) * PLAYER_SCALE,
+      y: player.sprite.y + (hand.y - CHARACTER_SHEET.frameSize / 2) * PLAYER_SCALE,
+    };
+  }
+
+  getCharacterHandPoint(player) {
+    const frame = getEmpressFrameNumber(player.sprite.texture.key);
+    return CHARACTER_HAND_POINTS[frame] ?? DEFAULT_CHARACTER_HAND_POINT;
+  }
+
+  drawGrenadeArc(player, shoulder, direction) {
+    const speed = this.configData.grenades.throwSpeed;
+    const gravity = this.physics.world.gravity.y;
+    player.aimGraphics.fillStyle(0xffffff, 0.65);
+
+    for (let i = 1; i <= 12; i += 1) {
+      const t = i * 0.11;
+      const x = shoulder.x + direction.x * speed * t;
+      const y = shoulder.y + direction.y * speed * t + 0.5 * gravity * t * t;
+      player.aimGraphics.fillCircle(x, y, 2);
+    }
+  }
+
+  fireWeapon(player, time) {
+    if (!player.weapon || player.weapon.ammo <= 0 || time < player.nextShotAt) {
+      return;
+    }
+
+    const weapon = this.configData.weapons[player.weapon.id];
+    player.nextShotAt = time + weapon.cooldownMs;
+    player.weapon.ammo -= 1;
+
+    for (let burstIndex = 0; burstIndex < weapon.burst; burstIndex += 1) {
+      this.time.delayedCall(burstIndex * weapon.burstDelayMs, () => {
+        if (!player.sprite.active || this.matchOver) {
+          return;
+        }
+        this.fireWeaponBurst(player, weapon);
+      });
+    }
+
+    const recoilVector = new Phaser.Math.Vector2(Math.cos(player.aimAngle), Math.sin(player.aimAngle));
+    player.sprite.setVelocityX(player.sprite.body.velocity.x - recoilVector.x * weapon.recoil);
+
+    if (player.weapon.ammo <= 0) {
+      this.time.delayedCall(250, () => {
+        if (player.weapon?.ammo <= 0) {
+          player.weapon = null;
+          this.endShootStance(player);
+          this.showMessage(`${player.label} weapon empty`, 700);
+        }
+      });
+    }
+  }
+
+  fireWeaponBurst(player, weapon) {
+    const baseAngle = player.aimAngle;
+    const reticle = this.getAimReticlePosition(player, baseAngle);
+    this.spawnMuzzleFlash(
+      reticle.x,
+      reticle.y,
+      baseAngle,
+      weapon.bulletColor,
+    );
+
+    for (let pellet = 0; pellet < weapon.pellets; pellet += 1) {
+      const spread = Phaser.Math.DegToRad(Phaser.Math.FloatBetween(-weapon.spreadDeg, weapon.spreadDeg));
+      const angle = baseAngle + spread;
+      this.spawnBullet(player, weapon, angle, reticle.x, reticle.y);
+    }
+  }
+
+  spawnBullet(player, weapon, angle, originX, originY) {
+    const color = parseHexColor(weapon.bulletColor, 0xffffff);
+    const bullet = this.physics.add
+      .image(originX, originY, PROJECTILE_TEXTURE_KEY)
+      .setDepth(9)
+      .setRotation(angle)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    this.bullets.add(bullet);
+    bullet.body.setAllowGravity(false);
+    bullet.body.setCircle(7, 2, 2);
+    bullet.body.setVelocity(Math.cos(angle) * weapon.muzzleVelocity, Math.sin(angle) * weapon.muzzleVelocity);
+    bullet.body.setMaxVelocity(weapon.muzzleVelocity, weapon.muzzleVelocity);
+    bullet.setData('owner', player.id);
+    bullet.setData('weaponId', player.weapon.id);
+    bullet.setData('damage', weapon.damage);
+    bullet.setData('knockback', weapon.knockback);
+    bullet.setData('directionX', Math.cos(angle) >= 0 ? 1 : -1);
+    bullet.setData('hitColor', color);
+
+    this.time.delayedCall(weapon.bulletLifeMs, () => {
+      if (bullet.active) {
+        bullet.destroy();
+      }
+    });
+  }
+
+  throwAimedGrenade(player, time) {
+    if (player.grenadeAmmo <= 0 || time < player.nextGrenadeAt) {
+      return;
+    }
+
+    player.nextGrenadeAt = time + 500;
+    player.grenadeAmmo -= 1;
+
+    const direction = new Phaser.Math.Vector2(Math.cos(player.aimAngle), Math.sin(player.aimAngle));
+    const reticle = this.getAimReticlePosition(player, player.aimAngle);
+    const grenade = this.physics.add
+      .image(reticle.x, reticle.y, 'grenade-pixel')
+      .setDepth(9);
+    this.grenades.add(grenade);
+    grenade.setBounce(this.configData.grenades.bounce);
+    grenade.setDragX(50);
+    grenade.body.setCircle(7);
+    grenade.body.setVelocity(direction.x * this.configData.grenades.throwSpeed, direction.y * this.configData.grenades.throwSpeed);
+    grenade.setData('owner', player.id);
+
+    this.time.delayedCall(this.configData.grenades.fuseMs, () => {
+      if (grenade.active) {
+        this.explodeGrenade(grenade, player.id);
+      }
+    });
+  }
+
+  handleMeleePressed(player, time) {
+    if (time < player.meleeAnimationUntil || time < player.pickupAnimationUntil) {
+      return;
+    }
+
+    if (player.crouching && player.currentPickup) {
+      if (this.canTakePickup(player, player.currentPickup)) {
+        this.takePickup(player, player.currentPickup, time);
+        return;
+      }
+      if (this.canSwapPickup(player, player.currentPickup)) {
+        this.swapPickup(player, player.currentPickup, time);
+        return;
+      }
+    }
+
+    if (player.crouching && player.currentPickup?.getData('kind') === 'weapon') {
+      return;
+    }
+
+    const running = time < player.runningUntil && player.runDirection === player.facing;
+    if (running) {
+      this.startDashAttack(player, time);
+      return;
+    }
+
+    this.performMeleeCombo(player, time);
+  }
+
+  performMeleeCombo(player, time) {
+    if (time < player.nextMeleeAt) {
+      return;
+    }
+
+    if (time > player.comboResetAt) {
+      player.comboIndex = 0;
+    }
+
+    const hit = this.configData.melee.hits[player.comboIndex];
+    const comboNumber = player.comboIndex + 1;
+    const animationName = this.getMeleeAnimationName(player);
+    const animationDuration = this.getAnimationDurationMs(animationName);
+    player.nextMeleeAt = time + Math.max(this.configData.melee.cooldownMs, animationDuration);
+    player.comboResetAt = time + this.configData.melee.comboResetMs;
+    player.comboIndex = (player.comboIndex + 1) % this.configData.melee.hits.length;
+    this.startMeleeAnimation(player, animationName, time, animationDuration);
+
+    const centerX = player.sprite.x + player.facing * 34;
+    const centerY = player.sprite.y - 9;
+    this.flashHitbox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, player.facing, 0xffffff, 0.28);
+    this.breakWindowsInBox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, hit.damage);
+
+    const opponent = this.getOpponent(player);
+    if (this.time.now < opponent.knockedUntil) {
+      return;
+    }
+
+    if (this.isTargetInBox(opponent.sprite, centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight)) {
+      this.damagePlayer(opponent, hit.damage, player.facing, hit.knockbackX, hit.knockbackY, {
+        source: `${player.label} combo ${comboNumber}`,
+      });
+    }
+  }
+
+  getMeleeAnimationName(player) {
+    if (!player.sprite.body.blocked.down && !player.sprite.body.touching.down) {
+      return 'jumpMelee';
+    }
+    return player.crouching ? 'crouchMelee' : 'melee';
+  }
+
+  startMeleeAnimation(player, animationName, time, duration) {
+    const keyByAnimation = {
+      melee: 'girl-melee',
+      crouchMelee: 'girl-crouch-melee',
+      jumpMelee: 'girl-jump-melee',
+    };
+    const animationKey = keyByAnimation[animationName] ?? 'girl-melee';
+    player.meleeAnimationKey = animationKey;
+    player.meleeAnimationUntil = time + duration;
+    player.sprite.play(animationKey);
+  }
+
+  startPickupAnimation(player, time) {
+    player.pickupAnimationUntil = time + this.getAnimationDurationMs('pickup');
+    player.crouchTransitionUntil = 0;
+    player.standTransitionUntil = 0;
+    player.meleeAnimationUntil = 0;
+    player.sprite.setVelocityX(0);
+    player.sprite.play('girl-pickup');
+  }
+
+  startDashAttack(player, time) {
+    if (time < player.nextMeleeAt) {
+      return;
+    }
+
+    player.nextMeleeAt = time + 520;
+    player.dashAttackUntil = time + this.configData.movement.dashAttackMs;
+    player.dashDirection = player.facing;
+    player.dashHitTargets.clear();
+    player.sprite.setVelocityX(player.facing * this.configData.movement.dashAttackSpeed);
+    player.sprite.setVelocityY(-this.configData.movement.dashAttackLift);
+    this.flashHitbox(player.sprite.x + player.facing * 40, player.sprite.y - 8, 64, 44, player.facing, 0xffd166, 0.3);
+  }
+
+  updateDashAttacks(time) {
+    for (const player of this.players) {
+      if (time >= player.dashAttackUntil) {
+        continue;
+      }
+
+      const centerX = player.sprite.x + player.dashDirection * 40;
+      const centerY = player.sprite.y - 8;
+      this.breakWindowsInBox(centerX, centerY, 70, 48, this.configData.melee.dashDamage);
+
+      const opponent = this.getOpponent(player);
+      if (!player.dashHitTargets.has(opponent.id) && time >= opponent.knockedUntil && this.isTargetInBox(opponent.sprite, centerX, centerY, 70, 48)) {
+        player.dashHitTargets.add(opponent.id);
+        this.damagePlayer(opponent, this.configData.melee.dashDamage, player.dashDirection, this.configData.melee.dashKnockbackX, this.configData.melee.dashKnockbackY, {
+          knockdownMs: this.configData.melee.dashKnockdownMs,
+          source: `${player.label} dash takedown`,
+        });
+      }
+    }
+  }
+
+  updateClimbing(player, ladder, vertical, horizontal, time) {
+    if (!ladder) {
+      player.climbing = false;
+      player.sprite.body.setAllowGravity(true);
+      return;
+    }
+
+    player.sprite.body.setAllowGravity(false);
+    player.sprite.setVelocityY(vertical * this.configData.movement.climbSpeed);
+    if (horizontal !== 0) {
+      player.sprite.setVelocityX(horizontal * this.configData.movement.walkSpeed * 0.45);
+      player.facing = horizontal;
+      player.sprite.setFlipX(horizontal < 0);
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(player.controls.jump)) {
+      player.climbing = false;
+      player.sprite.body.setAllowGravity(true);
+      player.sprite.setVelocityY(-this.configData.movement.jumpSpeed * 0.75);
+    }
+
+    if (time < player.slowedUntil) {
+      player.sprite.setVelocityY(player.sprite.body.velocity.y * this.configData.powerups.slowmo.slowMultiplier);
+    }
+  }
+
+  getIntersectingLadder(player) {
+    const playerBounds = getBodyBounds(player.sprite);
+    return this.ladders.find((ladder) => Phaser.Geom.Intersects.RectangleToRectangle(playerBounds, ladder.getData('bounds'))) ?? null;
+  }
+
+  handleBulletHit(spriteOrBullet, maybeSprite) {
+    const bullet = spriteOrBullet.getData('owner') ? spriteOrBullet : maybeSprite;
+    const sprite = bullet === spriteOrBullet ? maybeSprite : spriteOrBullet;
+    const player = this.playerBySprite.get(sprite);
+
+    if (!player || bullet.getData('owner') === player.id) {
+      return;
+    }
+
+    this.damagePlayer(player, bullet.getData('damage'), bullet.getData('directionX'), bullet.getData('knockback'), 125, {
+      source: bullet.getData('weaponId'),
+    });
+    this.spawnHitEffect(bullet.x, bullet.y, bullet.getData('hitColor') ?? 0xfff3a3);
+
+    bullet.destroy();
+  }
+
+  handleBulletWall(bullet) {
+    if (!bullet.active) {
+      return;
+    }
+
+    this.spawnHitEffect(bullet.x, bullet.y, bullet.getData('hitColor') ?? 0xfff3a3);
+    bullet.destroy();
+  }
+
+  handleBulletWindow(bullet) {
+    this.handleBulletWall(bullet);
+  }
+
+  handleGrenadeWindow(grenade, windowPane) {
+    this.breakWindow(windowPane, grenade.x, grenade.y);
+  }
+
+  explodeGrenade(grenade, ownerId) {
+    const x = grenade.x;
+    const y = grenade.y;
+    grenade.destroy();
+    this.explodeAt(x, y, this.configData.grenades.radius, this.configData.grenades.damage, ownerId, true);
+  }
+
+  explodeAt(x, y, radius, damage, ownerId, grenade = false) {
+    const burst = this.add.circle(x, y, 18, COLORS.explosion, 0.52).setDepth(20);
+    this.tweens.add({
+      targets: burst,
+      scale: radius / 18,
+      alpha: 0,
+      duration: 260,
+      ease: 'Cubic.easeOut',
+      onComplete: () => burst.destroy(),
+    });
+
+    this.breakWindowsInRadius(x, y, radius);
+
+    for (const player of this.players) {
+      const distance = Phaser.Math.Distance.Between(x, y, player.sprite.x, player.sprite.y);
+      if (distance <= radius) {
+        const direction = player.sprite.x >= x ? 1 : -1;
+        const selfHit = player.id === ownerId;
+        const amount = grenade && selfHit ? this.configData.grenades.selfDamage : damage;
+        const strength = Phaser.Math.Linear(this.configData.grenades.knockback, 120, distance / radius);
+        this.damagePlayer(player, amount, direction, strength, 320, {
+          source: 'explosion',
+        });
+      }
+    }
+
+    this.cameras.main.shake(110, 0.006);
+  }
+
+  damagePlayer(player, amount, direction, knockbackX, knockbackY, options = {}) {
+    const now = this.time.now;
+    if (now < player.invulnerableUntil) {
+      return;
+    }
+
+    const reducedAmount = now < player.shieldUntil ? Math.ceil(amount * this.configData.powerups.shield.damageMultiplier) : amount;
+    player.health = Math.max(0, player.health - reducedAmount);
+    player.sprite.setVelocityX(direction * knockbackX);
+    player.sprite.setVelocityY(-knockbackY);
+
+    if (options.knockdownMs) {
+      player.knockedUntil = Math.max(player.knockedUntil, now + options.knockdownMs);
+    }
+
+    this.cameras.main.shake(60, 0.0035);
+    this.flashDamage(player);
+
+    if (player.health <= 0) {
+      this.scoreKill(this.getOpponent(player), player, options.source ?? 'KO');
+    }
+  }
+
+  scoreKill(winner, loser, source) {
+    if (this.matchOver) {
+      return;
+    }
+
+    winner.kills += 1;
+    loser.lives -= 1;
+    this.showMessage(`${winner.label} KO - ${source}`, 850);
+
+    if (loser.lives <= 0) {
+      this.endMatch(winner, `${loser.label} is out of lives`);
+      return;
+    }
+
+    this.respawn(loser);
+  }
+
+  respawn(player) {
+    player.health = PLAYER_MAX_HEALTH;
+    player.dropUntil = 0;
+    this.resetJumpState(player);
+    player.jumpPrepUntil = 0;
+    player.jumpLandUntil = 0;
+    player.wasGrounded = true;
+    player.knockedUntil = 0;
+    player.aiming = false;
+    player.aimMode = null;
+    player.aimFacing = player.facing >= 0 ? 1 : -1;
+    player.aimOffset = 0;
+    player.aimAngle = this.getAimAngle(player.aimFacing, player.aimOffset);
+    player.crouching = false;
+    player.crouchTransitionUntil = 0;
+    player.standTransitionUntil = 0;
+    player.climbing = false;
+    player.sprite.body.setAllowGravity(true);
+    player.invulnerableUntil = this.time.now + this.configData.round.respawnInvulnerabilityMs;
+    player.sprite.setAngle(0);
+    player.sprite.setAlpha(1);
+    player.sprite.setPosition(player.spawnX, player.spawnY);
+    player.sprite.setVelocity(0, 0);
+    player.sprite.setFlipX(player.facing < 0);
+    this.setAimVisible(player, false);
+  }
+
+  checkKillZones() {
+    const worldWidth = this.worldWidth ?? WORLD_WIDTH;
+    const worldHeight = this.worldHeight ?? WORLD_HEIGHT;
+    for (const player of this.players) {
+      const { x, y } = player.sprite;
+      if (x < -180 || x > worldWidth + 180 || y > worldHeight + 260) {
+        this.scoreKill(this.getOpponent(player), player, 'fall');
+      }
+    }
+  }
+
+  checkRoundTimer(time) {
+    if (time < this.roundEndsAt) {
+      return;
+    }
+
+    const winner = this.pickTimerWinner();
+    this.endMatch(winner, 'time limit');
+  }
+
+  pickTimerWinner() {
+    if (this.p1.lives !== this.p2.lives) {
+      return this.p1.lives > this.p2.lives ? this.p1 : this.p2;
+    }
+    if (this.p1.health !== this.p2.health) {
+      return this.p1.health > this.p2.health ? this.p1 : this.p2;
+    }
+    if (this.p1.kills !== this.p2.kills) {
+      return this.p1.kills > this.p2.kills ? this.p1 : this.p2;
+    }
+    return null;
+  }
+
+  endMatch(winner, reason) {
+    this.matchOver = true;
+    this.physics.world.pause();
+    const winnerText = winner ? `${winner.label} wins` : 'Draw';
+    this.showEndOverlay(winnerText, reason);
+  }
+
+  showEndOverlay(winnerText, reason) {
+    this.endContainer?.destroy();
+    this.endContainer = this.add.container(0, 0).setScrollFactor(0).setDepth(220);
+    const panelY = GAME_HEIGHT / 2;
+    const shade = this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x070b11, 0.82).setOrigin(0);
+    const panel = this.add.rectangle(GAME_WIDTH / 2, panelY, 530, 260, 0x151e2b, 0.96).setStrokeStyle(2, 0xffd166);
+    const title = this.add
+      .text(GAME_WIDTH / 2, panelY - 62, winnerText, {
+        fontFamily: UI_FONT,
+        fontSize: '34px',
+        color: '#ffffff',
+        stroke: '#000000',
+        strokeThickness: 2,
+      })
+      .setOrigin(0.5);
+    const body = this.add
+      .text(GAME_WIDTH / 2, panelY - 10, `${reason}\nEnter/Space: rematch   Esc: menu`, {
+        fontFamily: UI_FONT,
+        fontSize: '16px',
+        color: '#dbe7ff',
+        align: 'center',
+        lineSpacing: 8,
+      })
+      .setOrigin(0.5);
+    const button = this.createMenuButton(GAME_WIDTH / 2, panelY + 78, 'Rematch', () => this.restartMatch());
+    this.endContainer.add([shade, panel, title, body, button]);
+    this.addToUiLayer(this.endContainer);
+    this.updateUiLayer();
+  }
+
+  updatePickups(time) {
+    if (time < this.pickupSpawnTimer) {
+      return;
+    }
+
+    this.pickupSpawnTimer = time + this.configData.pickups.spawnEveryMs;
+    const activeCount = this.pickups.getChildren().filter((pickup) => pickup.active).length;
+    if (activeCount < this.configData.pickups.maxOnMap) {
+      this.spawnRandomPickup();
+    }
+  }
+
+  spawnInitialPickups() {
+    let spawnedCount = 0;
+    if (this.p1?.sprite) {
+      this.createPickup(this.p1.sprite.x + this.p1.facing * 44, this.p1.sprite.y + 4, 'weapon', 'pistol');
+      spawnedCount += 1;
+    }
+    if (this.p2?.sprite) {
+      this.createPickup(this.p2.sprite.x + this.p2.facing * 44, this.p2.sprite.y + 4, 'weapon', 'pistol');
+      spawnedCount += 1;
+    }
+
+    const guaranteedGunPoints = this.pickupSpawnPoints.slice(0, Math.max(0, this.configData.pickups.maxOnMap - spawnedCount));
+    for (const point of guaranteedGunPoints) {
+      this.createPickup(point.x, point.y, 'weapon', 'pistol');
+      spawnedCount += 1;
+    }
+
+    for (let i = spawnedCount; i < this.configData.pickups.maxOnMap; i += 1) {
+      this.spawnRandomPickup();
+    }
+  }
+
+  spawnRandomPickup() {
+    const openSpawnPoints = this.pickupSpawnPoints.filter((point) => !this.isPickupSpawnOccupied(point));
+    if (!openSpawnPoints.length) {
+      return;
+    }
+
+    const point = Phaser.Utils.Array.GetRandom(openSpawnPoints);
+    const roll = Math.random();
+
+    if (roll < 0.75) {
+      this.createPickup(point.x, point.y, 'weapon', 'pistol');
+    } else if (roll < 0.78) {
+      this.createPickup(point.x, point.y, 'grenade', 'grenade');
+    } else {
+      this.createPickup(point.x, point.y, 'powerup', Phaser.Utils.Array.GetRandom(Object.keys(this.configData.powerups)));
+    }
+  }
+
+  isPickupSpawnOccupied(point) {
+    return this.pickups.getChildren().some((pickup) => (
+      pickup.active &&
+      Phaser.Math.Distance.Between(point.x, point.y, pickup.x, pickup.y) < 44
+    ));
+  }
+
+  createPickup(x, y, kind, id) {
+    const texture = kind === 'weapon' ? `weapon-${id}` : kind === 'grenade' ? 'grenade-pixel' : `powerup-${id}`;
+    const pickup = this.physics.add.staticImage(x, y, texture).setDepth(8);
+    pickup.setData('kind', kind);
+    pickup.setData('id', id);
+    pickup.setScale(kind === 'weapon' ? 0.58 : 1.1);
+    pickup.body.setSize(28, 28);
+    pickup.refreshBody();
+
+    const label = this.pickupLabel(kind, id);
+    const text = this.add
+      .text(x, y + this.configData.visuals.pickupTextOffset, label, {
+        fontFamily: UI_FONT,
+        fontSize: '10px',
+        color: '#ffffff',
+        stroke: '#101622',
+        strokeThickness: 1,
+      })
+      .setOrigin(0.5, 0)
+      .setDepth(8);
+    pickup.setData('labelObj', text);
+    this.pickups.add(pickup);
+    return pickup;
+  }
+
+  pickupLabel(kind, id) {
+    if (kind === 'weapon') {
+      return this.configData.weapons[id].label;
+    }
+    if (kind === 'grenade') {
+      return '+Grenades';
+    }
+    return this.configData.powerups[id].label;
+  }
+
+  findNearbyPickup(player) {
+    let closest = null;
+    let closestDistance = Infinity;
+
+    for (const pickup of this.pickups.getChildren()) {
+      if (!pickup.active) {
+        continue;
+      }
+      const distance = Phaser.Math.Distance.Between(player.sprite.x, player.sprite.y, pickup.x, pickup.y);
+      if (distance < 58 && distance < closestDistance) {
+        closest = pickup;
+        closestDistance = distance;
+      }
+    }
+
+    return closest;
+  }
+
+  tryAutoPickup(player) {
+    const pickup = player.currentPickup;
+    if (!pickup || !pickup.active) {
+      return;
+    }
+
+    const kind = pickup.getData('kind');
+    if (kind === 'grenade' && player.grenadeAmmo < this.configData.grenades.maxCount) {
+      this.takePickup(player, pickup);
+    } else if (kind === 'powerup' && !player.powerup) {
+      this.takePickup(player, pickup);
+    }
+  }
+
+  canTakePickup(player, pickup) {
+    const kind = pickup.getData('kind');
+    return (
+      (kind === 'weapon' && !player.weapon) ||
+      (kind === 'grenade' && player.grenadeAmmo < this.configData.grenades.maxCount) ||
+      (kind === 'powerup' && !player.powerup)
+    );
+  }
+
+  canSwapPickup(player, pickup) {
+    const kind = pickup.getData('kind');
+    return (
+      (kind === 'weapon' && Boolean(player.weapon)) ||
+      (kind === 'grenade' && player.grenadeAmmo > 0) ||
+      (kind === 'powerup' && Boolean(player.powerup))
+    );
+  }
+
+  swapPickup(player, pickup, time = this.time.now) {
+    const kind = pickup.getData('kind');
+    const oldX = pickup.x;
+    const oldY = pickup.y;
+
+    if (kind === 'weapon' && player.weapon) {
+      this.createPickup(oldX, oldY, 'weapon', player.weapon.id);
+    } else if (kind === 'grenade' && player.grenadeAmmo > 0) {
+      this.createPickup(oldX, oldY, 'grenade', 'grenade');
+      player.grenadeAmmo = 0;
+    } else if (kind === 'powerup' && player.powerup) {
+      this.createPickup(oldX, oldY, 'powerup', player.powerup);
+    }
+
+    this.takePickup(player, pickup, time);
+  }
+
+  takePickup(player, pickup, time = null) {
+    const kind = pickup.getData('kind');
+    const id = pickup.getData('id');
+
+    if (kind === 'weapon') {
+      player.weapon = this.makeWeaponState(id);
+      this.showMessage(`${player.label} picked up ${this.configData.weapons[id].label}`, 650);
+    } else if (kind === 'grenade') {
+      player.grenadeAmmo = Math.min(this.configData.grenades.maxCount, player.grenadeAmmo + 1);
+    } else if (kind === 'powerup') {
+      player.powerup = id;
+      this.showMessage(`${player.label} picked up ${this.configData.powerups[id].label}`, 650);
+    }
+
+    if (time !== null) {
+      this.startPickupAnimation(player, time);
+    }
+
+    pickup.getData('labelObj')?.destroy();
+    pickup.destroy();
+  }
+
+  makeWeaponState(id) {
+    return {
+      id,
+      ammo: this.configData.weapons[id].ammo,
+    };
+  }
+
+  pickWeightedWeapon() {
+    return 'pistol';
+  }
+
+  activatePowerup(player, time) {
+    if (!player.powerup || time < player.nextPowerupAt) {
+      return;
+    }
+
+    const id = player.powerup;
+    player.powerup = null;
+    player.nextPowerupAt = time + 400;
+
+    if (id === 'slowmo') {
+      this.getOpponent(player).slowedUntil = time + this.configData.powerups.slowmo.durationMs;
+      this.showMessage(`${player.label} used Slowmo`, 850);
+    } else if (id === 'heal') {
+      player.health = Math.min(PLAYER_MAX_HEALTH, player.health + this.configData.powerups.heal.amount);
+      this.showMessage(`${player.label} healed`, 650);
+    } else if (id === 'shield') {
+      player.shieldUntil = time + this.configData.powerups.shield.durationMs;
+      this.showMessage(`${player.label} shielded`, 650);
+    } else if (id === 'haste') {
+      player.hasteUntil = time + this.configData.powerups.haste.durationMs;
+      this.showMessage(`${player.label} is faster`, 650);
+    }
+
+    const ring = this.add.circle(player.sprite.x, player.sprite.y - 7, 28, 0xa8f5ff, 0.24).setDepth(8);
+    this.tweens.add({
+      targets: ring,
+      scale: 1.8,
+      alpha: 0,
+      duration: 420,
+      ease: 'Cubic.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+  }
+
+  platformProcess(sprite, platform) {
+    const player = this.playerBySprite.get(sprite);
+    if (!player || !platform.getData('thin')) {
+      return true;
+    }
+
+    if (this.time.now < player.dropUntil || player.climbing) {
+      return false;
+    }
+
+    if (sprite.body.velocity.y < -8) {
+      return false;
+    }
+
+    const playerBottom = sprite.body.y + sprite.body.height;
+    const platformTop = platform.body.y;
+    return playerBottom <= platformTop + 14;
+  }
+
+  handlePlatformContact(sprite, platform) {
+    const player = this.playerBySprite.get(sprite);
+    if (player && platform.getData('thin')) {
+      player.onThinPlatform = true;
+    }
+  }
+
+  breakWindowsInBox(centerX, centerY, width, height, damage) {
+    const hitbox = new Phaser.Geom.Rectangle(centerX - width / 2, centerY - height / 2, width, height);
+    for (const windowPane of this.glassWindows.getChildren()) {
+      if (!windowPane.active) {
+        continue;
+      }
+      if (!windowPane.getData('breakable')) {
+        continue;
+      }
+      if (Phaser.Geom.Intersects.RectangleToRectangle(hitbox, windowPane.getBounds())) {
+        const health = windowPane.getData('health') - damage;
+        windowPane.setData('health', health);
+        if (health <= 0) {
+          this.breakWindow(windowPane, centerX, centerY);
+        }
+      }
+    }
+  }
+
+  breakWindowsInRadius(x, y, radius) {
+    for (const windowPane of this.glassWindows.getChildren()) {
+      if (!windowPane.active) {
+        continue;
+      }
+      if (!windowPane.getData('breakable')) {
+        continue;
+      }
+      if (this.circleOverlapsObject(x, y, radius, windowPane)) {
+        this.breakWindow(windowPane, x, y);
+      }
+    }
+  }
+
+  breakWindow(windowPane, impactX, impactY) {
+    if (!windowPane.active || !windowPane.getData('breakable')) {
+      return;
+    }
+
+    const x = windowPane.x;
+    const y = windowPane.y;
+    const width = windowPane.displayWidth;
+    const height = windowPane.displayHeight;
+    windowPane.getData('shine')?.destroy();
+    windowPane.destroy();
+
+    for (let i = 0; i < 9; i += 1) {
+      const shard = this.add.rectangle(
+        x + Phaser.Math.Between(-width / 2, width / 2),
+        y + Phaser.Math.Between(-height / 2, height / 2),
+        Phaser.Math.Between(3, 7),
+        Phaser.Math.Between(2, 5),
+        COLORS.glass,
+        0.72,
+      ).setDepth(15);
+      this.tweens.add({
+        targets: shard,
+        x: shard.x + Phaser.Math.Between(-40, 40) + Math.sign(shard.x - impactX) * 24,
+        y: shard.y + Phaser.Math.Between(18, 70) + Math.sign(shard.y - impactY) * 16,
+        alpha: 0,
+        angle: Phaser.Math.Between(-180, 180),
+        duration: 420,
+        ease: 'Cubic.easeOut',
+        onComplete: () => shard.destroy(),
+      });
+    }
+  }
+
+  drawHud(time) {
+    this.ui.clear();
+    this.ui.fillStyle(0x08101b, 0.62);
+    this.ui.fillRoundedRect(8, 5, 274, 19, 4);
+    this.ui.fillRoundedRect(GAME_WIDTH / 2 - 52, 9, 104, 34, 4);
+    this.drawPlayerHud(24, 25, 286, this.p1, false, time);
+    this.drawPlayerHud(GAME_WIDTH - 310, 25, 286, this.p2, true, time);
+
+    const secondsLeft = Math.max(0, Math.ceil((this.roundEndsAt - time) / 1000));
+    const minutes = Math.floor(secondsLeft / 60);
+    const seconds = String(secondsLeft % 60).padStart(2, '0');
+    this.timerText.setText(`${minutes}:${seconds}`);
+
+    this.p1StatusText.setText(this.statusLine(this.p1));
+    this.p2StatusText.setText(this.statusLine(this.p2));
+  }
+
+  drawPlayerHud(x, y, width, player, alignRight, time) {
+    const healthPct = Phaser.Math.Clamp(player.health / PLAYER_MAX_HEALTH, 0, 1);
+    const fillWidth = Math.round(width * healthPct);
+    const fillX = alignRight ? x + width - fillWidth : x;
+
+    this.ui.fillStyle(0x172033, 0.9);
+    this.ui.fillRoundedRect(x - 8, y - 8, width + 16, 55, 4);
+    this.ui.fillStyle(0xffffff, 0.18);
+    this.ui.fillRect(x, y, width, 12);
+    this.ui.fillStyle(player.color, 1);
+    this.ui.fillRect(fillX, y, fillWidth, 12);
+    this.ui.lineStyle(2, player.darkColor, 1);
+    this.ui.strokeRect(x, y, width, 12);
+
+    const lifeY = y + 17;
+    for (let i = 0; i < this.configData.round.lives; i += 1) {
+      const boxX = alignRight ? x + width - 13 - i * 15 : x + i * 15;
+      this.ui.fillStyle(i < player.lives ? player.color : 0x2d3748, 1);
+      this.ui.fillRect(boxX, lifeY, 11, 8);
+    }
+
+    if (time < player.shieldUntil) {
+      this.ui.lineStyle(2, 0x8cffab, 0.9);
+      this.ui.strokeRoundedRect(x - 9, y - 9, width + 18, 32, 6);
+    }
+  }
+
+  statusLine(player) {
+    const weapon = player.weapon ? `${this.configData.weapons[player.weapon.id].label}:${player.weapon.ammo}` : 'No weapon';
+    const power = player.powerup ? this.configData.powerups[player.powerup].label : 'No power';
+    return `${player.label}  ${weapon}  G:${player.grenadeAmmo}  ${power}`;
+  }
+
+  showMessage(message, duration) {
+    this.messageText.setText(message);
+    this.time.delayedCall(duration, () => {
+      if (this.messageText.text === message) {
+        this.messageText.setText('');
+      }
+    });
+  }
+
+  flashDamage(player) {
+    player.sprite.setTint(0xffffff);
+    this.time.delayedCall(80, () => {
+      if (player.sprite.active && this.time.now >= player.shieldUntil) {
+        player.sprite.clearTint();
+      }
+    });
+  }
+
+  flashHitbox(x, y, width, height, direction, color, alpha) {
+    const flash = this.add.rectangle(x + direction * 8, y, width, height, color, alpha).setDepth(18);
+    this.tweens.add({
+      targets: flash,
+      alpha: 0,
+      scaleX: 1.15,
+      scaleY: 0.86,
+      duration: 110,
+      ease: 'Cubic.easeOut',
+      onComplete: () => flash.destroy(),
+    });
+  }
+
+  spawnMuzzleFlash(x, y, angle, color) {
+    const flash = this.add.rectangle(x, y, 18, 8, parseHexColor(color, 0xfff3a3), 0.9).setRotation(angle).setDepth(16);
+    this.tweens.add({
+      targets: flash,
+      scaleX: 1.8,
+      alpha: 0,
+      duration: 90,
+      ease: 'Cubic.easeOut',
+      onComplete: () => flash.destroy(),
+    });
+  }
+
+  spawnHitEffect(x, y, color) {
+    for (let i = 0; i < 5; i += 1) {
+      const chip = this.add.rectangle(x, y, 4, 3, color, 0.9).setDepth(16);
+      this.tweens.add({
+        targets: chip,
+        x: x + Phaser.Math.Between(-22, 22),
+        y: y + Phaser.Math.Between(-22, 22),
+        alpha: 0,
+        duration: 210,
+        ease: 'Cubic.easeOut',
+        onComplete: () => chip.destroy(),
+      });
+    }
+  }
+
+  isTargetInBox(sprite, centerX, centerY, width, height) {
+    return this.isObjectInBox(sprite, centerX, centerY, width, height);
+  }
+
+  isObjectInBox(object, centerX, centerY, width, height) {
+    const hitbox = new Phaser.Geom.Rectangle(centerX - width / 2, centerY - height / 2, width, height);
+    return Phaser.Geom.Intersects.RectangleToRectangle(hitbox, getBodyBounds(object));
+  }
+
+  circleOverlapsObject(x, y, radius, object) {
+    const bounds = object.getBounds();
+    const closestX = Phaser.Math.Clamp(x, bounds.left, bounds.right);
+    const closestY = Phaser.Math.Clamp(y, bounds.top, bounds.bottom);
+    return Phaser.Math.Distance.Squared(x, y, closestX, closestY) <= radius * radius;
+  }
+
+  getOpponent(player) {
+    return player.id === 'p1' ? this.p2 : this.p1;
+  }
+}
+
+function detectSheetFrameGeometry(sourceImage, sheet, options = {}) {
+  const pixels = getImagePixels(sourceImage);
+  const rowStarts = detectAssetRowStarts(sourceImage, sheet, pixels);
+  const cells = [];
+  let detectedColumns = 0;
+
+  for (let row = 0; row < rowStarts.length; row += 1) {
+    const y = rowStarts[row];
+    const rowCells = options.includeExtensions
+      ? detectFrameCellsForRow(sourceImage, sheet, pixels, row, y)
+      : detectRegularFrameCellsForRow(sourceImage, sheet, pixels, row, y);
+    detectedColumns = Math.max(detectedColumns, rowCells.length);
+    cells.push(...rowCells);
+  }
+
+  return {
+    columns: detectedColumns,
+    rows: rowStarts.length,
+    rowStarts,
+    frameCells: cells.map((cell) => ({
+      ...cell,
+      render: options.includeExtensions
+        ? detectFrameRenderRect(sourceImage, sheet, pixels, cell)
+        : {
+          x: cell.x,
+          y: cell.y,
+          width: sheet.frameSize,
+          height: sheet.frameSize,
+          originX: 0,
+          originY: 0,
+        },
+    })),
+  };
+}
+
+function detectFrameCellsForRow(sourceImage, sheet, pixels, row, y) {
+  const cells = [];
+  const size = sheet.frameSize;
+  let x = sheet.leftOffset ?? 0;
+
+  while (x + size <= sourceImage.naturalWidth) {
+    while (x + size <= sourceImage.naturalWidth && !isFrameStartCandidate(sourceImage, sheet, pixels, x, y)) {
+      x += 1;
+    }
+
+    if (x + size > sourceImage.naturalWidth) {
+      break;
+    }
+
+    cells.push({ row, column: cells.length, x, y });
+    x += size;
+
+    while (x < sourceImage.naturalWidth && stripHasExtensionBackground(sheet, pixels, x, y, 1, size)) {
+      x += 1;
+    }
+    while (x < sourceImage.naturalWidth && isSheetBackgroundPixel(sheet, pixels, x, y)) {
+      x += 1;
+    }
+  }
+
+  return cells;
+}
+
+function detectRegularFrameCellsForRow(sourceImage, sheet, pixels, row, y) {
+  const cells = [];
+  const stride = sheet.frameSize + sheet.gap;
+  const leftOffset = sheet.leftOffset ?? 0;
+  let column = 0;
+
+  for (let x = leftOffset; x + sheet.frameSize <= sourceImage.naturalWidth; x += stride) {
+    const lightPixels = countAssetBackgroundPixelsInRect(sheet, pixels, x, y, sheet.frameSize, sheet.frameSize);
+    if (lightPixels >= sheet.cellLightThreshold) {
+      cells.push({ row, column, x, y });
+    }
+    column += 1;
+  }
+
+  return cells;
+}
+
+function isFrameStartCandidate(sourceImage, sheet, pixels, x, y) {
+  if (x > 0 && !isSheetBackgroundPixel(sheet, pixels, x - 1, y)) {
+    return false;
+  }
+  if (!isAssetCellBackgroundPixel(sheet, pixels, x, y)) {
+    return false;
+  }
+  if (
+    countAssetBackgroundPixelsInRect(sheet, pixels, x, y, sheet.frameSize, 1) <
+    Math.floor(sheet.frameSize * 0.35)
+  ) {
+    return false;
+  }
+
+  const rightEdge = x + sheet.frameSize;
+  if (
+    rightEdge < sourceImage.naturalWidth &&
+    !isSheetBackgroundPixel(sheet, pixels, rightEdge, y) &&
+    !isExtensionBackgroundPixel(sheet, pixels, rightEdge, y)
+  ) {
+    return false;
+  }
+
+  return countAssetBackgroundPixelsInRect(sheet, pixels, x, y, sheet.frameSize, sheet.frameSize) >= sheet.cellLightThreshold;
+}
+
+function detectFrameRenderRect(sourceImage, sheet, pixels, cell) {
+  const size = sheet.frameSize;
+  const maxExtension = sheet.maxExtension ?? size;
+  const base = {
+    left: cell.x,
+    top: cell.y,
+    right: cell.x + size,
+    bottom: cell.y + size,
+  };
+  const bounds = { ...base };
+
+  expandHorizontal(sourceImage, sheet, bounds, pixels, 1, maxExtension);
+  expandHorizontal(sourceImage, sheet, bounds, pixels, -1, maxExtension);
+  expandVertical(sourceImage, sheet, bounds, pixels, 1, maxExtension);
+  expandVertical(sourceImage, sheet, bounds, pixels, -1, maxExtension);
+
+  return {
+    x: bounds.left,
+    y: bounds.top,
+    width: bounds.right - bounds.left,
+    height: bounds.bottom - bounds.top,
+    originX: base.left - bounds.left,
+    originY: base.top - bounds.top,
+  };
+}
+
+function expandHorizontal(sourceImage, sheet, bounds, pixels, direction, maxExtension) {
+  let hasExtension = false;
+  for (let step = 0; step < maxExtension; step += 1) {
+    const x = direction > 0 ? bounds.right : bounds.left - 1;
+    if (x < 0 || x >= sourceImage.naturalWidth) {
+      return;
+    }
+
+    if (stripHasExtensionBackground(sheet, pixels, x, bounds.top, 1, bounds.bottom - bounds.top)) {
+      if (direction > 0) {
+        bounds.right += 1;
+      } else {
+        bounds.left -= 1;
+      }
+      hasExtension = true;
+      continue;
+    }
+
+    if (hasExtension && stripHasSpritePixels(sheet, pixels, x, bounds.top, 1, bounds.bottom - bounds.top)) {
+      if (direction > 0) {
+        bounds.right += 1;
+      } else {
+        bounds.left -= 1;
+      }
+      continue;
+    }
+
+    return;
+  }
+}
+
+function expandVertical(sourceImage, sheet, bounds, pixels, direction, maxExtension) {
+  let hasExtension = false;
+  for (let step = 0; step < maxExtension; step += 1) {
+    const y = direction > 0 ? bounds.bottom : bounds.top - 1;
+    if (y < 0 || y >= sourceImage.naturalHeight) {
+      return;
+    }
+
+    if (stripHasExtensionBackground(sheet, pixels, bounds.left, y, bounds.right - bounds.left, 1)) {
+      if (direction > 0) {
+        bounds.bottom += 1;
+      } else {
+        bounds.top -= 1;
+      }
+      hasExtension = true;
+      continue;
+    }
+
+    if (hasExtension && stripHasSpritePixels(sheet, pixels, bounds.left, y, bounds.right - bounds.left, 1)) {
+      if (direction > 0) {
+        bounds.bottom += 1;
+      } else {
+        bounds.top -= 1;
+      }
+      continue;
+    }
+
+    return;
+  }
+}
+
+function makeFrameCanvas(sourceImage, sheet, cell, options = {}) {
+  const render = cell.render ?? {
+    x: cell.x,
+    y: cell.y,
+    width: sheet.frameSize,
+    height: sheet.frameSize,
+    originX: 0,
+    originY: 0,
+  };
+  const fixedCanvas = Boolean(options.fixedCanvas);
+  const padding = fixedCanvas ? getCharacterCanvasPadding() : 0;
+  const canvas = document.createElement('canvas');
+  canvas.width = fixedCanvas ? sheet.frameSize + padding * 2 : render.width;
+  canvas.height = fixedCanvas ? sheet.frameSize + padding * 2 : render.height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.imageSmoothingEnabled = false;
+  context.drawImage(
+    sourceImage,
+    render.x,
+    render.y,
+    render.width,
+    render.height,
+    fixedCanvas ? padding - render.originX : 0,
+    fixedCanvas ? padding - render.originY : 0,
+    render.width,
+    render.height,
+  );
+
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  for (let index = 0; index < imageData.data.length; index += 4) {
+    if (isTransparentAssetPixel(sheet, imageData.data, index)) {
+      imageData.data[index + 3] = 0;
+    }
+  }
+  context.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
+function getCharacterCanvasPadding() {
+  return CHARACTER_SHEET.maxExtension ?? 0;
+}
+
+function getImagePixels(sourceImage) {
+  const canvas = document.createElement('canvas');
+  canvas.width = sourceImage.naturalWidth;
+  canvas.height = sourceImage.naturalHeight;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.drawImage(sourceImage, 0, 0);
+  return {
+    width: canvas.width,
+    height: canvas.height,
+    data: context.getImageData(0, 0, canvas.width, canvas.height).data,
+  };
+}
+
+function detectAssetRowStarts(sourceImage, sheet, pixels) {
+  const lightRows = [];
+  for (let y = 0; y < sourceImage.naturalHeight; y += 1) {
+    let lightCount = 0;
+    for (let x = 0; x < sourceImage.naturalWidth; x += 1) {
+      if (isAssetCellBackgroundPixel(sheet, pixels, x, y)) {
+        lightCount += 1;
+      }
+    }
+    if (lightCount >= sheet.rowLightThreshold) {
+      lightRows.push(y);
+    }
+  }
+
+  return collapseContiguousRuns(lightRows)
+    .filter((run) => run.length >= Math.max(8, sheet.frameSize * 0.75))
+    .map((run) => run.start);
+}
+
+function stripHasExtensionBackground(sheet, pixels, startX, startY, width, height) {
+  if (!sheet.extensionBackground) {
+    return false;
+  }
+  for (let y = startY; y < startY + height; y += 1) {
+    for (let x = startX; x < startX + width; x += 1) {
+      if (isExtensionBackgroundPixel(sheet, pixels, x, y)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function stripHasSpritePixels(sheet, pixels, startX, startY, width, height) {
+  for (let y = startY; y < startY + height; y += 1) {
+    for (let x = startX; x < startX + width; x += 1) {
+      if (isSpritePixel(sheet, pixels, x, y)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function countAssetBackgroundPixelsInRect(sheet, pixels, startX, startY, width, height) {
+  let count = 0;
+  for (let y = startY; y < startY + height; y += 1) {
+    for (let x = startX; x < startX + width; x += 1) {
+      if (isAssetCellBackgroundPixel(sheet, pixels, x, y)) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+function isAssetCellBackgroundPixel(sheet, pixels, x, y) {
+  if (x < 0 || y < 0 || x >= pixels.width || y >= pixels.height) {
+    return false;
+  }
+
+  const index = (y * pixels.width + x) * 4;
+  return isNearColor(pixels.data, index, sheet.cellBackground);
+}
+
+function isExtensionBackgroundPixel(sheet, pixels, x, y) {
+  if (!sheet.extensionBackground || x < 0 || y < 0 || x >= pixels.width || y >= pixels.height) {
+    return false;
+  }
+
+  const index = (y * pixels.width + x) * 4;
+  return isNearColor(pixels.data, index, sheet.extensionBackground);
+}
+
+function isSheetBackgroundPixel(sheet, pixels, x, y) {
+  if (!sheet.sheetBackground || x < 0 || y < 0 || x >= pixels.width || y >= pixels.height) {
+    return false;
+  }
+
+  const index = (y * pixels.width + x) * 4;
+  return isNearColor(pixels.data, index, sheet.sheetBackground);
+}
+
+function isSpritePixel(sheet, pixels, x, y) {
+  if (x < 0 || y < 0 || x >= pixels.width || y >= pixels.height) {
+    return false;
+  }
+
+  const index = (y * pixels.width + x) * 4;
+  return (
+    pixels.data[index + 3] > 0 &&
+    !isAssetCellBackgroundPixel(sheet, pixels, x, y) &&
+    !isExtensionBackgroundPixel(sheet, pixels, x, y) &&
+    !isSheetBackgroundPixel(sheet, pixels, x, y)
+  );
+}
+
+function isTransparentAssetPixel(sheet, data, index) {
+  return [
+    sheet.cellBackground,
+    sheet.extensionBackground,
+    sheet.sheetBackground,
+  ].some((color) => color && isNearColor(data, index, color));
+}
+
+function isNearColor(data, index, color, tolerance = 3) {
+  const [red, green, blue] = color;
+  return (
+    Math.abs(data[index] - red) <= tolerance &&
+    Math.abs(data[index + 1] - green) <= tolerance &&
+    Math.abs(data[index + 2] - blue) <= tolerance
+  );
+}
+
+function collapseContiguousRuns(values) {
+  if (!values.length) {
+    return [];
+  }
+
+  const runs = [];
+  let start = values[0];
+  let previous = values[0];
+  for (const value of values.slice(1)) {
+    if (value === previous + 1) {
+      previous = value;
+      continue;
+    }
+    runs.push({ start, length: previous - start + 1 });
+    start = value;
+    previous = value;
+  }
+  runs.push({ start, length: previous - start + 1 });
+  return runs;
+}
+
+function parseHexColor(value, fallback) {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+  const normalized = value.replace('#', '');
+  const parsed = Number.parseInt(normalized, 16);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function getBodyBounds(object) {
+  if (object?.body) {
+    return new Phaser.Geom.Rectangle(object.body.x, object.body.y, object.body.width, object.body.height);
+  }
+  return object.getBounds();
+}
+
+function getEmpressFrameNumber(textureKey) {
+  const match = /^empress-frame-(\d+)$/.exec(textureKey ?? '');
+  return match ? Number.parseInt(match[1], 10) : null;
+}
+
+loadUiFont().finally(() => {
+  window.__superfightersGame?.destroy(true);
+  window.__superfightersGame = new Phaser.Game({
+    type: Phaser.AUTO,
+    parent: 'game',
+    width: GAME_WIDTH,
+    height: GAME_HEIGHT,
+    backgroundColor: '#8dd8ff',
+    antialias: false,
+    pixelArt: true,
+    roundPixels: true,
+    scale: {
+      mode: Phaser.Scale.NONE,
+    },
+    physics: {
+      default: 'arcade',
+      arcade: {
+        gravity: { y: 1450 },
+        debug: false,
+      },
+    },
+    scene: FightScene,
+  });
+});
+
+async function loadUiFont() {
+  if (!('FontFace' in window) || !document.fonts) {
+    return;
+  }
+
+  const font = new FontFace(UI_FONT, 'url("/assets/fonts/fusion-pixel-12px-monospaced-latin.woff") format("woff")');
+  const loadedFont = await font.load();
+  document.fonts.add(loadedFont);
+}

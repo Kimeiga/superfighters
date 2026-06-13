@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Superfighters Level Editor</title>
+  </head>
+  <body>
+    <main class="level-editor">
+      <header class="editor-bar">
+        <div>
+          <h1>Level Editor</h1>
+          <p id="levelStats">Loading</p>
+        </div>
+        <nav>
+          <a href="/">Game</a>
+          <a href="/debug.html">Debug</a>
+          <button id="saveLevelButton" type="button">Save Local</button>
+          <button id="exportLevelButton" type="button">Export JSON</button>
+          <label class="file-button">
+            Import JSON
+            <input id="importLevelInput" type="file" accept="application/json,.json" />
+          </label>
+          <button id="resetSeedButton" type="button">Reset Seed</button>
+          <button id="clearLevelButton" type="button">Clear</button>
+        </nav>
+      </header>
+
+      <section class="editor-layout">
+        <aside class="tool-panel">
+          <section>
+            <h2>Tiles</h2>
+            <div id="tilePalette" class="tile-palette"></div>
+          </section>
+
+          <section class="tool-grid">
+            <label>
+              Brush
+              <input id="brushSizeInput" type="number" min="1" max="12" step="1" value="1" />
+            </label>
+            <label>
+              Zoom
+              <input id="zoomInput" type="range" min="0.25" max="3" step="0.05" value="1" />
+            </label>
+          </section>
+
+          <section>
+            <h2>Selection</h2>
+            <p id="selectionText" class="selection-text">Solid</p>
+            <p id="cursorText" class="selection-text">0, 0</p>
+          </section>
+        </aside>
+
+        <section class="canvas-panel">
+          <canvas id="levelCanvas"></canvas>
+        </section>
+      </section>
+
+      <p id="editorStatus" class="editor-status"></p>
+    </main>
+    <script type="module" src="/src/levelEditor.js"></script>
+  </body>
+</html>

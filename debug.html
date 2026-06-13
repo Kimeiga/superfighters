@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Superfighters Animation Debug</title>
+  </head>
+  <body>
+    <main class="debug-page">
+      <header class="debug-header">
+        <div>
+          <h1>Animation Debug</h1>
+          <p id="sheetMeta">Loading sprite sheet</p>
+        </div>
+        <nav>
+          <a href="/">Game</a>
+          <a href="/level-editor.html">Level Editor</a>
+          <button id="copyJsonButton" type="button">Copy JSON</button>
+          <button id="saveButton" type="button">Save</button>
+          <button id="resetButton" type="button">Reset</button>
+        </nav>
+      </header>
+
+      <div id="sheetTabs" class="sheet-tabs" aria-label="Sprite sheets"></div>
+
+      <section class="debug-layout">
+        <div class="sheet-panel">
+          <canvas id="sheetCanvas" width="384" height="288"></canvas>
+        </div>
+
+        <div class="controls-panel">
+          <div class="preview-panel">
+            <canvas id="previewCanvas" width="168" height="168"></canvas>
+            <div class="preview-details">
+              <h2 id="previewTitle">Idle</h2>
+              <p id="previewMeta">Frame 1</p>
+              <div class="frame-stepper" aria-label="Preview frame controls">
+                <button id="prevPreviewFrameButton" type="button">Prev</button>
+                <label>
+                  Frame
+                  <input id="previewFrameInput" type="number" min="1" step="1" value="1" />
+                </label>
+                <button id="nextPreviewFrameButton" type="button">Next</button>
+                <span id="previewFrameIndexText">1 / 1</span>
+              </div>
+              <label class="preview-toggle">
+                <input id="previewManualInput" type="checkbox" checked />
+                Manual Frame
+              </label>
+              <label class="preview-toggle">
+                <input id="previewGunInput" type="checkbox" checked />
+                Show Gun
+              </label>
+              <label class="preview-toggle">
+                <input id="previewCleanInput" type="checkbox" />
+                Clean View
+              </label>
+              <label class="preview-toggle">
+                <input id="previewLoopInput" type="checkbox" />
+                Loop Preview
+              </label>
+              <button id="copyFrameValuesButton" class="copy-frame-values" type="button">
+                Copy Frame Values
+              </button>
+              <p id="colliderMeta" class="collider-meta">Collider</p>
+              <div class="attachment-panel">
+                <h3>Attachment Gizmo</h3>
+                <div class="anchor-grid">
+                  <label>
+                    Mode
+                    <select id="attachmentModeInput">
+                      <option value="characterHand" selected>Character Hand</option>
+                      <option value="frameAnchor">Frame Anchor</option>
+                      <option value="gunGrip">Gun Grip</option>
+                    </select>
+                  </label>
+                  <label>
+                    Gun Frame
+                    <input id="gunFrameInput" type="number" min="1" step="1" value="1" />
+                  </label>
+                  <label>
+                    Hand Frame
+                    <input id="attachmentFrameInput" type="number" min="1" step="1" value="1" />
+                  </label>
+                  <label>
+                    X
+                    <input id="attachmentXInput" type="number" step="1" value="39" />
+                  </label>
+                  <label>
+                    Y
+                    <input id="attachmentYInput" type="number" step="1" value="50" />
+                  </label>
+                </div>
+              </div>
+              <div class="anchor-panel">
+                <h3>Frame Anchor</h3>
+                <div class="anchor-grid">
+                  <label>
+                    Frame
+                    <input id="anchorFrameInput" type="number" min="1" step="1" value="1" />
+                  </label>
+                  <label>
+                    X
+                    <input id="anchorXInput" type="number" step="1" value="32" />
+                  </label>
+                  <label>
+                    Y
+                    <input id="anchorYInput" type="number" step="1" value="64" />
+                  </label>
+                  <button id="clearAnchorButton" type="button">Clear</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <section class="playtest-panel">
+            <div class="playtest-header">
+              <h2>Playable Debug</h2>
+              <div class="playtest-controls">
+                <label>
+                  <input id="playtestGunInput" type="checkbox" checked />
+                  Gun
+                </label>
+                <p id="playtestMeta">WASD/Arrows move, W/Up jump, S/Down crouch, 1 melee, 2 aim, 3 grenade</p>
+              </div>
+            </div>
+            <canvas id="playtestCanvas" width="420" height="240"></canvas>
+          </section>
+
+          <div id="animationRows" class="animation-rows"></div>
+          <section class="tuning-panel">
+            <h2>Gameplay Tuning</h2>
+            <div id="gameplayTuning" class="gameplay-tuning"></div>
+          </section>
+          <p id="statusText" class="status-text"></p>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/debug.js"></script>
+  </body>
+</html>
