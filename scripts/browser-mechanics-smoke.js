@@ -61,6 +61,9 @@ window.__superfightersMechanicsSmoke = (async () => {
     player.knockedUntil = 0;
     player.sprite.body?.setAllowGravity?.(true);
     player.nextMeleeAt = 0;
+    player.nextShotAt = 0;
+    player.nextGrenadeAt = 0;
+    player.nextPowerupAt = 0;
     player.meleeAnimationUntil = 0;
     player.pickupAnimationUntil = 0;
     player.crouchTransitionUntil = 0;
@@ -264,6 +267,9 @@ window.__superfightersMechanicsSmoke = (async () => {
 
   const bulletPlatformBefore = snapshotPlatforms();
   if (targetPlatform) {
+    resetPlayer(p1, 700, 484, 1);
+    resetPlayer(p2, targetPlatform.x, targetPlatform.y - targetPlatform.displayHeight / 2 - 8, -1);
+    p2.invulnerableUntil = 0;
     p1.weapon = scene.makeWeaponState('launcher');
     scene.spawnBullet(
       p1,
@@ -276,8 +282,9 @@ window.__superfightersMechanicsSmoke = (async () => {
     scene.handleBulletWall(bullet, targetPlatform);
   }
   const bulletPlatformAfter = snapshotPlatforms();
-  check('bullet impacts do not destroy platform geometry', Boolean(targetPlatform) && bullet && samePlatformSnapshot(bulletPlatformBefore, bulletPlatformAfter) && !bullet.active, {
+  check('launcher wall impact explodes without destroying platform geometry', Boolean(targetPlatform) && bullet && samePlatformSnapshot(bulletPlatformBefore, bulletPlatformAfter) && !bullet.active && p2.health < 100, {
     bulletActive: bullet?.active,
+    p2Health: p2.health,
     before: bulletPlatformBefore,
     after: bulletPlatformAfter,
   });
@@ -353,13 +360,112 @@ window.__superfightersMechanicsSmoke = (async () => {
   });
 
   resetPlayer(p1, 700, 484, 1);
+  p1.health = 50;
+  const healPickup = scene.createPickup(p1.sprite.x, p1.sprite.y, 'powerup', 'heal');
+  p1.currentPickup = healPickup;
+  scene.tryAutoPickup(p1);
+  scene.activatePowerup(p1, scene.time.now + 2400);
+  check('heal powerup auto-picks and heals on activation', p1.health === 90 && p1.powerup === null && !healPickup.active, {
+    health: p1.health,
+    powerup: p1.powerup,
+    pickupActive: healPickup.active,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
+  p1.powerup = 'shield';
+  scene.activatePowerup(p1, scene.time.now + 2450);
+  p1.invulnerableUntil = 0;
+  scene.damagePlayer(p1, 20, 1, 0, 0, { source: 'shield test' });
+  check('shield powerup reduces incoming damage', p1.health === 91 && p1.powerup === null, {
+    health: p1.health,
+    shieldUntil: p1.shieldUntil,
+    powerup: p1.powerup,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
+  resetPlayer(p2, 1040, 484, -1);
+  p1.powerup = 'slowmo';
+  scene.activatePowerup(p1, scene.time.now + 2500);
+  check('slowmo powerup slows opponent movement', p2.slowedUntil > scene.time.now && scene.getMoveSpeed(p2, scene.time.now + 2500) < scene.configData.movement.walkSpeed, {
+    slowedUntil: p2.slowedUntil,
+    speed: scene.getMoveSpeed(p2, scene.time.now + 2500),
+    walkSpeed: scene.configData.movement.walkSpeed,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
+  p1.powerup = 'haste';
+  scene.activatePowerup(p1, scene.time.now + 2550);
+  check('haste powerup increases movement speed', p1.hasteUntil > scene.time.now && scene.getMoveSpeed(p1, scene.time.now + 2550) > scene.configData.movement.walkSpeed, {
+    hasteUntil: p1.hasteUntil,
+    speed: scene.getMoveSpeed(p1, scene.time.now + 2550),
+    walkSpeed: scene.configData.movement.walkSpeed,
+  });
+
+  clearGroup(scene.bullets);
+  resetPlayer(p1, 700, 220, 1);
+  p1.sprite.body.setAllowGravity(false);
+  p1.weapon = scene.makeWeaponState('pistol');
+  p1.weapon.ammo = 1;
+  p1.aimMode = 'gun';
+  p1.aiming = true;
+  p1.aimFacing = 1;
+  p1.aimAngle = 0;
+  p1.nextShotAt = 0;
+  scene.fireWeapon(p1, scene.time.now + 2600);
+  await wait(320);
+  check('empty weapon is discarded after last shot', p1.weapon === null && p1.aimMode === null && p1.shootStanceUntil === 0, {
+    weapon: p1.weapon,
+    aimMode: p1.aimMode,
+    shootStanceUntil: p1.shootStanceUntil,
+  });
+
+  resetPlayer(p2, 1040, 484, -1);
+  p2.aimMode = 'gun';
+  p2.aiming = true;
+  p2.powerup = 'heal';
+  p2.weapon = scene.makeWeaponState('rifle');
+  scene.applyRemoteSnapshot(p2, {
+    x: p2.sprite.x,
+    y: p2.sprite.y,
+    vx: 0,
+    vy: 0,
+    health: p2.health,
+    lives: p2.lives,
+    kills: p2.kills,
+    facing: -1,
+    aimFacing: -1,
+    aimOffset: 0,
+    aimAngle: Math.PI,
+    aiming: false,
+    aimMode: null,
+    crouching: false,
+    climbing: false,
+    weapon: null,
+    grenadeAmmo: 0,
+    powerup: null,
+  });
+  check('remote snapshot clears stale weapon aim and powerup state', p2.weapon === null && p2.aimMode === null && p2.powerup === null && !p2.aiming, {
+    weapon: p2.weapon,
+    aimMode: p2.aimMode,
+    powerup: p2.powerup,
+    aiming: p2.aiming,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
   resetPlayer(p2, 1040, 484, -1);
   p1.kills = 0;
   p2.lives = scene.configData.round.lives;
   p2.invulnerableUntil = 0;
   p2.dashAttackUntil = scene.time.now + 5000;
+  p2.nextMeleeAt = scene.time.now + 5000;
+  p2.nextShotAt = scene.time.now + 5000;
+  p2.nextGrenadeAt = scene.time.now + 5000;
+  p2.nextPowerupAt = scene.time.now + 5000;
   p2.meleeAnimationUntil = scene.time.now + 5000;
   p2.pickupAnimationUntil = scene.time.now + 5000;
+  p2.slowedUntil = scene.time.now + 5000;
+  p2.shieldUntil = scene.time.now + 5000;
+  p2.hasteUntil = scene.time.now + 5000;
   p2.currentPickup = scene.createPickup(p2.sprite.x, p2.sprite.y, 'powerup', 'heal');
   scene.damagePlayer(p2, 999, 1, 250, 250, { source: 'test lethal' });
   check('lethal damage respawns player with clean action state', (
@@ -368,8 +474,15 @@ window.__superfightersMechanicsSmoke = (async () => {
     p2.health === 100 &&
     p2.invulnerableUntil > scene.time.now &&
     p2.dashAttackUntil === 0 &&
+    p2.nextMeleeAt === 0 &&
+    p2.nextShotAt === 0 &&
+    p2.nextGrenadeAt === 0 &&
+    p2.nextPowerupAt === 0 &&
     p2.meleeAnimationUntil === 0 &&
     p2.pickupAnimationUntil === 0 &&
+    p2.slowedUntil === 0 &&
+    p2.shieldUntil === 0 &&
+    p2.hasteUntil === 0 &&
     p2.currentPickup === null &&
     p2.sprite.x === p2.spawnX &&
     p2.sprite.y === p2.spawnY &&
@@ -382,8 +495,15 @@ window.__superfightersMechanicsSmoke = (async () => {
     invulnerableUntil: p2.invulnerableUntil,
     now: scene.time.now,
     dashAttackUntil: p2.dashAttackUntil,
+    nextMeleeAt: p2.nextMeleeAt,
+    nextShotAt: p2.nextShotAt,
+    nextGrenadeAt: p2.nextGrenadeAt,
+    nextPowerupAt: p2.nextPowerupAt,
     meleeAnimationUntil: p2.meleeAnimationUntil,
     pickupAnimationUntil: p2.pickupAnimationUntil,
+    slowedUntil: p2.slowedUntil,
+    shieldUntil: p2.shieldUntil,
+    hasteUntil: p2.hasteUntil,
     currentPickup: p2.currentPickup,
     x: p2.sprite.x,
     y: p2.sprite.y,

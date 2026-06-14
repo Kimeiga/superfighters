@@ -1865,14 +1865,18 @@ class FightScene extends Phaser.Scene {
     player.aimOffset = clampNetworkNumber(snapshot.aimOffset, -AIM_HALF_ARC, AIM_HALF_ARC, player.aimOffset);
     player.aimAngle = Number.isFinite(snapshot.aimAngle) ? snapshot.aimAngle : player.aimAngle;
     player.aiming = Boolean(snapshot.aiming);
-    player.aimMode = snapshot.aimMode === 'gun' || snapshot.aimMode === 'grenade' ? snapshot.aimMode : player.aimMode;
+    if (Object.hasOwn(snapshot, 'aimMode')) {
+      player.aimMode = snapshot.aimMode === 'gun' || snapshot.aimMode === 'grenade' ? snapshot.aimMode : null;
+    }
     player.crouching = Boolean(snapshot.crouching);
     player.climbing = Boolean(snapshot.climbing);
     if (Object.hasOwn(snapshot, 'weapon')) {
       player.weapon = snapshot.weapon?.id ? snapshot.weapon : null;
     }
     player.grenadeAmmo = clampNetworkNumber(snapshot.grenadeAmmo, 0, this.configData.grenades.maxCount, player.grenadeAmmo);
-    player.powerup = snapshot.powerup ?? player.powerup;
+    if (Object.hasOwn(snapshot, 'powerup')) {
+      player.powerup = snapshot.powerup ?? null;
+    }
     player.sprite.setFlipX(player.facing < 0);
     this.applyBodyPose(player);
     this.updateAimVisuals(player);
@@ -2815,6 +2819,16 @@ class FightScene extends Phaser.Scene {
     }
 
     this.spawnHitEffect(bullet.x, bullet.y, bullet.getData('hitColor') ?? 0xfff3a3);
+    const explosiveRadius = bullet.getData('explosiveRadius') ?? 0;
+    if (explosiveRadius > 0) {
+      this.explodeAt(
+        bullet.x,
+        bullet.y,
+        explosiveRadius,
+        bullet.getData('explosiveDamage'),
+        bullet.getData('owner'),
+      );
+    }
     bullet.destroy();
   }
 
@@ -2931,11 +2945,20 @@ class FightScene extends Phaser.Scene {
     player.dashAttackUntil = 0;
     player.dashDirection = 0;
     player.dashHitTargets.clear();
+    player.comboIndex = 0;
+    player.comboResetAt = 0;
+    player.nextMeleeAt = 0;
+    player.nextShotAt = 0;
+    player.nextGrenadeAt = 0;
+    player.nextPowerupAt = 0;
     player.meleeAnimationUntil = 0;
     player.meleeAnimationKey = null;
     player.pickupAnimationUntil = 0;
     player.currentPickup = null;
     player.shootStanceUntil = 0;
+    player.slowedUntil = 0;
+    player.shieldUntil = 0;
+    player.hasteUntil = 0;
     player.aiming = false;
     player.aimMode = null;
     player.aimFacing = player.facing >= 0 ? 1 : -1;
