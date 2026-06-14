@@ -4243,7 +4243,9 @@ function registerServiceWorker() {
   }
 
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register(assetUrl('sw.js'), { scope: BASE_URL }).catch(() => {
+    navigator.serviceWorker.register(assetUrl('sw.js'), { scope: BASE_URL, updateViaCache: 'none' }).then((registration) => {
+      registration.update().catch(() => {});
+    }).catch(() => {
       // The game should still run normally if PWA registration fails.
     });
   });

@@ -19,6 +19,15 @@ app.disable('x-powered-by');
 const staticOptions = {
   extensions: ['html'],
   maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0,
+  setHeaders(response, filePath) {
+    if (
+      filePath.endsWith('.html') ||
+      filePath.endsWith(`${path.sep}sw.js`) ||
+      filePath.endsWith(`${path.sep}manifest.webmanifest`)
+    ) {
+      response.setHeader('Cache-Control', 'no-cache');
+    }
+  },
 };
 
 app.use(basePath, express.static(distDir, staticOptions));
@@ -54,6 +63,10 @@ app.get('/api/lobbies/:code', (request, response) => {
 app.use((request, response) => {
   if (basePath !== '/' && request.path === basePath.slice(0, -1)) {
     response.redirect(308, basePath);
+    return;
+  }
+  if (!shouldServeIndexFallback(request)) {
+    response.status(404).type('text/plain').send('Not found');
     return;
   }
   response.sendFile(path.join(distDir, 'index.html'));
@@ -216,6 +229,16 @@ httpServer.listen(port, () => {
 function normalizeBasePath(value) {
   const cleaned = String(value || '/').trim().replace(/^\/+|\/+$/g, '');
   return cleaned ? `/${cleaned}/` : '/';
+}
+
+function shouldServeIndexFallback(request) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return false;
+  }
+  if (path.extname(request.path)) {
+    return false;
+  }
+  return (request.get('accept') || '').includes('text/html');
 }
 
 function createLobby(channel) {
