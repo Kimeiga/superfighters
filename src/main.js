@@ -6,6 +6,7 @@ import { TILE_DEFS, TILE_INDEX, mergeTilesToRects } from './levelData.js';
 import './styles.css';
 
 const BASE_URL = import.meta.env.BASE_URL;
+const SERVICE_WORKER_VERSION = __SUPERFIGHTERS_BUILD_ID__;
 const FUSION_FONT_URL = new URL('./assets/fonts/fusion-pixel-12px-monospaced-latin.woff', import.meta.url).href;
 const assetUrl = (path) => `${BASE_URL}${String(path).replace(/^\/+/, '')}`;
 const GAME_WIDTH = Math.floor(window.innerWidth);
@@ -4243,7 +4244,7 @@ function registerServiceWorker() {
   }
 
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register(assetUrl('sw.js'), { scope: BASE_URL, updateViaCache: 'none' }).then((registration) => {
+    navigator.serviceWorker.register(assetUrl(`sw.js?v=${encodeURIComponent(SERVICE_WORKER_VERSION)}`), { scope: BASE_URL, updateViaCache: 'none' }).then((registration) => {
       registration.update().catch(() => {});
     }).catch(() => {
       // The game should still run normally if PWA registration fails.
