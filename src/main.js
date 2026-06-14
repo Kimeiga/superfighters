@@ -10,6 +10,7 @@ const FUSION_FONT_URL = new URL('./assets/fonts/fusion-pixel-12px-monospaced-lat
 const assetUrl = (path) => `${BASE_URL}${String(path).replace(/^\/+/, '')}`;
 const GAME_WIDTH = Math.floor(window.innerWidth);
 const GAME_HEIGHT = Math.floor(window.innerHeight);
+const RENDER_RESOLUTION = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
 const WORLD_WIDTH = Math.max(1900, GAME_WIDTH);
 const WORLD_HEIGHT = Math.max(720, GAME_HEIGHT);
 const FRAME_SIZE = 64;
@@ -18,7 +19,7 @@ const UI_FONT = 'FusionPixel12';
 const PLAYER_MAX_HEALTH = 100;
 const DROP_DURATION = 310;
 const AIM_HALF_ARC = Math.PI / 2;
-const INPUT_ACTIONS = ['left', 'right', 'jump', 'crouch', 'melee', 'shoot', 'grenade', 'powerup'];
+const INPUT_ACTIONS = ['left', 'right', 'jump', 'crouch', 'melee', 'shoot', 'grenade', 'powerup', 'aimUp', 'aimDown'];
 const ONLINE_INPUT_SEND_MS = 50;
 const ONLINE_SNAPSHOT_SEND_MS = 90;
 const CHARACTER_SOURCE_KEY = 'empress-source';
@@ -325,6 +326,7 @@ class FightScene extends Phaser.Scene {
 
     for (const player of this.players) {
       this.updatePlayer(player, time, delta);
+      this.stabilizeGroundedPlayer(player);
     }
 
     this.updateDashAttacks(time);
@@ -612,9 +614,11 @@ class FightScene extends Phaser.Scene {
     const mainHeight = 52;
     const mainTop = mainY - mainHeight / 2;
     const mainWidth = Math.min(1120, this.worldWidth - 360);
-    const leftPlatform = { x: centerX - 310, y: mainY - 150, width: 230 };
-    const topPlatform = { x: centerX, y: mainY - 245, width: 230 };
-    const rightPlatform = { x: centerX + 310, y: mainY - 150, width: 230 };
+    const lowLeftPlatform = { x: centerX - 310, y: mainY - 86, width: 210 };
+    const lowRightPlatform = { x: centerX + 310, y: mainY - 86, width: 210 };
+    const leftPlatform = { x: centerX - 240, y: mainY - 160, width: 220 };
+    const topPlatform = { x: centerX, y: mainY - 230, width: 230 };
+    const rightPlatform = { x: centerX + 240, y: mainY - 160, width: 220 };
 
     this.levelSpawns = {
       p1: {
@@ -632,12 +636,16 @@ class FightScene extends Phaser.Scene {
       { x: centerX - 170, y: mainTop - 28 },
       { x: centerX + 170, y: mainTop - 28 },
       { x: centerX + 420, y: mainTop - 28 },
+      { x: lowLeftPlatform.x, y: lowLeftPlatform.y - 42 },
+      { x: lowRightPlatform.x, y: lowRightPlatform.y - 42 },
       { x: leftPlatform.x, y: leftPlatform.y - 42 },
       { x: topPlatform.x, y: topPlatform.y - 42 },
       { x: rightPlatform.x, y: rightPlatform.y - 42 },
     ];
 
     this.createPlatform(centerX, mainY, mainWidth, mainHeight, false, COLORS.platformTrim);
+    this.createPlatform(lowLeftPlatform.x, lowLeftPlatform.y, lowLeftPlatform.width, 14, true);
+    this.createPlatform(lowRightPlatform.x, lowRightPlatform.y, lowRightPlatform.width, 14, true);
     this.createPlatform(leftPlatform.x, leftPlatform.y, leftPlatform.width, 14, true);
     this.createPlatform(topPlatform.x, topPlatform.y, topPlatform.width, 14, true);
     this.createPlatform(rightPlatform.x, rightPlatform.y, rightPlatform.width, 14, true);
@@ -890,6 +898,24 @@ class FightScene extends Phaser.Scene {
     this.cameras.main.scrollY = Math.round(Phaser.Math.Linear(this.cameras.main.scrollY, targetScrollY, lerp));
   }
 
+  stabilizeGroundedPlayer(player) {
+    const body = player.sprite?.body;
+    if (!body) {
+      return;
+    }
+
+    const grounded = body.blocked.down || body.touching.down;
+    if (!grounded || Math.abs(body.velocity.y) > 2) {
+      return;
+    }
+
+    const roundedY = Math.round(player.sprite.y);
+    if (Math.abs(player.sprite.y - roundedY) <= 0.25) {
+      player.sprite.y = roundedY;
+      body.updateFromGameObject?.();
+    }
+  }
+
   screenX(x) {
     return x / this.cameras.main.zoom + this.cameras.main.scrollX;
   }
@@ -1005,10 +1031,6 @@ class FightScene extends Phaser.Scene {
       K.A,
       K.S,
       K.D,
-      K.ONE,
-      K.TWO,
-      K.THREE,
-      K.FOUR,
       K.UP,
       K.LEFT,
       K.DOWN,
@@ -1052,7 +1074,7 @@ class FightScene extends Phaser.Scene {
 
   readKeyboardInput(player) {
     const down = createInputDown();
-    if (!player.controls) {
+    if (!player.controls || isTypingIntoDomField()) {
       return down;
     }
 
@@ -1071,9 +1093,11 @@ class FightScene extends Phaser.Scene {
     root.className = 'mobile-controls';
     root.innerHTML = `
       <div class="mobile-dpad" aria-label="Movement controls">
+        <button class="mobile-control mobile-aim-up mobile-aim-control" data-action="aimUp" aria-label="Aim up">^</button>
         <button class="mobile-control mobile-left" data-action="left" aria-label="Move left">Left</button>
         <button class="mobile-control mobile-down" data-action="crouch" aria-label="Crouch">Down</button>
         <button class="mobile-control mobile-right" data-action="right" aria-label="Move right">Right</button>
+        <button class="mobile-control mobile-aim-down mobile-aim-control" data-action="aimDown" aria-label="Aim down">v</button>
       </div>
       <div class="mobile-actions" aria-label="Action controls">
         <button class="mobile-control mobile-jump" data-action="jump" aria-label="Jump">Jump</button>
@@ -1096,6 +1120,7 @@ class FightScene extends Phaser.Scene {
         event.preventDefault();
         this.touchInputDown[action] = down;
         button.classList.toggle('is-active', down);
+        this.syncMobileControlsVisibility();
       };
 
       button.addEventListener('pointerdown', (event) => {
@@ -1107,6 +1132,7 @@ class FightScene extends Phaser.Scene {
       button.addEventListener('lostpointercapture', () => {
         this.touchInputDown[action] = false;
         button.classList.remove('is-active');
+        this.syncMobileControlsVisibility();
       });
     };
 
@@ -1125,7 +1151,16 @@ class FightScene extends Phaser.Scene {
     }
 
     const shouldShow = isMobileLike() && this.modeSelected && !this.matchPaused && !this.matchOver;
+    const aimingControlsVisible = Boolean(this.touchInputDown.shoot || this.touchInputDown.grenade);
+    if (!aimingControlsVisible) {
+      this.touchInputDown.aimUp = false;
+      this.touchInputDown.aimDown = false;
+      for (const button of this.mobileControlsEl.querySelectorAll('.mobile-aim-control')) {
+        button.classList.remove('is-active');
+      }
+    }
     this.mobileControlsEl.classList.toggle('is-visible', shouldShow);
+    this.mobileControlsEl.classList.toggle('is-aiming', aimingControlsVisible);
   }
 
   createPlayer(config) {
@@ -1568,10 +1603,7 @@ class FightScene extends Phaser.Scene {
         <button class="online-close" type="button" aria-label="Close online lobby">Close</button>
         <h2>Online Lobby</h2>
         <p class="online-copy">Create a lobby and share the four-letter code, or join a lobby from a code.</p>
-        <label class="online-field">
-          <span>Server</span>
-          <input class="online-server-input" type="text" autocomplete="off" spellcheck="false">
-        </label>
+        <p class="online-server-fixed">Server: ${escapeHtml(getOnlineServerLabel())}</p>
         <div class="online-actions-row">
           <button class="online-create" type="button">Create Lobby</button>
           <label class="online-code-field">
@@ -1592,13 +1624,11 @@ class FightScene extends Phaser.Scene {
     document.body.appendChild(overlay);
     this.onlineOverlayEl = overlay;
     this.onlineStatusEl = overlay.querySelector('.online-status');
-    this.onlineServerInputEl = overlay.querySelector('.online-server-input');
     this.onlineCodeInputEl = overlay.querySelector('.online-code-input');
     this.onlineLobbyResultEl = overlay.querySelector('.online-lobby-result');
     this.onlineCodeDisplayEl = overlay.querySelector('.online-code-display');
     this.onlineCopyLinkButtonEl = overlay.querySelector('.online-copy-link');
     this.onlineStartButtonEl = overlay.querySelector('.online-start');
-    this.onlineServerInputEl.value = getDefaultOnlineServerText();
 
     overlay.querySelector('.online-close')?.addEventListener('click', () => this.handleOnlineClose());
     overlay.querySelector('.online-create')?.addEventListener('click', () => this.createOnlineLobby());
@@ -1660,10 +1690,6 @@ class FightScene extends Phaser.Scene {
   initializeOnlineFromUrl() {
     const params = new URLSearchParams(window.location.search);
     const code = params.get('join') || params.get('code');
-    const server = params.get('server');
-    if (server && this.onlineServerInputEl) {
-      this.onlineServerInputEl.value = server;
-    }
     if (code) {
       this.beginOnlineFlow(code);
       this.time.delayedCall(250, () => this.joinOnlineLobby(code));
@@ -1718,7 +1744,7 @@ class FightScene extends Phaser.Scene {
     }
 
     this.disconnectOnlineChannel();
-    const config = parseOnlineServerConfig(this.onlineServerInputEl?.value);
+    const config = parseOnlineServerConfig();
     this.setOnlineStatus(`Connecting to ${config.label}...`);
     const channel = geckos(config.options);
     this.onlineChannel = channel;
@@ -1857,10 +1883,11 @@ class FightScene extends Phaser.Scene {
   }
 
   updateOnlineInviteDisplay() {
-    if (!this.onlineLobbyCode || !this.onlineLobbyResultEl || !this.onlineCodeDisplayEl) {
+    if (!this.onlineLobbyResultEl || !this.onlineCodeDisplayEl) {
       return;
     }
-    this.onlineLobbyResultEl.hidden = false;
+    const canShowInvite = Boolean(this.onlineLobbyCode && this.onlineIsHost);
+    this.onlineLobbyResultEl.hidden = !canShowInvite;
     this.onlineCodeDisplayEl.textContent = this.onlineLobbyCode;
     this.updateOnlineStartButton();
   }
@@ -1881,10 +1908,6 @@ class FightScene extends Phaser.Scene {
     }
     const url = new URL(window.location.href);
     url.searchParams.set('join', this.onlineLobbyCode);
-    const serverText = this.onlineServerInputEl?.value?.trim();
-    if (serverText && serverText !== getDefaultOnlineServerText()) {
-      url.searchParams.set('server', serverText);
-    }
     await navigator.clipboard?.writeText(url.toString());
     this.setOnlineStatus(`Copied invite link for ${this.onlineLobbyCode}.`);
   }
@@ -2043,7 +2066,10 @@ class FightScene extends Phaser.Scene {
     const upHeld = input.down.jump;
     const downHeld = input.down.crouch;
     const horizontal = (rightHeld ? 1 : 0) - (leftHeld ? 1 : 0);
-    const vertical = (downHeld ? 1 : 0) - (upHeld ? 1 : 0);
+    const touchAimHeld = input.down.aimUp || input.down.aimDown;
+    const vertical = touchAimHeld
+      ? (input.down.aimDown ? 1 : 0) - (input.down.aimUp ? 1 : 0)
+      : (downHeld ? 1 : 0) - (upHeld ? 1 : 0);
 
     player.currentPickup = this.findNearbyPickup(player);
     this.tryAutoPickup(player);
@@ -3748,6 +3774,32 @@ function normalizeLobbyCode(code) {
     .toUpperCase();
 }
 
+function isTypingIntoDomField() {
+  const activeElement = document.activeElement;
+  if (!activeElement) {
+    return false;
+  }
+  return (
+    activeElement instanceof HTMLInputElement ||
+    activeElement instanceof HTMLTextAreaElement ||
+    activeElement instanceof HTMLSelectElement ||
+    activeElement.isContentEditable
+  );
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function getOnlineServerLabel() {
+  return new URL(getDefaultOnlineServerText()).host;
+}
+
 function getDefaultOnlineServerText() {
   const envUrl = import.meta.env.VITE_GECKOS_URL;
   const envPort = import.meta.env.VITE_GECKOS_PORT;
@@ -3763,8 +3815,8 @@ function getDefaultOnlineServerText() {
   return `${window.location.protocol}//${window.location.hostname}:9208`;
 }
 
-function parseOnlineServerConfig(text) {
-  const value = text?.trim() || getDefaultOnlineServerText();
+function parseOnlineServerConfig() {
+  const value = getDefaultOnlineServerText();
   const parsed = new URL(value.includes('://') ? value : `${window.location.protocol}//${value}`);
   return {
     label: parsed.host,
@@ -4208,6 +4260,7 @@ loadUiFont().finally(() => {
     parent: 'game',
     width: GAME_WIDTH,
     height: GAME_HEIGHT,
+    resolution: RENDER_RESOLUTION,
     backgroundColor: '#8dd8ff',
     antialias: false,
     pixelArt: true,

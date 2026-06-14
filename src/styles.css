@@ -73,7 +73,7 @@ canvas {
 .mobile-dpad {
   left: max(12px, env(safe-area-inset-left));
   grid-template-columns: repeat(3, clamp(46px, 13vw, 54px));
-  grid-template-rows: repeat(2, clamp(46px, 13vw, 54px));
+  grid-template-rows: repeat(3, clamp(46px, 13vw, 54px));
 }
 
 .mobile-actions {
@@ -84,7 +84,7 @@ canvas {
 
 .mobile-left {
   grid-column: 1;
-  grid-row: 1;
+  grid-row: 2;
 }
 
 .mobile-down {
@@ -94,7 +94,28 @@ canvas {
 
 .mobile-right {
   grid-column: 3;
+  grid-row: 2;
+}
+
+.mobile-aim-up {
+  grid-column: 2;
   grid-row: 1;
+}
+
+.mobile-aim-down {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+.mobile-aim-control {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 80ms linear;
+}
+
+.mobile-controls.is-aiming .mobile-aim-control {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .mobile-jump {
@@ -236,6 +257,7 @@ textarea {
 }
 
 .online-copy,
+.online-server-fixed,
 .online-mobile-note,
 .online-status {
   margin: 0 0 14px;
@@ -244,12 +266,16 @@ textarea {
   line-height: 1.45;
 }
 
+.online-server-fixed {
+  margin-top: -4px;
+  color: #8de7ff;
+}
+
 .online-status {
   min-height: 20px;
   color: #ffffff;
 }
 
-.online-field,
 .online-code-field {
   display: grid;
   gap: 6px;
@@ -257,11 +283,6 @@ textarea {
   font-size: 12px;
 }
 
-.online-field {
-  margin-bottom: 14px;
-}
-
-.online-field input,
 .online-code-field input {
   min-height: 42px;
   font-size: 16px;
@@ -299,6 +320,10 @@ textarea {
   background: #171f2e;
   color: #6f7f96;
   cursor: default;
+}
+
+.online-panel [hidden] {
+  display: none !important;
 }
 
 .online-close {
@@ -340,7 +365,7 @@ textarea {
   .mobile-dpad {
     left: max(10px, env(safe-area-inset-left));
     grid-template-columns: repeat(3, clamp(42px, 12.6vw, 50px));
-    grid-template-rows: repeat(2, clamp(42px, 12.6vw, 50px));
+    grid-template-rows: repeat(3, clamp(42px, 12.6vw, 50px));
   }
 
   .mobile-actions {
