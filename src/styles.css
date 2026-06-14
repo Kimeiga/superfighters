@@ -33,7 +33,7 @@ body {
   overflow: hidden;
 }
 
-canvas {
+#game canvas {
   display: block;
   width: 100% !important;
   height: 100% !important;
@@ -43,7 +43,8 @@ canvas {
 
 .mobile-controls,
 .online-overlay,
-.start-overlay {
+.start-overlay,
+.boot-menu {
   font-family: "FusionPixel12", monospace;
 }
 
@@ -126,7 +127,9 @@ canvas {
 .mobile-control,
 .online-panel button,
 .online-panel input,
-.start-panel button {
+.start-panel button,
+.boot-panel button,
+.boot-panel input {
   font: inherit;
 }
 
@@ -159,7 +162,8 @@ textarea {
 }
 
 .start-overlay,
-.online-overlay {
+.online-overlay,
+.boot-menu {
   position: fixed;
   inset: 0;
   display: grid;
@@ -178,6 +182,13 @@ textarea {
   color: #eaf5ff;
 }
 
+.boot-menu {
+  z-index: 60;
+  background:
+    linear-gradient(180deg, rgba(18, 30, 47, 0.58), rgba(8, 12, 20, 0.88)),
+    #172033;
+}
+
 .start-overlay {
   z-index: 45;
 }
@@ -192,7 +203,8 @@ textarea {
 }
 
 .start-panel,
-.online-panel {
+.online-panel,
+.boot-panel {
   width: min(620px, 100%);
   max-width: 100%;
   max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
@@ -204,26 +216,43 @@ textarea {
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
 }
 
-.start-panel {
+.start-panel,
+.boot-panel {
   width: min(520px, 100%);
   display: grid;
   gap: 12px;
   text-align: center;
 }
 
-.start-panel h1 {
+.boot-sprite {
+  display: block;
+  width: 64px;
+  height: 64px;
+  justify-self: center;
+  image-rendering: pixelated;
+}
+
+.start-panel h1,
+.boot-panel h1 {
   margin: 0;
   font-size: clamp(28px, 9vw, 38px);
   line-height: 1.05;
 }
 
-.start-panel p {
+.start-panel p,
+.boot-copy {
   margin: 0 0 8px;
   color: #b7c2d2;
   font-size: clamp(13px, 3.6vw, 14px);
 }
 
-.start-panel button {
+.boot-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.start-panel button,
+.boot-panel button {
   min-height: 46px;
   font-size: 16px;
   border: 1px solid #5ea8ff;
@@ -233,8 +262,19 @@ textarea {
   cursor: pointer;
 }
 
-.start-panel button:hover {
+.start-panel button:hover,
+.boot-panel button:hover {
   background: #2e4263;
+}
+
+.boot-online-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.boot-online-panel[hidden] {
+  display: none;
 }
 
 .start-links {
@@ -281,9 +321,11 @@ textarea {
   gap: 6px;
   color: #cbd6e6;
   font-size: 12px;
+  min-width: 0;
 }
 
 .online-code-field input {
+  width: 100%;
   min-height: 42px;
   font-size: 16px;
   border: 1px solid #40516a;
@@ -291,14 +333,19 @@ textarea {
   background: #0f1724;
   color: #ffffff;
   padding: 0 10px;
+  text-align: center;
 }
 
 .online-actions-row {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) 110px minmax(100px, 0.65fr);
+  grid-template-columns: minmax(132px, 1fr) 68px minmax(76px, 0.65fr);
   gap: 10px;
   align-items: end;
   margin-bottom: 16px;
+}
+
+.online-actions-row > * {
+  min-width: 0;
 }
 
 .online-panel button {
@@ -322,7 +369,8 @@ textarea {
   cursor: default;
 }
 
-.online-panel [hidden] {
+.online-panel [hidden],
+.boot-panel [hidden] {
   display: none !important;
 }
 

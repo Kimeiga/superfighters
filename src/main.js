@@ -26,9 +26,8 @@ const ONLINE_SNAPSHOT_SEND_MS = 90;
 const CHARACTER_SOURCE_KEY = 'empress-source';
 const CHARACTER_TEXTURE_PREFIX = 'empress-frame';
 const HANDGUN_SOURCE_KEY = 'handgun-source';
-const HANDGUN_FRAME = 30;
-const HANDGUN_TEXTURE_KEY = 'weapon-pistol';
 const PROJECTILE_TEXTURE_KEY = 'projectile-glow';
+let pendingBootOptions = null;
 const CHARACTER_SHEET = {
   frameSize: 64,
   gap: 1,
@@ -61,6 +60,41 @@ const CHARACTER_HAND_POINTS = {
   143: { x: 41, y: 57 },
 };
 const DEFAULT_GUN_GRIP_POINT = { x: 18, y: 35 };
+const WEAPON_SHEET_FRAMES = {
+  pistol: 30,
+  smg: 16,
+  shotgun: 42,
+  rifle: 56,
+  sniper: 8,
+  launcher: 3,
+  bolt45: 1,
+  lightGun: 2,
+  raygun: 3,
+  peashooter: 4,
+  jager: 8,
+  boltSixShooter: 9,
+  derringer: 11,
+  kleinP8: 12,
+  k9Pistol: 13,
+  frazetta: 15,
+  frazetta93s: 16,
+  regulator: 18,
+  spark: 26,
+  socom: 30,
+  frostbite: 32,
+  tracker: 33,
+  maelstrom: 34,
+  violencePistol: 37,
+  splinter: 39,
+  fuliga: 41,
+  beehive: 42,
+  goldenGun: 44,
+  dread: 56,
+  detroitEnforcer: 62,
+  whirlybird: 64,
+  finalJustice: 66,
+  antibody: 78,
+};
 
 const COLORS = {
   p1: 0x55a7ff,
@@ -188,14 +222,9 @@ class FightScene extends Phaser.Scene {
     this.createHud();
     this.createMenuOverlay();
     this.createGlobalMenuInput();
-    this.createStartOverlay();
     this.createOnlineOverlay();
     this.spawnInitialPickups();
-    const openedFromUrl = this.initializeOnlineFromUrl();
-    if (!openedFromUrl) {
-      this.showStartOverlay();
-    }
-    this.physics.world.pause();
+    this.applyBootOptions(consumeBootOptions());
     this.updateCamera(1000);
     this.updateUiLayer();
     this.drawHud(this.time.now);
@@ -453,49 +482,25 @@ class FightScene extends Phaser.Scene {
     const geometry = detectSheetFrameGeometry(sourceImage, HANDGUN_SHEET, {
       includeExtensions: false,
     });
-    const handgunCell = geometry.frameCells[HANDGUN_FRAME - 1] ?? geometry.frameCells[0];
-    if (!handgunCell) {
+    const fallbackCell = geometry.frameCells[WEAPON_SHEET_FRAMES.pistol - 1] ?? geometry.frameCells[0];
+    if (!fallbackCell) {
       return;
     }
 
-    if (this.textures.exists(HANDGUN_TEXTURE_KEY)) {
-      this.textures.remove(HANDGUN_TEXTURE_KEY);
+    for (const id of Object.keys(this.configData.weapons)) {
+      const frame = WEAPON_SHEET_FRAMES[id] ?? WEAPON_SHEET_FRAMES.pistol;
+      const cell = geometry.frameCells[frame - 1] ?? fallbackCell;
+      const textureKey = `weapon-${id}`;
+      if (this.textures.exists(textureKey)) {
+        this.textures.remove(textureKey);
+      }
+      this.textures.addCanvas(
+        textureKey,
+        makeFrameCanvas(sourceImage, HANDGUN_SHEET, cell, {
+          fixedCanvas: false,
+        }),
+      );
     }
-    this.textures.addCanvas(
-      HANDGUN_TEXTURE_KEY,
-      makeFrameCanvas(sourceImage, HANDGUN_SHEET, handgunCell, {
-        fixedCanvas: false,
-      }),
-    );
-
-    this.generateSimpleWeaponTexture('smg', 0xf7d56b, 26, 6, 4);
-    this.generateSimpleWeaponTexture('shotgun', 0xffb85f, 32, 8, 6);
-    this.generateSimpleWeaponTexture('rifle', 0xffffff, 34, 6, 7);
-    this.generateSimpleWeaponTexture('sniper', 0xfffbdf, 38, 5, 10);
-    this.generateSimpleWeaponTexture('launcher', 0xa7ff8a, 30, 10, 7);
-  }
-
-  generateSimpleWeaponTexture(id, color, barrelLength, bodyHeight, barrelY) {
-    const textureKey = `weapon-${id}`;
-    if (this.textures.exists(textureKey)) {
-      this.textures.remove(textureKey);
-    }
-
-    const graphics = this.make.graphics({ x: 0, y: 0, add: false });
-    const gripX = DEFAULT_GUN_GRIP_POINT.x;
-    const gripY = DEFAULT_GUN_GRIP_POINT.y;
-    graphics.fillStyle(0x0e1723, 1);
-    graphics.fillRect(gripX - 2, gripY - 1, 8, 14);
-    graphics.fillStyle(0x2f3c4f, 1);
-    graphics.fillRect(gripX + 1, gripY - bodyHeight, 18, bodyHeight + 3);
-    graphics.fillStyle(color, 1);
-    graphics.fillRect(gripX + 14, gripY - barrelY, barrelLength, Math.max(3, Math.floor(bodyHeight * 0.58)));
-    graphics.fillStyle(0xffffff, 0.7);
-    graphics.fillRect(gripX + 16, gripY - barrelY, Math.max(8, barrelLength - 12), 1);
-    graphics.fillStyle(0x0e1723, 1);
-    graphics.fillRect(gripX + 14 + barrelLength, gripY - barrelY + 1, 3, 2);
-    graphics.generateTexture(textureKey, 64, 64);
-    graphics.destroy();
   }
 
   drawBackground() {
@@ -1399,7 +1404,9 @@ class FightScene extends Phaser.Scene {
     this.menuContainer.add([shade, panel, title, subtitle]);
     this.menuContainer.add(this.createMenuButton(centerX, panelY - 70, 'Resume', () => this.closeMenu()));
     this.menuContainer.add(this.createMenuButton(centerX, panelY - 22, 'Restart Match', () => this.restartMatch()));
-    this.menuContainer.add(this.createMenuButton(centerX, panelY + 26, 'Online Lobby', () => this.openOnlineOverlay()));
+    this.menuContainer.add(this.createMenuButton(centerX, panelY + 26, 'Main Menu', () => {
+      window.location.href = assetUrl('');
+    }));
     this.menuContainer.add(this.createMenuButton(centerX, panelY + 74, 'Debug / Tuning', () => {
       window.location.href = assetUrl('debug.html');
     }));
@@ -1447,6 +1454,37 @@ class FightScene extends Phaser.Scene {
     overlay.querySelector('.start-local')?.addEventListener('click', () => this.beginLocalGame());
     overlay.querySelector('.start-online')?.addEventListener('click', () => this.beginOnlineFlow());
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => overlay.remove());
+  }
+
+  applyBootOptions(options = {}) {
+    if (options.mode === 'online') {
+      this.applyOnlineBootOptions(options);
+      return;
+    }
+
+    this.beginLocalGame();
+  }
+
+  applyOnlineBootOptions(options) {
+    this.onlineMode = true;
+    this.onlineReady = false;
+    this.modeSelected = true;
+    this.matchPaused = true;
+    this.onlineChannel = options.channel ?? null;
+    this.onlineConnected = Boolean(options.channel);
+    this.localOnlinePlayerId = options.playerId;
+    this.onlineIsHost = options.playerId === 'p1';
+    this.onlineLobbyCode = options.code;
+    this.onlineLobbyPlayerCount = options.playerCount ?? 2;
+    this.onlineLobbyStarted = true;
+    this.onlineInputSeq = 0;
+    this.onlineLastInputPayload = '';
+    this.onlineLastInputSentAt = 0;
+    this.onlineLastSnapshotSentAt = 0;
+    if (this.onlineChannel) {
+      this.bindOnlineChannel(this.onlineChannel);
+    }
+    this.handleOnlineMatchStart({ code: options.code });
   }
 
   showStartOverlay() {
@@ -2572,15 +2610,13 @@ class FightScene extends Phaser.Scene {
     const heldGunVisible = Boolean(player.weapon) && (aimVisualActive || this.isGunCarryAnimation(player));
     const visualFacing = aimVisualActive ? player.aimFacing : player.facing;
     const visualAngle = aimVisualActive ? player.aimAngle : visualFacing > 0 ? 0 : Math.PI;
-    const pivot = this.getAimPivot(player);
     const carryAnchor = this.getAimAnchor(player, visualAngle);
     const direction = new Phaser.Math.Vector2(Math.cos(visualAngle), Math.sin(visualAngle));
     const reticle = this.getAimReticlePosition(player, visualAngle);
-    const weaponAnchor = aimVisualActive ? pivot : carryAnchor;
 
     player.arm.setVisible(false);
     player.weaponSprite.setTexture(player.weapon ? `weapon-${player.weapon.id}` : 'weapon-pistol');
-    player.weaponSprite.setPosition(weaponAnchor.x, weaponAnchor.y);
+    player.weaponSprite.setPosition(carryAnchor.x, carryAnchor.y);
     player.weaponSprite.setRotation(visualAngle);
     player.weaponSprite.setFlipY(visualFacing < 0);
     player.weaponSprite.setVisible(heldGunVisible);
@@ -2593,7 +2629,8 @@ class FightScene extends Phaser.Scene {
       return;
     }
 
-    if (player.aimMode === 'gun' && player.weapon?.id === 'sniper') {
+    const currentWeapon = player.weapon ? this.configData.weapons[player.weapon.id] : null;
+    if (player.aimMode === 'gun' && currentWeapon?.laser) {
       player.aimGraphics.lineStyle(1, 0xff304b, 0.75);
       player.aimGraphics.lineBetween(reticle.x, reticle.y, reticle.x + direction.x * 620, reticle.y + direction.y * 620);
     }
@@ -4270,6 +4307,235 @@ function getEmpressFrameNumber(textureKey) {
 
 loadUiFont().finally(() => {
   retireServiceWorkers();
+  createBootMenu();
+});
+
+function createBootMenu() {
+  const existing = document.querySelector('.boot-menu');
+  existing?.remove();
+
+  const initialCode = getInitialLobbyCode();
+  const overlay = document.createElement('main');
+  overlay.className = 'boot-menu';
+  overlay.innerHTML = `
+    <section class="boot-panel">
+      <canvas class="boot-sprite" width="64" height="64" aria-hidden="true"></canvas>
+      <h1>Superfighters</h1>
+      <p class="boot-copy">Choose a match type.</p>
+      <div class="boot-actions">
+        <button class="boot-local" type="button">Local Multiplayer</button>
+        <button class="boot-online" type="button">Online Multiplayer</button>
+      </div>
+      <section class="boot-online-panel" hidden>
+        <p class="online-server-fixed">Server: ${escapeHtml(getOnlineServerLabel())}</p>
+        <div class="online-actions-row">
+          <button class="boot-create" type="button">Create Lobby</button>
+          <label class="online-code-field">
+            <span>Code</span>
+            <input class="boot-code-input" type="text" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text" value="${escapeHtml(initialCode)}">
+          </label>
+          <button class="boot-join" type="button">Join</button>
+        </div>
+        <div class="online-lobby-result" hidden>
+          <div class="online-code-display">----</div>
+          <button class="boot-copy-link" type="button">Copy Invite Link</button>
+          <button class="boot-start" type="button" hidden disabled>Start Game</button>
+        </div>
+        <p class="online-status">Offline</p>
+        <p class="online-mobile-note">On iPhone, open the invite link in Safari. For less browser chrome, Share, Add to Home Screen, then launch from the icon. Portrait play is supported.</p>
+      </section>
+      <nav class="start-links">
+        <a href="./debug.html">Debug</a>
+        <a href="./level-editor.html">Level Editor</a>
+      </nav>
+    </section>
+  `;
+
+  document.body.appendChild(overlay);
+  startBootSpriteAnimation(overlay.querySelector('.boot-sprite'));
+
+  const state = {
+    channel: null,
+    connected: false,
+    handlersBound: false,
+    code: null,
+    playerId: null,
+    isHost: false,
+    playerCount: 0,
+    started: false,
+  };
+  const onlinePanel = overlay.querySelector('.boot-online-panel');
+  const codeInput = overlay.querySelector('.boot-code-input');
+  const result = overlay.querySelector('.online-lobby-result');
+  const codeDisplay = overlay.querySelector('.online-code-display');
+  const status = overlay.querySelector('.online-status');
+  const startButton = overlay.querySelector('.boot-start');
+
+  const setStatus = (message) => {
+    status.textContent = message;
+  };
+  const showOnlinePanel = () => {
+    onlinePanel.hidden = false;
+    codeInput.focus();
+  };
+  const updateLobbyUi = () => {
+    const showInvite = Boolean(state.code && state.isHost);
+    result.hidden = !showInvite;
+    codeDisplay.textContent = state.code ?? '----';
+    startButton.hidden = !showInvite;
+    startButton.disabled = !(showInvite && state.playerCount >= 2 && !state.started);
+  };
+  const ensureChannel = () => {
+    if (state.channel && state.connected) {
+      return Promise.resolve(state.channel);
+    }
+
+    const config = parseOnlineServerConfig();
+    setStatus(`Connecting to ${config.label}...`);
+    const channel = geckos(config.options);
+    state.channel = channel;
+
+    return new Promise((resolve, reject) => {
+      channel.onConnect((error) => {
+        if (error) {
+          state.connected = false;
+          reject(error);
+          return;
+        }
+        state.connected = true;
+        bindBootOnlineChannel(channel);
+        setStatus('Connected. Create or join a lobby.');
+        resolve(channel);
+      });
+    });
+  };
+  const bindBootOnlineChannel = (channel) => {
+    if (state.handlersBound) {
+      return;
+    }
+    state.handlersBound = true;
+
+    const handleLobbyAssigned = (data, action) => {
+      state.code = data.code;
+      state.playerId = data.playerId;
+      state.isHost = data.playerId === 'p1';
+      state.playerCount = data.players?.length ?? 1;
+      state.started = Boolean(data.started);
+      updateLobbyUi();
+      setStatus(
+        action === 'created'
+          ? `Lobby ${data.code} created. Waiting for opponent...`
+          : `Joined lobby ${data.code}. Waiting for match start...`,
+      );
+    };
+
+    channel.on('lobby-created', (data) => handleLobbyAssigned(data, 'created'));
+    channel.on('lobby-joined', (data) => handleLobbyAssigned(data, 'joined'));
+    channel.on('lobby-state', (data) => {
+      if (data?.code) {
+        state.code = data.code;
+      }
+      state.playerCount = data?.players?.length ?? 0;
+      state.started = Boolean(data?.started);
+      updateLobbyUi();
+      if (state.playerCount < 2) {
+        setStatus(`Lobby ${state.code ?? '----'}: waiting for opponent (${state.playerCount}/2).`);
+      } else if (state.started) {
+        setStatus(`Lobby ${state.code}: starting...`);
+      } else if (state.isHost) {
+        setStatus(`Lobby ${state.code}: both players connected. Start when ready.`);
+      } else {
+        setStatus(`Lobby ${state.code}: waiting for host to start.`);
+      }
+    });
+    channel.on('match-start', (data) => {
+      state.started = true;
+      startGameFromBoot(overlay, {
+        mode: 'online',
+        channel,
+        code: data?.code ?? state.code,
+        playerId: state.playerId,
+        playerCount: state.playerCount,
+      });
+    });
+    channel.on('lobby-error', (data) => setStatus(data?.message || 'Lobby error'));
+    channel.onDisconnect(() => {
+      state.connected = false;
+      setStatus('Disconnected from online server.');
+    });
+  };
+  const createLobby = async () => {
+    try {
+      const channel = await ensureChannel();
+      setStatus('Creating lobby...');
+      channel.emit('create-lobby', {}, { reliable: true });
+    } catch (error) {
+      setStatus(error.message || 'Could not connect');
+    }
+  };
+  const joinLobby = async () => {
+    const code = normalizeLobbyCode(codeInput.value);
+    codeInput.value = code;
+    if (code.length !== 4) {
+      setStatus('Enter a four-letter code.');
+      return;
+    }
+    try {
+      const channel = await ensureChannel();
+      setStatus(`Joining ${code}...`);
+      channel.emit('join-lobby', { code }, { reliable: true });
+    } catch (error) {
+      setStatus(error.message || 'Could not connect');
+    }
+  };
+
+  overlay.querySelector('.boot-local')?.addEventListener('click', () => {
+    state.channel?.close();
+    startGameFromBoot(overlay, { mode: 'local' });
+  });
+  overlay.querySelector('.boot-online')?.addEventListener('click', showOnlinePanel);
+  overlay.querySelector('.boot-create')?.addEventListener('click', createLobby);
+  overlay.querySelector('.boot-join')?.addEventListener('click', joinLobby);
+  codeInput.addEventListener('input', () => {
+    codeInput.value = normalizeLobbyCode(codeInput.value);
+  });
+  codeInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      joinLobby();
+    }
+  });
+  overlay.querySelector('.boot-copy-link')?.addEventListener('click', async () => {
+    if (!state.code) {
+      return;
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set('join', state.code);
+    await navigator.clipboard?.writeText(url.toString());
+    setStatus(`Copied invite link for ${state.code}.`);
+  });
+  startButton.addEventListener('click', () => {
+    if (!state.channel || !state.isHost) {
+      setStatus('Only the host can start the game.');
+      return;
+    }
+    if (state.playerCount < 2) {
+      setStatus('Waiting for opponent.');
+      return;
+    }
+    setStatus('Starting game...');
+    state.channel.emit('start-match', { lobbyCode: state.code }, { reliable: true });
+  });
+
+  if (initialCode) {
+    showOnlinePanel();
+    window.setTimeout(joinLobby, 250);
+  }
+}
+
+function startGameFromBoot(bootOverlay, options) {
+  pendingBootOptions = options;
+  bootOverlay?.remove();
   window.__superfightersGame?.destroy(true);
   window.__superfightersGame = new Phaser.Game({
     type: Phaser.AUTO,
@@ -4294,7 +4560,57 @@ loadUiFont().finally(() => {
     },
     scene: FightScene,
   });
-});
+}
+
+function consumeBootOptions() {
+  const options = pendingBootOptions ?? { mode: 'local' };
+  pendingBootOptions = null;
+  return options;
+}
+
+function getInitialLobbyCode() {
+  const params = new URLSearchParams(window.location.search);
+  return normalizeLobbyCode(params.get('join') || params.get('code') || '');
+}
+
+function startBootSpriteAnimation(canvas) {
+  if (!canvas) {
+    return;
+  }
+  const context = canvas.getContext('2d');
+  context.imageSmoothingEnabled = false;
+  const image = new Image();
+  image.onload = () => {
+    const geometry = detectSheetFrameGeometry(image, CHARACTER_SHEET, { includeExtensions: false });
+    const frames = makeFrameList1Based(DEFAULT_EMPRESS_ANIMATION_CONFIG.idle, geometry.frameCells.length);
+    const frameCanvases = frames
+      .map((frame) => geometry.frameCells[frame - 1])
+      .filter(Boolean)
+      .map((cell) => makeFrameCanvas(image, CHARACTER_SHEET, cell, { fixedCanvas: false }));
+    if (!frameCanvases.length) {
+      return;
+    }
+    let frameIndex = 0;
+    let lastFrameAt = 0;
+    const draw = (time) => {
+      if (!canvas.isConnected) {
+        return;
+      }
+      if (time - lastFrameAt < 140) {
+        window.requestAnimationFrame(draw);
+        return;
+      }
+      const frame = frameCanvases[frameIndex % frameCanvases.length];
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(frame, 0, 0);
+      frameIndex += 1;
+      lastFrameAt = time;
+      window.requestAnimationFrame(draw);
+    };
+    window.requestAnimationFrame(draw);
+  };
+  image.src = assetUrl('assets/empress.png');
+}
 
 async function loadUiFont() {
   if (!('FontFace' in window) || !document.fonts) {

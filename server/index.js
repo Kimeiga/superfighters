@@ -364,7 +364,7 @@ function normalizeCode(code) {
 }
 
 function sanitizeInput(input) {
-  const actions = ['left', 'right', 'jump', 'crouch', 'melee', 'shoot', 'grenade', 'powerup'];
+  const actions = ['left', 'right', 'jump', 'crouch', 'melee', 'shoot', 'grenade', 'powerup', 'aimUp', 'aimDown'];
   return actions.reduce((state, action) => {
     state[action] = Boolean(input?.[action]);
     return state;
