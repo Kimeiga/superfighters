@@ -118,6 +118,7 @@ class FightScene extends Phaser.Scene {
     this.onlineLastInputSentAt = 0;
     this.onlineLastSnapshotSentAt = 0;
     this.touchInputDown = createInputDown();
+    this.uiButtons = [];
     this.pickupSpawnTimer = 0;
     this.roundEndsAt = this.time.now + this.configData.round.seconds * 1000;
 
@@ -919,6 +920,8 @@ class FightScene extends Phaser.Scene {
       191,
       K.SPACE,
     ]);
+
+    this.input.on('pointerdown', (pointer) => this.handleUiPointerDown(pointer));
   }
 
   refreshInputStates(time) {
@@ -1373,10 +1376,49 @@ class FightScene extends Phaser.Scene {
       Phaser.Geom.Rectangle.Contains,
     );
     container.input.cursor = 'pointer';
-    container.on('pointerdown', callback);
     container.on('pointerover', () => bg.setFillStyle(0x2e4263));
     container.on('pointerout', () => bg.setFillStyle(0x223149));
+    container.setData('uiCallback', callback);
+    this.uiButtons.push(container);
     return this.lockToScreen(container);
+  }
+
+  handleUiPointerDown(pointer) {
+    if (!this.uiButtons?.length) {
+      return;
+    }
+
+    for (let index = this.uiButtons.length - 1; index >= 0; index -= 1) {
+      const button = this.uiButtons[index];
+      if (!this.isVisibleUiButton(button)) {
+        continue;
+      }
+
+      const bounds = button.getBounds();
+      if (!Phaser.Geom.Rectangle.Contains(bounds, pointer.x, pointer.y)) {
+        continue;
+      }
+
+      pointer.event?.preventDefault?.();
+      button.getData('uiCallback')?.();
+      return;
+    }
+  }
+
+  isVisibleUiButton(button) {
+    if (!button?.scene || button.active === false) {
+      return false;
+    }
+
+    let current = button;
+    while (current) {
+      if (!current.visible || current.active === false) {
+        return false;
+      }
+      current = current.parentContainer;
+    }
+
+    return true;
   }
 
   toggleMenu() {
@@ -2922,6 +2964,7 @@ class FightScene extends Phaser.Scene {
       return;
     }
 
+    this.dropInventoryOnDeath(loser);
     winner.kills += 1;
     loser.lives -= 1;
     this.showMessage(`${winner.label} KO - ${source}`, 850);
@@ -2936,6 +2979,9 @@ class FightScene extends Phaser.Scene {
 
   respawn(player) {
     player.health = PLAYER_MAX_HEALTH;
+    player.weapon = null;
+    player.powerup = null;
+    player.grenadeAmmo = this.configData.grenades.startCount;
     player.dropUntil = 0;
     this.resetJumpState(player);
     player.jumpPrepUntil = 0;
@@ -2979,6 +3025,28 @@ class FightScene extends Phaser.Scene {
     player.sprite.setFlipX(player.facing < 0);
     this.applyBodyPose(player);
     this.setAimVisible(player, false);
+  }
+
+  dropInventoryOnDeath(player) {
+    const dropY = player.sprite.y - 18;
+    const drops = [];
+
+    if (player.weapon) {
+      drops.push({ kind: 'weapon', id: player.weapon.id });
+    }
+    if (player.powerup) {
+      drops.push({ kind: 'powerup', id: player.powerup });
+    }
+    if (player.grenadeAmmo > 0) {
+      drops.push({ kind: 'grenade', id: 'grenade' });
+    }
+
+    const spacing = 34;
+    const startX = player.sprite.x - ((drops.length - 1) * spacing) / 2;
+    for (let index = 0; index < drops.length; index += 1) {
+      const drop = drops[index];
+      this.createPickup(startX + index * spacing, dropY, drop.kind, drop.id);
+    }
   }
 
   checkKillZones() {

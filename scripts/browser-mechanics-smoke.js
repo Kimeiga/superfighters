@@ -86,6 +86,29 @@ window.__superfightersMechanicsSmoke = (async () => {
   resetPlayer(scene.p1, 700, 484, 1);
   resetPlayer(scene.p2, 1040, 484, -1);
 
+  let uiClickCount = 0;
+  let uiClickPrevented = false;
+  const uiSmokeContainer = scene.add.container(0, 0).setVisible(true);
+  const uiSmokeButton = scene.createMenuButton(180, 180, 'Smoke Button', () => {
+    uiClickCount += 1;
+  });
+  uiSmokeContainer.add(uiSmokeButton);
+  scene.addToUiLayer(uiSmokeContainer);
+  scene.handleUiPointerDown({
+    x: 180,
+    y: 180,
+    event: {
+      preventDefault: () => {
+        uiClickPrevented = true;
+      },
+    },
+  });
+  check('screen-space UI button dispatcher handles nested buttons', uiClickCount === 1 && uiClickPrevented, {
+    uiClickCount,
+    uiClickPrevented,
+  });
+  uiSmokeContainer.destroy();
+
   const weaponIds = Object.keys(scene.configData.weapons);
   check(
     'weapon textures exist',
@@ -402,6 +425,7 @@ window.__superfightersMechanicsSmoke = (async () => {
   });
 
   clearGroup(scene.bullets);
+  clearGroup(scene.pickups);
   resetPlayer(p1, 700, 220, 1);
   p1.sprite.body.setAllowGravity(false);
   p1.weapon = scene.makeWeaponState('pistol');
@@ -453,9 +477,13 @@ window.__superfightersMechanicsSmoke = (async () => {
 
   resetPlayer(p1, 700, 484, 1);
   resetPlayer(p2, 1040, 484, -1);
+  clearGroup(scene.pickups);
   p1.kills = 0;
   p2.lives = scene.configData.round.lives;
   p2.invulnerableUntil = 0;
+  p2.weapon = scene.makeWeaponState('rifle');
+  p2.powerup = 'shield';
+  p2.grenadeAmmo = 2;
   p2.dashAttackUntil = scene.time.now + 5000;
   p2.nextMeleeAt = scene.time.now + 5000;
   p2.nextShotAt = scene.time.now + 5000;
@@ -467,11 +495,18 @@ window.__superfightersMechanicsSmoke = (async () => {
   p2.shieldUntil = scene.time.now + 5000;
   p2.hasteUntil = scene.time.now + 5000;
   p2.currentPickup = scene.createPickup(p2.sprite.x, p2.sprite.y, 'powerup', 'heal');
+  const deathDropY = p2.sprite.y - 18;
   scene.damagePlayer(p2, 999, 1, 250, 250, { source: 'test lethal' });
+  const deathDrops = active(scene.pickups)
+    .filter((item) => Math.abs(item.y - deathDropY) < 1)
+    .map((item) => `${item.getData('kind')}:${item.getData('id')}`);
   check('lethal damage respawns player with clean action state', (
     p1.kills === 1 &&
     p2.lives === scene.configData.round.lives - 1 &&
     p2.health === 100 &&
+    p2.weapon === null &&
+    p2.powerup === null &&
+    p2.grenadeAmmo === scene.configData.grenades.startCount &&
     p2.invulnerableUntil > scene.time.now &&
     p2.dashAttackUntil === 0 &&
     p2.nextMeleeAt === 0 &&
@@ -484,6 +519,10 @@ window.__superfightersMechanicsSmoke = (async () => {
     p2.shieldUntil === 0 &&
     p2.hasteUntil === 0 &&
     p2.currentPickup === null &&
+    deathDrops.length === 3 &&
+    deathDrops.includes('weapon:rifle') &&
+    deathDrops.includes('powerup:shield') &&
+    deathDrops.includes('grenade:grenade') &&
     p2.sprite.x === p2.spawnX &&
     p2.sprite.y === p2.spawnY &&
     p2.sprite.body.velocity.x === 0 &&
@@ -492,6 +531,10 @@ window.__superfightersMechanicsSmoke = (async () => {
     kills: p1.kills,
     lives: p2.lives,
     health: p2.health,
+    weapon: p2.weapon,
+    powerup: p2.powerup,
+    grenadeAmmo: p2.grenadeAmmo,
+    deathDrops,
     invulnerableUntil: p2.invulnerableUntil,
     now: scene.time.now,
     dashAttackUntil: p2.dashAttackUntil,
