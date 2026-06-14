@@ -1049,6 +1049,20 @@ class FightScene extends Phaser.Scene {
     this.sendOnlineInput(time);
   }
 
+  setGameKeyboardEnabled(enabled) {
+    const keyboard = this.input?.keyboard;
+    if (!keyboard) {
+      return;
+    }
+
+    keyboard.enabled = enabled;
+    if (!enabled) {
+      for (const key of Object.values(this.keys ?? {})) {
+        key?.reset?.();
+      }
+    }
+  }
+
   getInputDownForPlayer(player) {
     if (this.onlineMode) {
       if (player.id === this.localOnlinePlayerId) {
@@ -1441,6 +1455,7 @@ class FightScene extends Phaser.Scene {
     }
     this.modeSelected = false;
     this.matchPaused = true;
+    this.setGameKeyboardEnabled(false);
     this.physics.world.pause();
   }
 
@@ -1459,6 +1474,7 @@ class FightScene extends Phaser.Scene {
     this.matchPaused = false;
     this.closeStartOverlay();
     this.closeOnlineOverlay();
+    this.setGameKeyboardEnabled(true);
     this.roundEndsAt = this.time.now + this.configData.round.seconds * 1000;
     this.physics.world.resume();
     this.showMessage('Fight', 900);
@@ -1470,6 +1486,7 @@ class FightScene extends Phaser.Scene {
     this.onlineReady = false;
     this.matchPaused = true;
     this.closeStartOverlay();
+    this.setGameKeyboardEnabled(false);
     this.physics.world.pause();
     this.openOnlineOverlay(prefillCode);
   }
@@ -1566,6 +1583,7 @@ class FightScene extends Phaser.Scene {
 
   openMenu() {
     this.matchPaused = true;
+    this.setGameKeyboardEnabled(false);
     this.physics.world.pause();
     this.menuContainer.setVisible(true);
   }
@@ -1574,10 +1592,12 @@ class FightScene extends Phaser.Scene {
     this.menuContainer.setVisible(false);
     if (!this.modeSelected || (this.onlineMode && !this.onlineReady)) {
       this.matchPaused = true;
+      this.setGameKeyboardEnabled(false);
       this.physics.world.pause();
       return;
     }
     this.matchPaused = false;
+    this.setGameKeyboardEnabled(true);
     this.physics.world.resume();
   }
 
@@ -1647,6 +1667,7 @@ class FightScene extends Phaser.Scene {
     if (!this.onlineOverlayEl) {
       return;
     }
+    this.setGameKeyboardEnabled(false);
     this.onlineOverlayEl.hidden = false;
     if (prefillCode) {
       this.onlineCodeInputEl.value = normalizeLobbyCode(prefillCode);
