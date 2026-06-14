@@ -356,7 +356,6 @@ class FightScene extends Phaser.Scene {
 
     for (const player of this.players) {
       this.updatePlayer(player, time, delta);
-      this.stabilizeGroundedPlayer(player);
     }
 
     this.updateDashAttacks(time);
@@ -616,11 +615,13 @@ class FightScene extends Phaser.Scene {
     }
 
     const centerX = this.worldWidth / 2;
-    const mainY = Math.min(this.worldHeight - 150, 540);
+    const mainY = Math.min(this.worldHeight - 95, 610);
     const mainHeight = 52;
     const mainTop = mainY - mainHeight / 2;
     const mainWidth = Math.min(1120, this.worldWidth - 360);
-    const centerPlatform = { x: centerX, y: mainY - 150, width: 260 };
+    const centerPlatform = { x: centerX, y: mainY - 110, width: 260 };
+    const leftPlatform = { x: centerX - 300, y: mainY - 160, width: 240 };
+    const rightPlatform = { x: centerX + 300, y: mainY - 160, width: 240 };
 
     this.levelSpawns = {
       p1: {
@@ -640,10 +641,18 @@ class FightScene extends Phaser.Scene {
       { x: centerX + 420, y: mainTop - 28 },
       { x: centerPlatform.x - 76, y: centerPlatform.y - 42 },
       { x: centerPlatform.x + 76, y: centerPlatform.y - 42 },
+      { x: leftPlatform.x - 76, y: leftPlatform.y - 42 },
+      { x: leftPlatform.x, y: leftPlatform.y - 42 },
+      { x: leftPlatform.x + 76, y: leftPlatform.y - 42 },
+      { x: rightPlatform.x - 76, y: rightPlatform.y - 42 },
+      { x: rightPlatform.x, y: rightPlatform.y - 42 },
+      { x: rightPlatform.x + 76, y: rightPlatform.y - 42 },
     ];
 
     this.createPlatform(centerX, mainY, mainWidth, mainHeight, false, COLORS.platformTrim);
     this.createPlatform(centerPlatform.x, centerPlatform.y, centerPlatform.width, 14, true);
+    this.createPlatform(leftPlatform.x, leftPlatform.y, leftPlatform.width, 14, true);
+    this.createPlatform(rightPlatform.x, rightPlatform.y, rightPlatform.width, 14, true);
 
     this.add.rectangle(centerX, mainY - 34, mainWidth - 28, 12, COLORS.platformTop, 0.92).setOrigin(0.5);
     this.add.rectangle(centerX, mainY + 34, mainWidth + 42, 18, 0x30283b, 0.88).setOrigin(0.5);
@@ -891,24 +900,6 @@ class FightScene extends Phaser.Scene {
     this.cameras.main.setZoom(Phaser.Math.Linear(this.cameras.main.zoom, targetZoom, lerp));
     this.cameras.main.scrollX = Math.round(Phaser.Math.Linear(this.cameras.main.scrollX, targetScrollX, lerp));
     this.cameras.main.scrollY = Math.round(Phaser.Math.Linear(this.cameras.main.scrollY, targetScrollY, lerp));
-  }
-
-  stabilizeGroundedPlayer(player) {
-    const body = player.sprite?.body;
-    if (!body) {
-      return;
-    }
-
-    const grounded = body.blocked.down || body.touching.down;
-    if (!grounded || Math.abs(body.velocity.y) > 2) {
-      return;
-    }
-
-    const roundedY = Math.round(player.sprite.y);
-    if (Math.abs(player.sprite.y - roundedY) <= 0.25) {
-      player.sprite.y = roundedY;
-      body.updateFromGameObject?.();
-    }
   }
 
   screenX(x) {
