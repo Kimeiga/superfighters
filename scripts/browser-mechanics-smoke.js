@@ -47,6 +47,11 @@ window.__superfightersMechanicsSmoke = (async () => {
     player.aimMode = null;
     player.crouching = false;
     player.climbing = false;
+    for (const inputPart of Object.values(player.inputState)) {
+      for (const action of Object.keys(inputPart)) {
+        inputPart[action] = false;
+      }
+    }
     player.health = 100;
     player.weapon = null;
     player.grenadeAmmo = scene.configData.grenades.startCount;
@@ -58,6 +63,10 @@ window.__superfightersMechanicsSmoke = (async () => {
     player.nextMeleeAt = 0;
     player.meleeAnimationUntil = 0;
     player.pickupAnimationUntil = 0;
+    player.crouchTransitionUntil = 0;
+    player.crouchTransitionGun = false;
+    player.standTransitionUntil = 0;
+    player.standTransitionGun = false;
     player.dashAttackUntil = 0;
     player.dashHitTargets.clear();
     scene.applyBodyPose(player);
@@ -106,9 +115,48 @@ window.__superfightersMechanicsSmoke = (async () => {
 
   const p1 = scene.p1;
   const p2 = scene.p2;
+
+  resetPlayer(p1, 700, 484, 1);
+  p1.weapon = null;
+  let pickup = scene.createPickup(p1.sprite.x, p1.sprite.y, 'weapon', 'pistol');
+  p1.currentPickup = pickup;
+  scene.tryAutoPickup(p1);
+  check('empty weapon slot auto-picks weapon on walkover', p1.weapon?.id === 'pistol' && !pickup.active, {
+    weapon: p1.weapon?.id,
+    pickupActive: pickup.active,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
+  p1.weapon = scene.makeWeaponState('pistol');
+  pickup = scene.createPickup(p1.sprite.x, p1.sprite.y, 'weapon', 'rifle');
+  p1.currentPickup = pickup;
+  scene.tryAutoPickup(p1);
+  check('filled weapon slot does not auto-pick weapon on walkover', p1.weapon?.id === 'pistol' && pickup.active, {
+    weapon: p1.weapon?.id,
+    pickupActive: pickup.active,
+    pickupId: pickup.getData('id'),
+  });
+  clearGroup(scene.pickups);
+
+  resetPlayer(p1, 700, 484, 1);
+  scene.startCrouchTransition(p1, scene.time.now + 5);
+  check('crouch transition without weapon uses no-gun animation', !p1.crouchTransitionGun && p1.sprite.anims.currentAnim?.key === 'girl-crouch-down', {
+    crouchTransitionGun: p1.crouchTransitionGun,
+    animation: p1.sprite.anims.currentAnim?.key,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
+  p1.weapon = scene.makeWeaponState('pistol');
+  scene.startCrouchTransition(p1, scene.time.now + 5);
+  check('crouch transition with weapon uses gun animation', p1.crouchTransitionGun && p1.sprite.anims.currentAnim?.key === 'girl-crouch-down-gun', {
+    crouchTransitionGun: p1.crouchTransitionGun,
+    animation: p1.sprite.anims.currentAnim?.key,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
   p1.crouching = true;
   p1.weapon = null;
-  let pickup = scene.createPickup(p1.sprite.x, p1.sprite.y, 'weapon', 'rifle');
+  pickup = scene.createPickup(p1.sprite.x, p1.sprite.y, 'weapon', 'rifle');
   p1.currentPickup = pickup;
   scene.handleMeleePressed(p1, scene.time.now + 10);
   check('crouch melee picks up weapon', p1.weapon?.id === 'rifle' && !pickup.active, { weapon: p1.weapon?.id });
@@ -201,10 +249,11 @@ window.__superfightersMechanicsSmoke = (async () => {
   scene.spawnBullet(p1, scene.configData.weapons.pistol, 0, windowPane.x, windowPane.y);
   bullet = active(scene.bullets).at(-1);
   scene.handleBulletWindow(bullet, windowPane);
-  check('bullet breaks glass window', !windowPane.active && !bullet.active, {
+  check('bullet breaks and passes through glass window', !windowPane.active && bullet.active, {
     windowActive: windowPane.active,
     bulletActive: bullet.active,
   });
+  clearGroup(scene.bullets);
 
   const targetPlatform = scene.platforms.find((platform) => platform.active && platform.getData('levelGeometry'));
   const taggedPlatforms = snapshotPlatforms();
@@ -244,11 +293,35 @@ window.__superfightersMechanicsSmoke = (async () => {
   });
 
   resetPlayer(p1, 700, 484, 1);
+  resetPlayer(p2, 1040, 484, -1);
+  const meleePivot = scene.getAimPivot(p1);
+  const meleeWindow = scene.createWindow(meleePivot.x + p1.facing * 34, meleePivot.y, 30, 34);
+  scene.performMeleeCombo(p1, scene.time.now + 1450);
+  check('single melee hit breaks glass window', !meleeWindow.active, {
+    windowActive: meleeWindow.active,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
   resetPlayer(p2, 735, 484, -1);
   p2.invulnerableUntil = 0;
   scene.performMeleeCombo(p1, scene.time.now + 1500);
   check('melee combo damages opponent', p2.health < 100, { p2Health: p2.health });
   check('normal melee does not knock down', p2.knockedUntil <= scene.time.now, {
+    knockedUntil: p2.knockedUntil,
+    now: scene.time.now,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
+  resetPlayer(p2, 735, 484, -1);
+  p2.invulnerableUntil = 0;
+  p1.sprite.body.blocked.down = true;
+  p1.sprite.body.touching.down = true;
+  p1.inputState.down.right = true;
+  p1.inputState.pressed.melee = true;
+  scene.handleMeleePressed(p1, scene.time.now + 1650);
+  scene.updateDashAttacks(scene.time.now + 1660);
+  check('moving melee triggers dash takedown input path', p1.dashAttackUntil > scene.time.now && p2.knockedUntil > scene.time.now, {
+    dashAttackUntil: p1.dashAttackUntil,
     knockedUntil: p2.knockedUntil,
     now: scene.time.now,
   });
@@ -277,6 +350,49 @@ window.__superfightersMechanicsSmoke = (async () => {
       x: Math.round(grenades[0].body.velocity.x),
       y: Math.round(grenades[0].body.velocity.y),
     } : null,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
+  resetPlayer(p2, 1040, 484, -1);
+  p1.kills = 0;
+  p2.lives = scene.configData.round.lives;
+  p2.invulnerableUntil = 0;
+  p2.dashAttackUntil = scene.time.now + 5000;
+  p2.meleeAnimationUntil = scene.time.now + 5000;
+  p2.pickupAnimationUntil = scene.time.now + 5000;
+  p2.currentPickup = scene.createPickup(p2.sprite.x, p2.sprite.y, 'powerup', 'heal');
+  scene.damagePlayer(p2, 999, 1, 250, 250, { source: 'test lethal' });
+  check('lethal damage respawns player with clean action state', (
+    p1.kills === 1 &&
+    p2.lives === scene.configData.round.lives - 1 &&
+    p2.health === 100 &&
+    p2.invulnerableUntil > scene.time.now &&
+    p2.dashAttackUntil === 0 &&
+    p2.meleeAnimationUntil === 0 &&
+    p2.pickupAnimationUntil === 0 &&
+    p2.currentPickup === null &&
+    p2.sprite.x === p2.spawnX &&
+    p2.sprite.y === p2.spawnY &&
+    p2.sprite.body.velocity.x === 0 &&
+    p2.sprite.body.velocity.y === 0
+  ), {
+    kills: p1.kills,
+    lives: p2.lives,
+    health: p2.health,
+    invulnerableUntil: p2.invulnerableUntil,
+    now: scene.time.now,
+    dashAttackUntil: p2.dashAttackUntil,
+    meleeAnimationUntil: p2.meleeAnimationUntil,
+    pickupAnimationUntil: p2.pickupAnimationUntil,
+    currentPickup: p2.currentPickup,
+    x: p2.sprite.x,
+    y: p2.sprite.y,
+    spawnX: p2.spawnX,
+    spawnY: p2.spawnY,
+    velocity: {
+      x: p2.sprite.body.velocity.x,
+      y: p2.sprite.body.velocity.y,
+    },
   });
 
   const failures = checks.filter((item) => !item.pass);

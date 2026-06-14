@@ -860,7 +860,7 @@ class FightScene extends Phaser.Scene {
     const breakable = options.breakable ?? true;
     const pane = this.add.rectangle(x, y, width, height, COLORS.glass, breakable ? 0.48 : 0.34).setOrigin(0.5);
     const shine = this.add.rectangle(x - width * 0.2, y - height * 0.15, 3, height * 0.55, 0xffffff, 0.4);
-    pane.setData('health', 18);
+    pane.setData('health', 8);
     pane.setData('breakable', breakable);
     pane.setData('shine', shine);
     this.physics.add.existing(pane, true);
@@ -2116,9 +2116,9 @@ class FightScene extends Phaser.Scene {
   }
 
   startCrouchTransition(player, time) {
-    player.crouchTransitionGun = false;
+    player.crouchTransitionGun = Boolean(player.weapon);
     player.standTransitionUntil = 0;
-    const animationName = 'crouchDown';
+    const animationName = player.crouchTransitionGun ? 'crouchDownGun' : 'crouchDown';
     player.crouchTransitionUntil = time + this.getAnimationDurationMs(animationName);
     player.sprite.play(this.getPlayerAnimationKey(animationName));
   }
@@ -2211,7 +2211,7 @@ class FightScene extends Phaser.Scene {
     }
 
     if (gunStanceActive && player.crouching && time < player.crouchTransitionUntil) {
-      this.continueOneShotAnimation(sprite, 'girl-crouch-down');
+      this.continueOneShotAnimation(sprite, player.crouchTransitionGun ? 'girl-crouch-down-gun' : 'girl-crouch-down');
       return;
     }
 
@@ -2617,8 +2617,11 @@ class FightScene extends Phaser.Scene {
       return;
     }
 
-    const running = time < player.runningUntil && player.runDirection === player.facing;
-    if (running) {
+    const grounded = player.sprite.body.blocked.down || player.sprite.body.touching.down;
+    const horizontal = (player.inputState.down.right ? 1 : 0) - (player.inputState.down.left ? 1 : 0);
+    if (!player.crouching && grounded && horizontal !== 0) {
+      player.facing = horizontal;
+      player.sprite.setFlipX(horizontal < 0);
       this.startDashAttack(player, time);
       return;
     }
@@ -2824,6 +2827,8 @@ class FightScene extends Phaser.Scene {
 
     if (windowPane?.active && windowPane.getData('breakable')) {
       this.breakWindow(windowPane, bullet.x, bullet.y);
+      this.spawnHitEffect(bullet.x, bullet.y, bullet.getData('hitColor') ?? 0xfff3a3);
+      return;
     }
     this.handleBulletWall(bullet);
   }
@@ -2923,6 +2928,14 @@ class FightScene extends Phaser.Scene {
     player.jumpLandUntil = 0;
     player.wasGrounded = true;
     player.knockedUntil = 0;
+    player.dashAttackUntil = 0;
+    player.dashDirection = 0;
+    player.dashHitTargets.clear();
+    player.meleeAnimationUntil = 0;
+    player.meleeAnimationKey = null;
+    player.pickupAnimationUntil = 0;
+    player.currentPickup = null;
+    player.shootStanceUntil = 0;
     player.aiming = false;
     player.aimMode = null;
     player.aimFacing = player.facing >= 0 ? 1 : -1;
@@ -2936,9 +2949,12 @@ class FightScene extends Phaser.Scene {
     player.invulnerableUntil = this.time.now + this.configData.round.respawnInvulnerabilityMs;
     player.sprite.setAngle(0);
     player.sprite.setAlpha(1);
+    player.sprite.clearTint();
     player.sprite.setPosition(player.spawnX, player.spawnY);
+    player.sprite.body.reset(player.spawnX, player.spawnY);
     player.sprite.setVelocity(0, 0);
     player.sprite.setFlipX(player.facing < 0);
+    this.applyBodyPose(player);
     this.setAimVisible(player, false);
   }
 
@@ -3131,7 +3147,9 @@ class FightScene extends Phaser.Scene {
     }
 
     const kind = pickup.getData('kind');
-    if (kind === 'grenade' && player.grenadeAmmo < this.configData.grenades.maxCount) {
+    if (kind === 'weapon' && !player.weapon) {
+      this.takePickup(player, pickup);
+    } else if (kind === 'grenade' && player.grenadeAmmo < this.configData.grenades.maxCount) {
       this.takePickup(player, pickup);
     } else if (kind === 'powerup' && !player.powerup) {
       this.takePickup(player, pickup);
