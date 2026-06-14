@@ -620,11 +620,7 @@ class FightScene extends Phaser.Scene {
     const mainHeight = 52;
     const mainTop = mainY - mainHeight / 2;
     const mainWidth = Math.min(1120, this.worldWidth - 360);
-    const lowLeftPlatform = { x: centerX - 310, y: mainY - 86, width: 210 };
-    const lowRightPlatform = { x: centerX + 310, y: mainY - 86, width: 210 };
-    const leftPlatform = { x: centerX - 240, y: mainY - 160, width: 220 };
-    const topPlatform = { x: centerX, y: mainY - 230, width: 230 };
-    const rightPlatform = { x: centerX + 240, y: mainY - 160, width: 220 };
+    const centerPlatform = { x: centerX, y: mainY - 150, width: 260 };
 
     this.levelSpawns = {
       p1: {
@@ -642,19 +638,12 @@ class FightScene extends Phaser.Scene {
       { x: centerX - 170, y: mainTop - 28 },
       { x: centerX + 170, y: mainTop - 28 },
       { x: centerX + 420, y: mainTop - 28 },
-      { x: lowLeftPlatform.x, y: lowLeftPlatform.y - 42 },
-      { x: lowRightPlatform.x, y: lowRightPlatform.y - 42 },
-      { x: leftPlatform.x, y: leftPlatform.y - 42 },
-      { x: topPlatform.x, y: topPlatform.y - 42 },
-      { x: rightPlatform.x, y: rightPlatform.y - 42 },
+      { x: centerPlatform.x - 76, y: centerPlatform.y - 42 },
+      { x: centerPlatform.x + 76, y: centerPlatform.y - 42 },
     ];
 
     this.createPlatform(centerX, mainY, mainWidth, mainHeight, false, COLORS.platformTrim);
-    this.createPlatform(lowLeftPlatform.x, lowLeftPlatform.y, lowLeftPlatform.width, 14, true);
-    this.createPlatform(lowRightPlatform.x, lowRightPlatform.y, lowRightPlatform.width, 14, true);
-    this.createPlatform(leftPlatform.x, leftPlatform.y, leftPlatform.width, 14, true);
-    this.createPlatform(topPlatform.x, topPlatform.y, topPlatform.width, 14, true);
-    this.createPlatform(rightPlatform.x, rightPlatform.y, rightPlatform.width, 14, true);
+    this.createPlatform(centerPlatform.x, centerPlatform.y, centerPlatform.width, 14, true);
 
     this.add.rectangle(centerX, mainY - 34, mainWidth - 28, 12, COLORS.platformTop, 0.92).setOrigin(0.5);
     this.add.rectangle(centerX, mainY + 34, mainWidth + 42, 18, 0x30283b, 0.88).setOrigin(0.5);
