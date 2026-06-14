@@ -1,4 +1,5 @@
 import http from 'node:http';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -31,8 +32,10 @@ const staticOptions = {
 };
 
 app.use(basePath, express.static(distDir, staticOptions));
+app.use(basePath, serveCurrentHashedAsset);
 if (basePath !== '/') {
   app.use(express.static(distDir, staticOptions));
+  app.use(serveCurrentHashedAsset);
 }
 
 app.get('/health', (_request, response) => {
@@ -239,6 +242,48 @@ function shouldServeIndexFallback(request) {
     return false;
   }
   return (request.get('accept') || '').includes('text/html');
+}
+
+function serveCurrentHashedAsset(request, response, next) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    next();
+    return;
+  }
+
+  const fallbackPath = getCurrentHashedAssetPath(request.path);
+  if (!fallbackPath) {
+    next();
+    return;
+  }
+
+  response.setHeader('Cache-Control', 'no-cache');
+  response.sendFile(fallbackPath);
+}
+
+function getCurrentHashedAssetPath(requestPath) {
+  const normalizedPath = requestPath.replace(/^\/+/, '');
+  if (!normalizedPath.startsWith('assets/')) {
+    return null;
+  }
+
+  const assetName = path.basename(normalizedPath);
+  const match = /^(debug|editor|game|gameplayConfig|levelData|modulepreload-polyfill)-[A-Za-z0-9_-]+\.(css|js)$/.exec(assetName);
+  if (!match) {
+    return null;
+  }
+
+  const [, prefix, extension] = match;
+  const assetsDir = path.join(distDir, 'assets');
+  let currentAsset = null;
+  try {
+    currentAsset = fs.readdirSync(assetsDir).find((fileName) => (
+      fileName.startsWith(`${prefix}-`) && fileName.endsWith(`.${extension}`)
+    ));
+  } catch (_error) {
+    return null;
+  }
+
+  return currentAsset ? path.join(assetsDir, currentAsset) : null;
 }
 
 function createLobby(channel) {

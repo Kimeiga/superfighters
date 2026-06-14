@@ -6,7 +6,6 @@ import { TILE_DEFS, TILE_INDEX, mergeTilesToRects } from './levelData.js';
 import './styles.css';
 
 const BASE_URL = import.meta.env.BASE_URL;
-const SERVICE_WORKER_VERSION = __SUPERFIGHTERS_BUILD_ID__;
 const FUSION_FONT_URL = new URL('./assets/fonts/fusion-pixel-12px-monospaced-latin.woff', import.meta.url).href;
 const assetUrl = (path) => `${BASE_URL}${String(path).replace(/^\/+/, '')}`;
 const GAME_WIDTH = Math.floor(window.innerWidth);
@@ -4202,7 +4201,7 @@ function getEmpressFrameNumber(textureKey) {
 }
 
 loadUiFont().finally(() => {
-  registerServiceWorker();
+  retireServiceWorkers();
   window.__superfightersGame?.destroy(true);
   window.__superfightersGame = new Phaser.Game({
     type: Phaser.AUTO,
@@ -4238,16 +4237,28 @@ async function loadUiFont() {
   document.fonts.add(loadedFont);
 }
 
-function registerServiceWorker() {
+function retireServiceWorkers() {
   if (!('serviceWorker' in navigator) || !window.isSecureContext) {
     return;
   }
 
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register(assetUrl(`sw.js?v=${encodeURIComponent(SERVICE_WORKER_VERSION)}`), { scope: BASE_URL, updateViaCache: 'none' }).then((registration) => {
-      registration.update().catch(() => {});
-    }).catch(() => {
-      // The game should still run normally if PWA registration fails.
-    });
+    const baseScopeUrl = new URL(BASE_URL, window.location.href).href;
+    navigator.serviceWorker.getRegistrations()
+      .then((registrations) => Promise.all(registrations
+        .filter((registration) => registration.scope.startsWith(baseScopeUrl))
+        .map((registration) => registration.unregister())))
+      .then(deleteSuperfightersCaches)
+      .catch(() => {
+        // The game should still run normally if service worker cleanup fails.
+      });
   });
+}
+
+async function deleteSuperfightersCaches() {
+  if (!('caches' in window)) {
+    return;
+  }
+  const keys = await caches.keys();
+  await Promise.all(keys.filter((key) => key.startsWith('superfighters-')).map((key) => caches.delete(key)));
 }
