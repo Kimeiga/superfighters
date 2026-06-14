@@ -119,17 +119,14 @@ class FightScene extends Phaser.Scene {
     this.onlineLastSnapshotSentAt = 0;
     this.touchInputDown = createInputDown();
     this.uiButtons = [];
+    this.endOverlayState = null;
+    this.setViewportSize();
     this.pickupSpawnTimer = 0;
     this.roundEndsAt = this.time.now + this.configData.round.seconds * 1000;
 
-    this.physics.world.setBounds(0, -160, this.worldWidth, this.worldHeight + 240);
-    this.cameras.main.setBounds(
-      -GAME_WIDTH,
-      -GAME_HEIGHT,
-      this.worldWidth + GAME_WIDTH * 2,
-      this.worldHeight + GAME_HEIGHT * 2,
-    );
+    this.configureWorldAndCameraBounds();
     this.cameras.main.setBackgroundColor('#8dd8ff');
+    this.registerResizeHandler();
 
     this.createCharacterTextures();
     this.createGeneratedTextures();
@@ -200,6 +197,105 @@ class FightScene extends Phaser.Scene {
     this.updateCamera(1000);
     this.updateUiLayer();
     this.drawHud(this.time.now);
+  }
+
+  setViewportSize(width = this.scale?.width ?? window.innerWidth, height = this.scale?.height ?? window.innerHeight) {
+    this.viewportWidth = Math.max(1, Math.floor(width || GAME_WIDTH));
+    this.viewportHeight = Math.max(1, Math.floor(height || GAME_HEIGHT));
+    this.worldWidth = Math.max(WORLD_WIDTH, this.viewportWidth);
+    this.worldHeight = Math.max(WORLD_HEIGHT, this.viewportHeight);
+  }
+
+  getViewportWidth() {
+    return this.viewportWidth ?? GAME_WIDTH;
+  }
+
+  getViewportHeight() {
+    return this.viewportHeight ?? GAME_HEIGHT;
+  }
+
+  configureWorldAndCameraBounds() {
+    const width = this.getViewportWidth();
+    const height = this.getViewportHeight();
+    this.physics.world.setBounds(0, -160, this.worldWidth, this.worldHeight + 240);
+    this.cameras.main.setBounds(
+      -width,
+      -height,
+      this.worldWidth + width * 2,
+      this.worldHeight + height * 2,
+    );
+  }
+
+  registerResizeHandler() {
+    this.scale.on('resize', this.handleGameResize, this);
+    this.windowResizeHandler = () => this.queueViewportResize();
+    window.addEventListener('resize', this.windowResizeHandler);
+    window.visualViewport?.addEventListener('resize', this.windowResizeHandler);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.scale.off('resize', this.handleGameResize, this);
+      window.removeEventListener('resize', this.windowResizeHandler);
+      window.visualViewport?.removeEventListener('resize', this.windowResizeHandler);
+      if (this.viewportResizeFrame) {
+        window.cancelAnimationFrame(this.viewportResizeFrame);
+      }
+    });
+  }
+
+  handleGameResize(gameSize) {
+    this.applyViewportResize(gameSize.width, gameSize.height);
+  }
+
+  queueViewportResize() {
+    if (this.viewportResizeFrame) {
+      window.cancelAnimationFrame(this.viewportResizeFrame);
+    }
+
+    this.viewportResizeFrame = window.requestAnimationFrame(() => {
+      this.viewportResizeFrame = null;
+      const { width, height } = this.getBrowserViewportSize();
+      if (this.scale.width !== width || this.scale.height !== height) {
+        this.scale.resize(width, height);
+      }
+      this.applyViewportResize(width, height);
+    });
+  }
+
+  getBrowserViewportSize() {
+    const visualViewport = window.visualViewport;
+    return {
+      width: Math.max(1, Math.floor(visualViewport?.width ?? window.innerWidth)),
+      height: Math.max(1, Math.floor(visualViewport?.height ?? window.innerHeight)),
+    };
+  }
+
+  applyViewportResize(width, height) {
+    this.setViewportSize(width, height);
+    this.configureWorldAndCameraBounds();
+    this.uiCamera?.setSize(this.getViewportWidth(), this.getViewportHeight());
+    this.positionHudObjects();
+    this.rebuildVisibleScreenSpaceOverlays();
+    this.updateCamera(1000);
+    this.updateUiLayer();
+    if (this.ui) {
+      this.drawHud(this.time.now);
+    }
+  }
+
+  rebuildVisibleScreenSpaceOverlays() {
+    if (!this.uiLayer) {
+      return;
+    }
+
+    const menuWasVisible = Boolean(this.menuContainer?.visible);
+    if (this.menuContainer) {
+      this.menuContainer.destroy();
+      this.createMenuOverlay();
+      this.menuContainer.setVisible(menuWasVisible);
+    }
+
+    if (this.matchOver && this.endOverlayState) {
+      this.showEndOverlay(this.endOverlayState.winnerText, this.endOverlayState.reason);
+    }
   }
 
   update(time, delta) {
@@ -766,23 +862,25 @@ class FightScene extends Phaser.Scene {
     const maxX = Math.max(...bounds.map((box) => box.right));
     const minY = Math.min(...bounds.map((box) => box.top));
     const maxY = Math.max(...bounds.map((box) => box.bottom));
-    const marginX = Phaser.Math.Clamp(GAME_WIDTH * 0.075, 70, 125);
-    const marginY = Phaser.Math.Clamp(GAME_HEIGHT * 0.11, 70, 135);
+    const viewportWidth = this.getViewportWidth();
+    const viewportHeight = this.getViewportHeight();
+    const marginX = Phaser.Math.Clamp(viewportWidth * 0.075, 70, 125);
+    const marginY = Phaser.Math.Clamp(viewportHeight * 0.11, 70, 135);
     const fitWidth = Math.max(1, maxX - minX);
     const fitHeight = Math.max(1, maxY - minY);
-    const usableWidth = Math.max(320, GAME_WIDTH - marginX * 2);
-    const usableHeight = Math.max(220, GAME_HEIGHT - marginY * 2);
+    const usableWidth = Math.max(260, viewportWidth - marginX * 2);
+    const usableHeight = Math.max(220, viewportHeight - marginY * 2);
     const targetZoom = Phaser.Math.Clamp(
       Math.min(usableWidth / fitWidth, usableHeight / fitHeight),
       0.4,
       1.45,
     );
-    const viewWidth = GAME_WIDTH / targetZoom;
-    const viewHeight = GAME_HEIGHT / targetZoom;
+    const viewWidth = viewportWidth / targetZoom;
+    const viewHeight = viewportHeight / targetZoom;
     const centerX = trackedPlayers.reduce((sum, player) => sum + player.sprite.x, 0) / trackedPlayers.length;
     const centerY = trackedPlayers.reduce((sum, player) => sum + player.sprite.y, 0) / trackedPlayers.length;
-    const originOffsetX = GAME_WIDTH * this.cameras.main.originX * (1 - 1 / targetZoom);
-    const originOffsetY = GAME_HEIGHT * this.cameras.main.originY * (1 - 1 / targetZoom);
+    const originOffsetX = viewportWidth * this.cameras.main.originX * (1 - 1 / targetZoom);
+    const originOffsetY = viewportHeight * this.cameras.main.originY * (1 - 1 / targetZoom);
     const targetScrollX = Math.round(centerX - viewWidth / 2 - originOffsetX);
     const targetScrollY = Math.round(centerY - viewHeight / 2 - originOffsetY);
     const lerp = Math.min(1, delta / 140);
@@ -802,7 +900,7 @@ class FightScene extends Phaser.Scene {
 
   createUiLayer() {
     this.uiLayer = this.add.container(0, 0).setDepth(10000);
-    this.uiCamera = this.cameras.add(0, 0, GAME_WIDTH, GAME_HEIGHT).setScroll(0, 0).setZoom(1);
+    this.uiCamera = this.cameras.add(0, 0, this.getViewportWidth(), this.getViewportHeight()).setScroll(0, 0).setZoom(1);
     this.cameras.main.ignore(this.uiLayer);
     this.syncUiCameraIgnore();
   }
@@ -812,9 +910,10 @@ class FightScene extends Phaser.Scene {
       return;
     }
 
+    this.syncMobileControlsVisibility();
     this.uiLayer.setScale(1);
     this.uiLayer.setPosition(0, 0);
-    this.uiCamera?.setScroll(0, 0).setZoom(1);
+    this.uiCamera?.setSize(this.getViewportWidth(), this.getViewportHeight()).setScroll(0, 0).setZoom(1);
     this.syncUiCameraIgnore();
   }
 
@@ -969,28 +1068,23 @@ class FightScene extends Phaser.Scene {
     }
 
     const root = document.createElement('div');
-    root.className = `mobile-controls${isMobileLike() ? ' is-visible' : ''}`;
+    root.className = 'mobile-controls';
     root.innerHTML = `
       <div class="mobile-dpad" aria-label="Movement controls">
-        <button class="mobile-control mobile-up" data-action="jump" aria-label="Jump">UP</button>
-        <button class="mobile-control mobile-left" data-action="left" aria-label="Move left">L</button>
-        <button class="mobile-control mobile-down" data-action="crouch" aria-label="Crouch">D</button>
-        <button class="mobile-control mobile-right" data-action="right" aria-label="Move right">R</button>
+        <button class="mobile-control mobile-left" data-action="left" aria-label="Move left">Left</button>
+        <button class="mobile-control mobile-down" data-action="crouch" aria-label="Crouch">Down</button>
+        <button class="mobile-control mobile-right" data-action="right" aria-label="Move right">Right</button>
       </div>
       <div class="mobile-actions" aria-label="Action controls">
+        <button class="mobile-control mobile-jump" data-action="jump" aria-label="Jump">Jump</button>
         <button class="mobile-control" data-action="melee" aria-label="Melee">M</button>
         <button class="mobile-control" data-action="shoot" aria-label="Shoot">Fire</button>
         <button class="mobile-control" data-action="grenade" aria-label="Grenade">Grenade</button>
         <button class="mobile-control" data-action="powerup" aria-label="Powerup">Power</button>
       </div>
-      <button class="mobile-fullscreen" type="button">Fullscreen</button>
-      <div class="pwa-install-tip" hidden>
-        iOS Safari: Share, Add to Home Screen, then open from the icon for the best landscape play.
-      </div>
     `;
     document.body.appendChild(root);
     this.mobileControlsEl = root;
-    this.pwaInstallTipEl = root.querySelector('.pwa-install-tip');
 
     const bindButton = (button) => {
       const action = button.dataset.action;
@@ -1020,37 +1114,18 @@ class FightScene extends Phaser.Scene {
       bindButton(button);
     }
 
-    root.querySelector('.mobile-fullscreen')?.addEventListener('click', (event) => {
-      event.preventDefault();
-      this.requestFullscreenOrShowInstallTip();
-    });
-
     root.addEventListener('contextmenu', (event) => event.preventDefault());
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => root.remove());
+    this.syncMobileControlsVisibility();
   }
 
-  requestFullscreenOrShowInstallTip() {
-    const target = document.documentElement;
-    const requestFullscreen = target.requestFullscreen || target.webkitRequestFullscreen;
-    if (requestFullscreen) {
-      requestFullscreen.call(target).catch?.(() => this.showPwaInstallTip());
+  syncMobileControlsVisibility() {
+    if (!this.mobileControlsEl) {
       return;
     }
 
-    this.showPwaInstallTip();
-  }
-
-  showPwaInstallTip() {
-    if (!this.pwaInstallTipEl) {
-      return;
-    }
-    this.pwaInstallTipEl.hidden = false;
-    window.clearTimeout(this.pwaInstallTipTimeout);
-    this.pwaInstallTipTimeout = window.setTimeout(() => {
-      if (this.pwaInstallTipEl) {
-        this.pwaInstallTipEl.hidden = true;
-      }
-    }, 7000);
+    const shouldShow = isMobileLike() && this.modeSelected && !this.matchPaused && !this.matchOver;
+    this.mobileControlsEl.classList.toggle('is-visible', shouldShow);
   }
 
   createPlayer(config) {
@@ -1175,7 +1250,7 @@ class FightScene extends Phaser.Scene {
     this.hintText.on('pointerdown', () => this.toggleMenu());
 
     this.timerText = this.add
-      .text(GAME_WIDTH / 2, 17, '', {
+      .text(0, 0, '', {
         fontFamily: UI_FONT,
         fontSize: '24px',
         color: '#ffffff',
@@ -1198,7 +1273,7 @@ class FightScene extends Phaser.Scene {
       .setDepth(51);
 
     this.p2StatusText = this.add
-      .text(GAME_WIDTH - 24, 47, '', {
+      .text(0, 47, '', {
         fontFamily: UI_FONT,
         fontSize: '12px',
         color: '#ffd7e0',
@@ -1211,7 +1286,7 @@ class FightScene extends Phaser.Scene {
       .setDepth(51);
 
     this.messageText = this.add
-      .text(GAME_WIDTH / 2, 92, '', {
+      .text(0, 92, '', {
         fontFamily: UI_FONT,
         fontSize: '24px',
         color: '#ffffff',
@@ -1230,17 +1305,39 @@ class FightScene extends Phaser.Scene {
       this.p2StatusText,
       this.messageText,
     ]);
+    this.positionHudObjects();
+  }
+
+  positionHudObjects() {
+    if (!this.timerText || !this.messageText || !this.p2StatusText || !this.hintText) {
+      return;
+    }
+
+    const width = this.getViewportWidth();
+    const compact = width < 620 || isMobileLike();
+    this.hintText.setVisible(!compact);
+    this.timerText.setPosition(width / 2, compact ? 86 : 17);
+    this.timerText.setFontSize(compact ? 20 : 24);
+    this.p2StatusText.setPosition(width - (compact ? 18 : 24), compact ? 50 : 47);
+    this.p1StatusText?.setPosition(compact ? 18 : 24, compact ? 50 : 47);
+    this.messageText.setPosition(width / 2, compact ? 120 : 92);
+    this.messageText.setFontSize(compact ? 20 : 24);
   }
 
   createMenuOverlay() {
     this.menuContainer = this.add.container(0, 0).setScrollFactor(0).setDepth(200).setVisible(false);
-    const panelY = GAME_HEIGHT / 2;
-    const shade = this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x090d14, 0.78).setOrigin(0);
-    const panel = this.add.rectangle(GAME_WIDTH / 2, panelY, 500, 455, 0x151e2b, 0.96).setStrokeStyle(2, 0x344257);
+    const viewportWidth = this.getViewportWidth();
+    const viewportHeight = this.getViewportHeight();
+    const centerX = viewportWidth / 2;
+    const panelY = viewportHeight / 2;
+    const panelWidth = Math.min(500, Math.max(300, viewportWidth - 32));
+    const panelHeight = Math.min(455, Math.max(360, viewportHeight - 32));
+    const shade = this.add.rectangle(0, 0, viewportWidth, viewportHeight, 0x090d14, 0.78).setOrigin(0);
+    const panel = this.add.rectangle(centerX, panelY, panelWidth, panelHeight, 0x151e2b, 0.96).setStrokeStyle(2, 0x344257);
     const title = this.add
-      .text(GAME_WIDTH / 2, panelY - 155, 'SUPERFIGHTERS', {
+      .text(centerX, panelY - 155, 'SUPERFIGHTERS', {
         fontFamily: UI_FONT,
-        fontSize: '34px',
+        fontSize: viewportWidth < 420 ? '27px' : '34px',
         color: '#ffffff',
         stroke: '#000000',
         strokeThickness: 2,
@@ -1248,7 +1345,7 @@ class FightScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     const subtitle = this.add
-      .text(GAME_WIDTH / 2, panelY - 117, 'Local multiplayer arena fight', {
+      .text(centerX, panelY - 117, 'Local multiplayer arena fight', {
         fontFamily: UI_FONT,
         fontSize: '14px',
         color: '#b7c2d2',
@@ -1256,19 +1353,19 @@ class FightScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.menuContainer.add([shade, panel, title, subtitle]);
-    this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY - 70, 'Resume', () => this.closeMenu()));
-    this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY - 22, 'Restart Match', () => this.restartMatch()));
-    this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY + 26, 'Online Lobby', () => this.openOnlineOverlay()));
-    this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY + 74, 'Debug / Tuning', () => {
+    this.menuContainer.add(this.createMenuButton(centerX, panelY - 70, 'Resume', () => this.closeMenu()));
+    this.menuContainer.add(this.createMenuButton(centerX, panelY - 22, 'Restart Match', () => this.restartMatch()));
+    this.menuContainer.add(this.createMenuButton(centerX, panelY + 26, 'Online Lobby', () => this.openOnlineOverlay()));
+    this.menuContainer.add(this.createMenuButton(centerX, panelY + 74, 'Debug / Tuning', () => {
       window.location.href = assetUrl('debug.html');
     }));
-    this.menuContainer.add(this.createMenuButton(GAME_WIDTH / 2, panelY + 122, 'Level Editor', () => {
+    this.menuContainer.add(this.createMenuButton(centerX, panelY + 122, 'Level Editor', () => {
       window.location.href = assetUrl('level-editor.html');
     }));
 
     const controls = this.add
       .text(
-        GAME_WIDTH / 2,
+        centerX,
         panelY + 172,
         'P1: WASD + 1 melee, 2 shoot, 3 grenade, 4 power\nP2: Arrows + M melee, , shoot, . grenade, / power\nHold shoot/grenade to aim. Release to fire/throw.',
         {
@@ -1277,6 +1374,7 @@ class FightScene extends Phaser.Scene {
           color: '#dbe7ff',
           align: 'center',
           lineSpacing: 5,
+          wordWrap: { width: panelWidth - 34 },
         },
       )
       .setOrigin(0.5);
@@ -1488,7 +1586,7 @@ class FightScene extends Phaser.Scene {
           <button class="online-start" type="button" hidden disabled>Start Game</button>
         </div>
         <p class="online-status">Offline</p>
-        <p class="online-mobile-note">On iPhone, open the invite link in Safari, Share, Add to Home Screen, then launch from the icon for landscape PWA play.</p>
+        <p class="online-mobile-note">On iPhone, open the invite link in Safari. For less browser chrome, Share, Add to Home Screen, then launch from the icon. Portrait play is supported.</p>
       </div>
     `;
     document.body.appendChild(overlay);
@@ -3090,30 +3188,37 @@ class FightScene extends Phaser.Scene {
   }
 
   showEndOverlay(winnerText, reason) {
+    this.endOverlayState = { winnerText, reason };
     this.endContainer?.destroy();
     this.endContainer = this.add.container(0, 0).setScrollFactor(0).setDepth(220);
-    const panelY = GAME_HEIGHT / 2;
-    const shade = this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x070b11, 0.82).setOrigin(0);
-    const panel = this.add.rectangle(GAME_WIDTH / 2, panelY, 530, 260, 0x151e2b, 0.96).setStrokeStyle(2, 0xffd166);
+    const viewportWidth = this.getViewportWidth();
+    const viewportHeight = this.getViewportHeight();
+    const centerX = viewportWidth / 2;
+    const panelY = viewportHeight / 2;
+    const panelWidth = Math.min(530, Math.max(300, viewportWidth - 32));
+    const panelHeight = Math.min(260, Math.max(230, viewportHeight - 32));
+    const shade = this.add.rectangle(0, 0, viewportWidth, viewportHeight, 0x070b11, 0.82).setOrigin(0);
+    const panel = this.add.rectangle(centerX, panelY, panelWidth, panelHeight, 0x151e2b, 0.96).setStrokeStyle(2, 0xffd166);
     const title = this.add
-      .text(GAME_WIDTH / 2, panelY - 62, winnerText, {
+      .text(centerX, panelY - 62, winnerText, {
         fontFamily: UI_FONT,
-        fontSize: '34px',
+        fontSize: viewportWidth < 420 ? '27px' : '34px',
         color: '#ffffff',
         stroke: '#000000',
         strokeThickness: 2,
       })
       .setOrigin(0.5);
     const body = this.add
-      .text(GAME_WIDTH / 2, panelY - 10, `${reason}\nEnter/Space: rematch   Esc: menu`, {
+      .text(centerX, panelY - 10, `${reason}\nEnter/Space: rematch   Esc: menu`, {
         fontFamily: UI_FONT,
         fontSize: '16px',
         color: '#dbe7ff',
         align: 'center',
         lineSpacing: 8,
+        wordWrap: { width: panelWidth - 34 },
       })
       .setOrigin(0.5);
-    const button = this.createMenuButton(GAME_WIDTH / 2, panelY + 78, 'Rematch', () => this.restartMatch());
+    const button = this.createMenuButton(centerX, panelY + 78, 'Rematch', () => this.restartMatch());
     this.endContainer.add([shade, panel, title, body, button]);
     this.addToUiLayer(this.endContainer);
     this.updateUiLayer();
@@ -3452,12 +3557,26 @@ class FightScene extends Phaser.Scene {
   }
 
   drawHud(time) {
+    this.positionHudObjects();
+    const viewportWidth = this.getViewportWidth();
+    const compact = viewportWidth < 620 || isMobileLike();
+    const hudWidth = compact ? Math.max(132, Math.min(178, Math.floor((viewportWidth - 54) / 2))) : 286;
+    const hudY = compact ? 28 : 25;
+    const hudLeftX = compact ? 18 : 24;
+    const hudRightX = compact ? viewportWidth - hudWidth - 18 : viewportWidth - 310;
+    const timerWidth = compact ? 88 : 104;
+    const timerHeight = compact ? 30 : 34;
+    const timerY = compact ? 84 : 9;
+
     this.ui.clear();
+    if (!compact) {
+      this.ui.fillStyle(0x08101b, 0.62);
+      this.ui.fillRoundedRect(8, 5, 274, 19, 4);
+    }
     this.ui.fillStyle(0x08101b, 0.62);
-    this.ui.fillRoundedRect(8, 5, 274, 19, 4);
-    this.ui.fillRoundedRect(GAME_WIDTH / 2 - 52, 9, 104, 34, 4);
-    this.drawPlayerHud(24, 25, 286, this.p1, false, time);
-    this.drawPlayerHud(GAME_WIDTH - 310, 25, 286, this.p2, true, time);
+    this.ui.fillRoundedRect(viewportWidth / 2 - timerWidth / 2, timerY, timerWidth, timerHeight, 4);
+    this.drawPlayerHud(hudLeftX, hudY, hudWidth, this.p1, false, time);
+    this.drawPlayerHud(hudRightX, hudY, hudWidth, this.p2, true, time);
 
     const secondsLeft = Math.max(0, Math.ceil((this.roundEndsAt - time) / 1000));
     const minutes = Math.floor(secondsLeft / 60);
@@ -4094,7 +4213,8 @@ loadUiFont().finally(() => {
     pixelArt: true,
     roundPixels: true,
     scale: {
-      mode: Phaser.Scale.NONE,
+      mode: Phaser.Scale.RESIZE,
+      autoRound: true,
     },
     physics: {
       default: 'arcade',

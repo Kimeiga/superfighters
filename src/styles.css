@@ -12,21 +12,31 @@ html,
 body {
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 100%;
   margin: 0;
   overflow: hidden;
   background: #171923;
   font-family: "FusionPixel12", monospace;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 #game {
-  width: 100vw;
-  height: 100vh;
+  width: 100dvw;
+  height: 100dvh;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 canvas {
   display: block;
-  width: 100vw;
-  height: 100vh;
+  width: 100% !important;
+  height: 100% !important;
   image-rendering: crisp-edges;
   image-rendering: pixelated;
 }
@@ -54,32 +64,27 @@ canvas {
 .mobile-dpad,
 .mobile-actions {
   position: absolute;
-  bottom: max(18px, env(safe-area-inset-bottom));
+  bottom: max(14px, env(safe-area-inset-bottom));
   display: grid;
-  gap: 8px;
+  gap: 7px;
   pointer-events: auto;
 }
 
 .mobile-dpad {
-  left: max(18px, env(safe-area-inset-left));
-  grid-template-columns: repeat(3, 58px);
-  grid-template-rows: repeat(3, 58px);
+  left: max(12px, env(safe-area-inset-left));
+  grid-template-columns: repeat(3, clamp(46px, 13vw, 54px));
+  grid-template-rows: repeat(2, clamp(46px, 13vw, 54px));
 }
 
 .mobile-actions {
-  right: max(18px, env(safe-area-inset-right));
-  grid-template-columns: repeat(2, 82px);
-  grid-template-rows: repeat(2, 58px);
-}
-
-.mobile-up {
-  grid-column: 2;
-  grid-row: 1;
+  right: max(12px, env(safe-area-inset-right));
+  grid-template-columns: repeat(2, clamp(62px, 17vw, 76px));
+  grid-template-rows: repeat(3, clamp(48px, 13vw, 56px));
 }
 
 .mobile-left {
   grid-column: 1;
-  grid-row: 2;
+  grid-row: 1;
 }
 
 .mobile-down {
@@ -89,18 +94,28 @@ canvas {
 
 .mobile-right {
   grid-column: 3;
-  grid-row: 2;
+  grid-row: 1;
+}
+
+.mobile-jump {
+  grid-column: 1 / -1;
+  grid-row: 1;
 }
 
 .mobile-control,
-.mobile-fullscreen,
 .online-panel button,
-.online-panel input {
+.online-panel input,
+.start-panel button {
   font: inherit;
 }
 
-.mobile-control,
-.mobile-fullscreen {
+input,
+select,
+textarea {
+  font-size: 16px;
+}
+
+.mobile-control {
   border: 2px solid rgba(255, 255, 255, 0.42);
   background: rgba(10, 16, 26, 0.58);
   color: #ffffff;
@@ -111,38 +126,15 @@ canvas {
 }
 
 .mobile-control {
-  min-width: 58px;
-  min-height: 58px;
+  min-width: 0;
+  min-height: clamp(48px, 13vw, 56px);
+  padding: 0 8px;
+  font-size: 13px;
 }
 
 .mobile-control.is-active {
   background: rgba(94, 168, 255, 0.72);
   border-color: rgba(255, 255, 255, 0.82);
-}
-
-.mobile-fullscreen {
-  position: absolute;
-  top: max(12px, env(safe-area-inset-top));
-  right: max(12px, env(safe-area-inset-right));
-  min-height: 34px;
-  padding: 0 12px;
-  pointer-events: auto;
-}
-
-.pwa-install-tip {
-  position: absolute;
-  left: 50%;
-  bottom: max(18px, env(safe-area-inset-bottom));
-  width: min(420px, calc(100vw - 32px));
-  padding: 10px 12px;
-  transform: translateX(-50%);
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  border-radius: 8px;
-  background: rgba(8, 12, 19, 0.92);
-  color: #ffffff;
-  font-size: 12px;
-  line-height: 1.4;
-  pointer-events: none;
 }
 
 .start-overlay,
@@ -151,7 +143,16 @@ canvas {
   inset: 0;
   display: grid;
   place-items: center;
-  padding: 20px;
+  width: 100dvw;
+  height: 100dvh;
+  max-width: 100%;
+  padding:
+    max(12px, env(safe-area-inset-top))
+    max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
+  overflow-x: hidden;
+  overflow-y: auto;
   background: rgba(6, 10, 18, 0.74);
   color: #eaf5ff;
 }
@@ -171,16 +172,19 @@ canvas {
 
 .start-panel,
 .online-panel {
-  width: min(620px, calc(100vw - 32px));
+  width: min(620px, 100%);
+  max-width: 100%;
+  max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  overflow: auto;
   border: 2px solid #344257;
   border-radius: 8px;
   background: #151e2b;
-  padding: 22px;
+  padding: clamp(16px, 4.8vw, 22px);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
 }
 
 .start-panel {
-  width: min(520px, calc(100vw - 32px));
+  width: min(520px, 100%);
   display: grid;
   gap: 12px;
   text-align: center;
@@ -188,17 +192,19 @@ canvas {
 
 .start-panel h1 {
   margin: 0;
-  font-size: 38px;
+  font-size: clamp(28px, 9vw, 38px);
+  line-height: 1.05;
 }
 
 .start-panel p {
   margin: 0 0 8px;
   color: #b7c2d2;
-  font-size: 14px;
+  font-size: clamp(13px, 3.6vw, 14px);
 }
 
 .start-panel button {
-  min-height: 42px;
+  min-height: 46px;
+  font-size: 16px;
   border: 1px solid #5ea8ff;
   border-radius: 6px;
   background: #223149;
@@ -212,6 +218,7 @@ canvas {
 
 .start-links {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
   gap: 14px;
   margin-top: 6px;
@@ -225,7 +232,7 @@ canvas {
 
 .online-panel h2 {
   margin: 0 0 12px;
-  font-size: 28px;
+  font-size: clamp(24px, 7vw, 28px);
 }
 
 .online-copy,
@@ -256,7 +263,8 @@ canvas {
 
 .online-field input,
 .online-code-field input {
-  min-height: 36px;
+  min-height: 42px;
+  font-size: 16px;
   border: 1px solid #40516a;
   border-radius: 6px;
   background: #0f1724;
@@ -273,7 +281,8 @@ canvas {
 }
 
 .online-panel button {
-  min-height: 38px;
+  min-height: 42px;
+  font-size: 16px;
   border: 1px solid #5ea8ff;
   border-radius: 6px;
   background: #223149;
@@ -300,6 +309,7 @@ canvas {
 
 .online-lobby-result {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   align-items: center;
   margin-bottom: 14px;
@@ -316,12 +326,6 @@ canvas {
   text-align: center;
 }
 
-@media (hover: hover) and (pointer: fine) {
-  .mobile-controls.is-visible {
-    display: none;
-  }
-}
-
 @media (max-width: 760px) {
   .online-actions-row {
     grid-template-columns: 1fr;
@@ -329,5 +333,31 @@ canvas {
 
   .online-panel {
     padding: 18px;
+  }
+}
+
+@media (max-width: 520px) {
+  .mobile-dpad {
+    left: max(10px, env(safe-area-inset-left));
+    grid-template-columns: repeat(3, clamp(42px, 12.6vw, 50px));
+    grid-template-rows: repeat(2, clamp(42px, 12.6vw, 50px));
+  }
+
+  .mobile-actions {
+    right: max(10px, env(safe-area-inset-right));
+    grid-template-columns: repeat(2, clamp(58px, 16.5vw, 68px));
+    grid-template-rows: repeat(3, clamp(46px, 12.8vw, 52px));
+  }
+
+  .mobile-control {
+    min-height: clamp(46px, 12.8vw, 52px);
+    padding: 0 6px;
+    font-size: 12px;
+  }
+
+  .start-panel,
+  .online-panel {
+    border-width: 1px;
+    border-radius: 6px;
   }
 }
