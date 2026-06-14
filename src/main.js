@@ -20,6 +20,7 @@ const PLAYER_MAX_HEALTH = 100;
 const DROP_DURATION = 310;
 const AIM_HALF_ARC = Math.PI / 2;
 const INPUT_ACTIONS = ['left', 'right', 'jump', 'crouch', 'melee', 'shoot', 'grenade', 'powerup', 'aimUp', 'aimDown'];
+const GAME_DEFAULT_CAPTURE_CODES = new Set(['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'Slash']);
 const ONLINE_INPUT_SEND_MS = 50;
 const ONLINE_SNAPSHOT_SEND_MS = 90;
 const CHARACTER_SOURCE_KEY = 'empress-source';
@@ -1026,21 +1027,15 @@ class FightScene extends Phaser.Scene {
       space: K.SPACE,
     });
 
-    this.input.keyboard.addCapture([
-      K.W,
-      K.A,
-      K.S,
-      K.D,
-      K.UP,
-      K.LEFT,
-      K.DOWN,
-      K.RIGHT,
-      K.M,
-      K.COMMA,
-      K.PERIOD,
-      191,
-      K.SPACE,
-    ]);
+    this.gameKeyPreventDefaultHandler = (event) => {
+      if (!isTypingIntoDomField() && GAME_DEFAULT_CAPTURE_CODES.has(event.code)) {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener('keydown', this.gameKeyPreventDefaultHandler, { capture: true });
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      window.removeEventListener('keydown', this.gameKeyPreventDefaultHandler, { capture: true });
+    });
 
     this.input.on('pointerdown', (pointer) => this.handleUiPointerDown(pointer));
   }
