@@ -1260,7 +1260,7 @@ class FightScene extends Phaser.Scene {
     this.physics.add.collider(this.bullets, this.glassWindows, this.handleBulletWindow, undefined, this);
     this.physics.add.collider(this.grenades, this.platforms);
     this.physics.add.collider(this.grenades, this.glassWindows, this.handleGrenadeWindow, undefined, this);
-    this.physics.add.overlap(this.bullets, [this.p1.sprite, this.p2.sprite], this.handleBulletHit, undefined, this);
+    this.physics.add.overlap(this.bullets, [this.p1.sprite, this.p2.sprite], this.handleBulletHit, this.bulletPlayerProcess, this);
   }
 
   createHud() {
@@ -2726,10 +2726,10 @@ class FightScene extends Phaser.Scene {
 
   fireWeaponBurst(player, weapon) {
     const baseAngle = player.aimAngle;
-    const reticle = this.getAimReticlePosition(player, baseAngle);
+    const origin = this.getBulletOrigin(player);
     this.spawnMuzzleFlash(
-      reticle.x,
-      reticle.y,
+      origin.x,
+      origin.y,
       baseAngle,
       weapon.bulletColor,
     );
@@ -2737,8 +2737,12 @@ class FightScene extends Phaser.Scene {
     for (let pellet = 0; pellet < weapon.pellets; pellet += 1) {
       const spread = Phaser.Math.DegToRad(Phaser.Math.FloatBetween(-weapon.spreadDeg, weapon.spreadDeg));
       const angle = baseAngle + spread;
-      this.spawnBullet(player, weapon, angle, reticle.x, reticle.y);
+      this.spawnBullet(player, weapon, angle, origin.x, origin.y);
     }
+  }
+
+  getBulletOrigin(player) {
+    return this.getAimPivot(player);
   }
 
   spawnBullet(player, weapon, angle, originX, originY) {
@@ -2993,6 +2997,13 @@ class FightScene extends Phaser.Scene {
     this.spawnHitEffect(bullet.x, bullet.y, bullet.getData('hitColor') ?? 0xfff3a3);
 
     bullet.destroy();
+  }
+
+  bulletPlayerProcess(objectA, objectB) {
+    const bullet = this.getCollisionObjectFromGroup(this.bullets, objectA, objectB, 'weaponId');
+    const sprite = bullet === objectA ? objectB : objectA;
+    const player = this.playerBySprite.get(sprite);
+    return Boolean(bullet?.active && player && bullet.getData('owner') !== player.id);
   }
 
   getCollisionObjectFromGroup(group, objectA, objectB, dataKey = null) {
