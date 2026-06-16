@@ -1,3 +1,4 @@
+import { DEFAULT_GAMEPLAY_CONFIG } from './gameplayConfig.js';
 import {
   TILE_DEFS,
   TILE_INDEX,
@@ -27,21 +28,129 @@ const exportButton = document.querySelector('#exportLevelButton');
 const importInput = document.querySelector('#importLevelInput');
 const resetSeedButton = document.querySelector('#resetSeedButton');
 const clearButton = document.querySelector('#clearLevelButton');
+const playtestButton = document.querySelector('#playtestLevelButton');
+const modeButtons = [...document.querySelectorAll('[data-tool-mode]')];
+const prefabSelect = document.querySelector('#prefabSelect');
+const pickupKindInput = document.querySelector('#pickupKindInput');
+const pickupIdInput = document.querySelector('#pickupIdInput');
+const colliderPreviewInput = document.querySelector('#colliderPreviewInput');
+const copySelectionButton = document.querySelector('#copySelectionButton');
+const cutSelectionButton = document.querySelector('#cutSelectionButton');
+const pasteSelectionButton = document.querySelector('#pasteSelectionButton');
+const deleteSelectionButton = document.querySelector('#deleteSelectionButton');
+const undoButton = document.querySelector('#undoButton');
+const redoButton = document.querySelector('#redoButton');
+const levelWidthInput = document.querySelector('#levelWidthInput');
+const levelHeightInput = document.querySelector('#levelHeightInput');
+const resizeLevelButton = document.querySelector('#resizeLevelButton');
+const cropLevelButton = document.querySelector('#cropLevelButton');
+const validationList = document.querySelector('#validationList');
 const ctx = canvas.getContext('2d');
 
-let level = getSavedLevel() ?? createCurrentArenaSeed();
+const HISTORY_LIMIT = 80;
+const PREFABS = {
+  platform: {
+    label: 'Small Platform',
+    rows: [
+      'PPPPPPPPPP',
+    ],
+    legend: { P: 'platform' },
+    anchorX: 5,
+    anchorY: 0,
+  },
+  ladder: {
+    label: 'Ladder Shaft',
+    rows: [
+      ' L ',
+      ' L ',
+      ' L ',
+      ' L ',
+      ' L ',
+      ' L ',
+    ],
+    legend: { L: 'ladder' },
+    anchorX: 1,
+    anchorY: 5,
+  },
+  windowWall: {
+    label: 'Window Wall',
+    rows: [
+      'BBBBBBBB',
+      'BGGGBBBB',
+      'BGGGBBBB',
+      'BBBBBGGG',
+      'BBBBBGGG',
+      'BBBBBBBB',
+    ],
+    legend: { B: 'backdrop', G: 'glass' },
+    anchorX: 4,
+    anchorY: 5,
+  },
+  building: {
+    label: 'Building Chunk',
+    rows: [
+      'BBBBBBBBBBBB',
+      'BGGGBBBBGGGB',
+      'BGGGBBBBGGGB',
+      'BBBBBBBBBBBB',
+      'PBBBBBBBBBBP',
+      'BBBBBBBBBBBB',
+      'BGGGBLLBGGGB',
+      'BGGGBLLBGGGB',
+      'SSSSSSSSSSSS',
+      'SSSSSSSSSSSS',
+    ],
+    legend: { S: 'solid', P: 'platform', B: 'backdrop', G: 'glass', L: 'ladder' },
+    anchorX: 6,
+    anchorY: 9,
+  },
+  pickupCluster: {
+    label: 'Pickup Cluster',
+    rows: [
+      'U U',
+      ' U ',
+    ],
+    legend: { U: 'pickup' },
+    anchorX: 1,
+    anchorY: 1,
+  },
+  spawnPair: {
+    label: 'Spawn Pair',
+    rows: [
+      '1    2',
+    ],
+    legend: { 1: 'p1', 2: 'p2' },
+    anchorX: 2,
+    anchorY: 0,
+  },
+};
+
+let level = normalizeEditorLevel(getSavedLevel() ?? createCurrentArenaSeed());
 let selectedTile = 'solid';
+let toolMode = 'brush';
 let brushSize = 1;
 let camera = { x: 0, y: 0, zoom: 1 };
 let canvasSize = { width: 1, height: 1, dpr: 1 };
 let hoverTile = null;
 let drawing = false;
 let panning = false;
+let selecting = false;
+let shapeStart = null;
+let shapePreview = null;
+let selectionStart = null;
+let selectionRect = null;
+let movingSelection = null;
+let clipboard = null;
+let activeStroke = false;
 let lastPointer = { x: 0, y: 0 };
 let spaceDown = false;
 let fittedOnce = false;
+let showColliderPreview = false;
+let history = [];
+let redoStack = [];
 
 buildPalette();
+buildPickupOptions();
 resizeCanvas();
 fitToLevel();
 updateUi();
@@ -56,9 +165,69 @@ window.addEventListener('resize', () => {
 });
 
 window.addEventListener('keydown', (event) => {
+  if (isTypingIntoFormField()) {
+    return;
+  }
+
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+    event.preventDefault();
+    if (event.shiftKey) {
+      redo();
+    } else {
+      undo();
+    }
+    return;
+  }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'y') {
+    event.preventDefault();
+    redo();
+    return;
+  }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault();
+    saveLevel(level);
+    setStatus('Saved to this browser.');
+    return;
+  }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c') {
+    event.preventDefault();
+    copySelection();
+    return;
+  }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'x') {
+    event.preventDefault();
+    cutSelection();
+    return;
+  }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v') {
+    event.preventDefault();
+    setToolMode('paste');
+    return;
+  }
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    event.preventDefault();
+    deleteSelection();
+    return;
+  }
   if (event.code === 'Space') {
     spaceDown = true;
     event.preventDefault();
+    return;
+  }
+
+  const keyTools = {
+    b: 'brush',
+    e: 'erase',
+    r: 'rect',
+    l: 'line',
+    f: 'fill',
+    s: 'select',
+    t: 'stamp',
+    v: 'paste',
+  };
+  const nextMode = keyTools[event.key.toLowerCase()];
+  if (nextMode) {
+    setToolMode(nextMode);
   }
 });
 
@@ -72,20 +241,45 @@ canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 canvas.addEventListener('pointerdown', (event) => {
   canvas.setPointerCapture(event.pointerId);
   lastPointer = { x: event.clientX, y: event.clientY };
+  const tile = pointerToTile(event);
+  hoverTile = tile.inBounds ? tile : null;
 
   if (event.button === 1 || spaceDown) {
     panning = true;
     return;
   }
 
-  drawing = true;
-  paintAtPointer(event, event.button === 2 ? 'empty' : selectedTile);
+  if (!tile.inBounds) {
+    return;
+  }
+
+  if (toolMode === 'select') {
+    startSelectionPointer(tile);
+  } else if (toolMode === 'rect' || toolMode === 'line') {
+    shapeStart = tile;
+    shapePreview = { mode: toolMode, from: tile, to: tile };
+  } else if (toolMode === 'fill') {
+    pushHistory('Fill');
+    floodFill(tile.x, tile.y, selectedTile);
+    updateUi('Filled area.');
+  } else if (toolMode === 'stamp') {
+    pushHistory('Stamp');
+    placePrefab(tile.x, tile.y, prefabSelect.value);
+    updateUi(`Placed ${PREFABS[prefabSelect.value]?.label ?? 'prefab'}.`);
+  } else if (toolMode === 'paste') {
+    pasteClipboardAt(tile.x, tile.y);
+  } else {
+    drawing = true;
+    beginStroke();
+    paintAtTile(tile, event.button === 2 || toolMode === 'erase' ? 'empty' : selectedTile);
+  }
+  draw();
 });
 
 canvas.addEventListener('pointermove', (event) => {
   const tile = pointerToTile(event);
   hoverTile = tile.inBounds ? tile : null;
-  cursorText.textContent = hoverTile ? `${hoverTile.x}, ${hoverTile.y}` : 'outside';
+  updateCursorText();
 
   if (panning) {
     camera.x += event.clientX - lastPointer.x;
@@ -95,21 +289,74 @@ canvas.addEventListener('pointermove', (event) => {
     return;
   }
 
-  if (drawing) {
-    paintAtPointer(event, event.buttons === 2 ? 'empty' : selectedTile);
-  } else {
+  if (movingSelection && tile.inBounds) {
+    movingSelection.targetX = clamp(tile.x - movingSelection.offsetX, 0, level.width - movingSelection.buffer.width);
+    movingSelection.targetY = clamp(tile.y - movingSelection.offsetY, 0, level.height - movingSelection.buffer.height);
     draw();
+    return;
   }
+
+  if (selecting && tile.inBounds) {
+    selectionRect = makeRect(selectionStart.x, selectionStart.y, tile.x, tile.y);
+    updateUi();
+    draw();
+    return;
+  }
+
+  if (shapePreview && tile.inBounds) {
+    shapePreview.to = tile;
+    draw();
+    return;
+  }
+
+  if (drawing && tile.inBounds) {
+    paintAtTile(tile, event.buttons === 2 || toolMode === 'erase' ? 'empty' : selectedTile);
+    updateUi();
+    draw();
+    return;
+  }
+
+  draw();
 });
 
 canvas.addEventListener('pointerup', () => {
+  if (movingSelection) {
+    pasteBufferAt(movingSelection.buffer, movingSelection.targetX, movingSelection.targetY);
+    selectionRect = {
+      x: movingSelection.targetX,
+      y: movingSelection.targetY,
+      width: movingSelection.buffer.width,
+      height: movingSelection.buffer.height,
+    };
+    movingSelection = null;
+    updateUi('Moved selection.');
+  }
+
+  if (shapePreview) {
+    pushHistory(shapePreview.mode === 'rect' ? 'Rectangle' : 'Line');
+    if (shapePreview.mode === 'rect') {
+      const rect = makeRect(shapePreview.from.x, shapePreview.from.y, shapePreview.to.x, shapePreview.to.y);
+      fillTileRect(rect, selectedTile);
+    } else {
+      paintLine(shapePreview.from.x, shapePreview.from.y, shapePreview.to.x, shapePreview.to.y, selectedTile);
+    }
+    shapeStart = null;
+    shapePreview = null;
+    updateUi('Applied shape.');
+  }
+
   drawing = false;
+  activeStroke = false;
+  selecting = false;
   panning = false;
+  draw();
 });
 
 canvas.addEventListener('pointerleave', () => {
   hoverTile = null;
   drawing = false;
+  activeStroke = false;
+  selecting = false;
   panning = false;
   draw();
 });
@@ -152,6 +399,11 @@ saveButton.addEventListener('click', () => {
   setStatus('Saved to this browser.');
 });
 
+playtestButton.addEventListener('click', () => {
+  saveLevel(level);
+  window.location.href = './?playtestLevel=1';
+});
+
 exportButton.addEventListener('click', () => {
   const json = JSON.stringify(serializeLevel(level), null, 2);
   const blob = new Blob([json], { type: 'application/json' });
@@ -172,29 +424,72 @@ importInput.addEventListener('change', async () => {
   }
 
   try {
-    const parsed = JSON.parse(await file.text());
-    level = normalizeLevel(parsed);
+    pushHistory('Import');
+    level = normalizeEditorLevel(JSON.parse(await file.text()));
+    selectionRect = null;
     fitToLevel();
-    updateUi();
-    setStatus(`Imported ${level.name}.`);
+    updateUi(`Imported ${level.name}.`);
   } catch {
     setStatus('Import failed.');
   }
 });
 
 resetSeedButton.addEventListener('click', () => {
-  level = createCurrentArenaSeed();
+  pushHistory('Reset Seed');
+  level = normalizeEditorLevel(createCurrentArenaSeed());
   clearSavedLevel();
+  selectionRect = null;
   fitToLevel();
-  updateUi();
-  setStatus('Reset to current arena seed.');
+  updateUi('Reset to current arena seed.');
 });
 
 clearButton.addEventListener('click', () => {
-  level = createEmptyLevel('Blank Arena');
+  pushHistory('Clear');
+  level = normalizeEditorLevel(createEmptyLevel('Blank Arena'));
+  selectionRect = null;
   fitToLevel();
-  updateUi();
-  setStatus('Cleared editor canvas.');
+  updateUi('Cleared editor canvas.');
+});
+
+for (const button of modeButtons) {
+  button.addEventListener('click', () => setToolMode(button.dataset.toolMode));
+}
+
+pickupKindInput.addEventListener('change', () => {
+  buildPickupOptions();
+  setStatus('Pickup paint settings updated.');
+});
+
+pickupIdInput.addEventListener('change', () => {
+  setStatus('Pickup paint settings updated.');
+});
+
+colliderPreviewInput.addEventListener('change', () => {
+  showColliderPreview = colliderPreviewInput.checked;
+  draw();
+});
+
+copySelectionButton.addEventListener('click', copySelection);
+cutSelectionButton.addEventListener('click', cutSelection);
+pasteSelectionButton.addEventListener('click', () => setToolMode('paste'));
+deleteSelectionButton.addEventListener('click', deleteSelection);
+undoButton.addEventListener('click', undo);
+redoButton.addEventListener('click', redo);
+
+resizeLevelButton.addEventListener('click', () => {
+  const width = clamp(Number.parseInt(levelWidthInput.value, 10) || level.width, 8, 512);
+  const height = clamp(Number.parseInt(levelHeightInput.value, 10) || level.height, 8, 512);
+  pushHistory('Resize');
+  resizeLevel(width, height);
+  fitToLevel();
+  updateUi(`Resized to ${width}x${height}.`);
+});
+
+cropLevelButton.addEventListener('click', () => {
+  pushHistory('Crop');
+  cropEmptySpace();
+  fitToLevel();
+  updateUi('Cropped empty space.');
 });
 
 function buildPalette() {
@@ -220,39 +515,126 @@ function buildPalette() {
   }
 }
 
+function buildPickupOptions() {
+  const kind = pickupKindInput.value;
+  pickupIdInput.innerHTML = '';
+  addOption(pickupIdInput, 'random', 'Random');
+  pickupIdInput.disabled = kind === 'random' || kind === 'grenade';
+
+  if (kind === 'weapon') {
+    for (const [id, weapon] of Object.entries(DEFAULT_GAMEPLAY_CONFIG.weapons)) {
+      addOption(pickupIdInput, id, weapon.label);
+    }
+  } else if (kind === 'powerup') {
+    for (const [id, powerup] of Object.entries(DEFAULT_GAMEPLAY_CONFIG.powerups)) {
+      addOption(pickupIdInput, id, powerup.label);
+    }
+  }
+}
+
+function addOption(select, value, label) {
+  const option = document.createElement('option');
+  option.value = value;
+  option.textContent = label;
+  select.append(option);
+}
+
 function selectTile(tileId) {
   selectedTile = tileId;
   for (const button of palette.querySelectorAll('.tile-button')) {
     button.classList.toggle('selected', button.dataset.tile === selectedTile);
   }
-  selectionText.textContent = TILE_DEFS[TILE_INDEX[selectedTile]].label;
+  updateUi();
 }
 
-function paintAtPointer(event, tileId) {
-  const tile = pointerToTile(event);
-  if (!tile.inBounds) {
-    return;
+function setToolMode(mode) {
+  toolMode = mode;
+  for (const button of modeButtons) {
+    button.classList.toggle('selected', button.dataset.toolMode === toolMode);
   }
-
-  paintTile(tile.x, tile.y, tileId);
-  updateUi();
+  setStatus(`Tool: ${mode}.`);
   draw();
 }
 
-function paintTile(tileX, tileY, tileId) {
-  if (tileId === 'p1' || tileId === 'p2') {
-    clearTileType(tileId);
-    setTile(level, tileX, tileY, tileId);
+function startSelectionPointer(tile) {
+  if (selectionRect && isTileInRect(tile.x, tile.y, selectionRect)) {
+    pushHistory('Move Selection');
+    const buffer = copyRectBuffer(selectionRect);
+    clearTileRect(selectionRect);
+    movingSelection = {
+      buffer,
+      offsetX: tile.x - selectionRect.x,
+      offsetY: tile.y - selectionRect.y,
+      targetX: selectionRect.x,
+      targetY: selectionRect.y,
+    };
     return;
   }
 
+  selecting = true;
+  selectionStart = tile;
+  selectionRect = { x: tile.x, y: tile.y, width: 1, height: 1 };
+}
+
+function beginStroke() {
+  if (activeStroke) {
+    return;
+  }
+  activeStroke = true;
+  pushHistory('Brush');
+}
+
+function paintAtTile(tile, tileId) {
   const radius = Math.floor((brushSize - 1) / 2);
   const extra = brushSize % 2 === 0 ? 1 : 0;
-  for (let y = tileY - radius; y <= tileY + radius + extra; y += 1) {
-    for (let x = tileX - radius; x <= tileX + radius + extra; x += 1) {
-      setTile(level, x, y, tileId);
+  for (let y = tile.y - radius; y <= tile.y + radius + extra; y += 1) {
+    for (let x = tile.x - radius; x <= tile.x + radius + extra; x += 1) {
+      setEditorTile(x, y, tileId);
     }
   }
+}
+
+function setEditorTile(x, y, tileId, options = {}) {
+  if (x < 0 || y < 0 || x >= level.width || y >= level.height) {
+    return;
+  }
+
+  if (tileId === 'p1' || tileId === 'p2') {
+    clearTileType(tileId);
+  }
+
+  setTile(level, x, y, tileId);
+  if (tileId === 'pickup') {
+    setPickupSpec(x, y, options.pickupSpec ?? getCurrentPickupSpec());
+  } else {
+    removePickupSpec(x, y);
+  }
+}
+
+function getCurrentPickupSpec() {
+  const kind = pickupKindInput.value;
+  return {
+    kind,
+    id: kind === 'grenade' || kind === 'random' ? 'random' : pickupIdInput.value,
+  };
+}
+
+function setPickupSpec(x, y, spec) {
+  removePickupSpec(x, y);
+  level.pickupSpecs.push({
+    x,
+    y,
+    kind: ['random', 'weapon', 'grenade', 'powerup'].includes(spec.kind) ? spec.kind : 'random',
+    id: spec.id || 'random',
+  });
+}
+
+function removePickupSpec(x, y) {
+  level.pickupSpecs = level.pickupSpecs.filter((spec) => spec.x !== x || spec.y !== y);
+}
+
+function getPickupSpec(x, y) {
+  return level.pickupSpecs.find((spec) => spec.x === x && spec.y === y) ?? { x, y, kind: 'random', id: 'random' };
 }
 
 function clearTileType(tileId) {
@@ -262,6 +644,265 @@ function clearTileType(tileId) {
       level.grid[i] = TILE_INDEX.empty;
     }
   }
+}
+
+function fillTileRect(rect, tileId) {
+  for (let y = rect.y; y < rect.y + rect.height; y += 1) {
+    for (let x = rect.x; x < rect.x + rect.width; x += 1) {
+      setEditorTile(x, y, tileId);
+    }
+  }
+}
+
+function clearTileRect(rect) {
+  for (let y = rect.y; y < rect.y + rect.height; y += 1) {
+    for (let x = rect.x; x < rect.x + rect.width; x += 1) {
+      setEditorTile(x, y, 'empty');
+    }
+  }
+}
+
+function paintLine(x0, y0, x1, y1, tileId) {
+  const dx = Math.abs(x1 - x0);
+  const dy = -Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1;
+  const sy = y0 < y1 ? 1 : -1;
+  let error = dx + dy;
+
+  while (true) {
+    setEditorTile(x0, y0, tileId);
+    if (x0 === x1 && y0 === y1) {
+      break;
+    }
+    const twiceError = 2 * error;
+    if (twiceError >= dy) {
+      error += dy;
+      x0 += sx;
+    }
+    if (twiceError <= dx) {
+      error += dx;
+      y0 += sy;
+    }
+  }
+}
+
+function floodFill(startX, startY, tileId) {
+  const target = level.grid[startY * level.width + startX];
+  const replacement = TILE_INDEX[tileId] ?? TILE_INDEX.empty;
+  if (target === replacement) {
+    return;
+  }
+
+  const stack = [[startX, startY]];
+  const seen = new Set();
+  while (stack.length) {
+    const [x, y] = stack.pop();
+    const key = `${x},${y}`;
+    if (seen.has(key) || x < 0 || y < 0 || x >= level.width || y >= level.height) {
+      continue;
+    }
+    const index = y * level.width + x;
+    if (level.grid[index] !== target) {
+      continue;
+    }
+    seen.add(key);
+    setEditorTile(x, y, tileId);
+    stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+  }
+}
+
+function placePrefab(tileX, tileY, prefabId) {
+  const prefab = PREFABS[prefabId] ?? PREFABS.platform;
+  for (let row = 0; row < prefab.rows.length; row += 1) {
+    const line = prefab.rows[row];
+    for (let column = 0; column < line.length; column += 1) {
+      const tileId = prefab.legend[line[column]];
+      if (!tileId) {
+        continue;
+      }
+      setEditorTile(tileX + column - prefab.anchorX, tileY + row - prefab.anchorY, tileId);
+    }
+  }
+}
+
+function copySelection() {
+  if (!selectionRect) {
+    setStatus('No selection to copy.');
+    return;
+  }
+  clipboard = copyRectBuffer(selectionRect);
+  updateUi('Copied selection.');
+}
+
+function cutSelection() {
+  if (!selectionRect) {
+    setStatus('No selection to cut.');
+    return;
+  }
+  pushHistory('Cut');
+  clipboard = copyRectBuffer(selectionRect);
+  clearTileRect(selectionRect);
+  selectionRect = null;
+  updateUi('Cut selection.');
+}
+
+function deleteSelection() {
+  if (!selectionRect) {
+    setStatus('No selection to delete.');
+    return;
+  }
+  pushHistory('Delete');
+  clearTileRect(selectionRect);
+  selectionRect = null;
+  updateUi('Deleted selection.');
+}
+
+function pasteClipboardAt(tileX, tileY) {
+  if (!clipboard) {
+    setStatus('Clipboard is empty.');
+    return;
+  }
+  pushHistory('Paste');
+  pasteBufferAt(clipboard, tileX, tileY);
+  selectionRect = { x: tileX, y: tileY, width: clipboard.width, height: clipboard.height };
+  updateUi('Pasted selection.');
+}
+
+function copyRectBuffer(rect) {
+  const tiles = new Uint8Array(rect.width * rect.height);
+  const pickupSpecs = [];
+  for (let y = 0; y < rect.height; y += 1) {
+    for (let x = 0; x < rect.width; x += 1) {
+      const sourceX = rect.x + x;
+      const sourceY = rect.y + y;
+      tiles[y * rect.width + x] = level.grid[sourceY * level.width + sourceX];
+      const spec = getPickupSpec(sourceX, sourceY);
+      if (level.grid[sourceY * level.width + sourceX] === TILE_INDEX.pickup) {
+        pickupSpecs.push({ ...spec, x, y });
+      }
+    }
+  }
+  return { width: rect.width, height: rect.height, tiles, pickupSpecs };
+}
+
+function pasteBufferAt(buffer, tileX, tileY) {
+  for (let y = 0; y < buffer.height; y += 1) {
+    for (let x = 0; x < buffer.width; x += 1) {
+      const index = buffer.tiles[y * buffer.width + x];
+      const tileId = TILE_DEFS[index]?.id ?? 'empty';
+      const spec = buffer.pickupSpecs.find((item) => item.x === x && item.y === y);
+      setEditorTile(tileX + x, tileY + y, tileId, { pickupSpec: spec });
+    }
+  }
+}
+
+function resizeLevel(width, height) {
+  const next = createEmptyLevel(level.name);
+  next.width = width;
+  next.height = height;
+  next.tileSize = level.tileSize;
+  next.grid = new Uint8Array(width * height);
+  next.pickupSpecs = [];
+
+  const copyWidth = Math.min(level.width, width);
+  const copyHeight = Math.min(level.height, height);
+  for (let y = 0; y < copyHeight; y += 1) {
+    for (let x = 0; x < copyWidth; x += 1) {
+      next.grid[y * width + x] = level.grid[y * level.width + x];
+    }
+  }
+  next.pickupSpecs = level.pickupSpecs
+    .filter((spec) => spec.x < width && spec.y < height)
+    .map((spec) => ({ ...spec }));
+  level = normalizeEditorLevel(next);
+  selectionRect = null;
+}
+
+function cropEmptySpace() {
+  const bounds = getNonEmptyBounds();
+  if (!bounds) {
+    level = normalizeEditorLevel(createEmptyLevel(level.name));
+    selectionRect = null;
+    return;
+  }
+
+  const padding = 2;
+  const left = Math.max(0, bounds.left - padding);
+  const top = Math.max(0, bounds.top - padding);
+  const right = Math.min(level.width - 1, bounds.right + padding);
+  const bottom = Math.min(level.height - 1, bounds.bottom + padding);
+  const width = right - left + 1;
+  const height = bottom - top + 1;
+  const next = createEmptyLevel(level.name);
+  next.width = width;
+  next.height = height;
+  next.tileSize = level.tileSize;
+  next.grid = new Uint8Array(width * height);
+  next.pickupSpecs = [];
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      next.grid[y * width + x] = level.grid[(top + y) * level.width + left + x];
+    }
+  }
+  next.pickupSpecs = level.pickupSpecs
+    .filter((spec) => spec.x >= left && spec.x <= right && spec.y >= top && spec.y <= bottom)
+    .map((spec) => ({ ...spec, x: spec.x - left, y: spec.y - top }));
+  level = normalizeEditorLevel(next);
+  selectionRect = null;
+}
+
+function getNonEmptyBounds() {
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+
+  for (let y = 0; y < level.height; y += 1) {
+    for (let x = 0; x < level.width; x += 1) {
+      if (level.grid[y * level.width + x] !== TILE_INDEX.empty) {
+        left = Math.min(left, x);
+        top = Math.min(top, y);
+        right = Math.max(right, x);
+        bottom = Math.max(bottom, y);
+      }
+    }
+  }
+  return Number.isFinite(left) ? { left, top, right, bottom } : null;
+}
+
+function pushHistory() {
+  history.push(serializeLevel(level));
+  if (history.length > HISTORY_LIMIT) {
+    history.shift();
+  }
+  redoStack = [];
+  updateHistoryButtons();
+}
+
+function undo() {
+  if (!history.length) {
+    return;
+  }
+  redoStack.push(serializeLevel(level));
+  level = normalizeEditorLevel(history.pop());
+  selectionRect = null;
+  updateUi('Undo.');
+}
+
+function redo() {
+  if (!redoStack.length) {
+    return;
+  }
+  history.push(serializeLevel(level));
+  level = normalizeEditorLevel(redoStack.pop());
+  selectionRect = null;
+  updateUi('Redo.');
+}
+
+function updateHistoryButtons() {
+  undoButton.disabled = history.length === 0;
+  redoButton.disabled = redoStack.length === 0;
 }
 
 function pointerToTile(event) {
@@ -315,8 +956,15 @@ function draw() {
   ctx.translate(camera.x, camera.y);
   ctx.scale(camera.zoom, camera.zoom);
   drawTiles();
+  if (showColliderPreview) {
+    drawColliderPreview();
+  }
   drawGrid();
   drawMapBorder();
+  drawSelection();
+  drawShapePreview();
+  drawMovingSelection();
+  drawStampPreview();
   drawHover();
   ctx.restore();
 }
@@ -358,10 +1006,45 @@ function drawTiles() {
         ctx.font = '10px FusionPixel12, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(def.label, drawX + tileSize / 2, drawY + tileSize / 2 + 1);
+        ctx.fillText(getMarkerLabel(def, x, y), drawX + tileSize / 2, drawY + tileSize / 2 + 1);
       }
     }
   }
+}
+
+function getMarkerLabel(def, x, y) {
+  if (def.id !== 'pickup') {
+    return def.label;
+  }
+  const spec = getPickupSpec(x, y);
+  if (spec.kind === 'weapon') {
+    return spec.id === 'random' ? 'W?' : 'W';
+  }
+  if (spec.kind === 'grenade') {
+    return 'G';
+  }
+  if (spec.kind === 'powerup') {
+    return spec.id === 'random' ? 'P?' : 'P';
+  }
+  return '?';
+}
+
+function drawColliderPreview() {
+  const rectSets = [
+    { rects: mergeTilesToRects(level, ['solid']), color: '#35f2ff' },
+    { rects: mergeTilesToRects(level, ['platform']), color: '#ffd166' },
+    { rects: mergeTilesToRects(level, ['glass']), color: '#ffffff' },
+  ];
+  ctx.save();
+  ctx.globalAlpha = 0.86;
+  for (const set of rectSets) {
+    ctx.strokeStyle = set.color;
+    ctx.lineWidth = 2 / camera.zoom;
+    for (const rect of set.rects) {
+      ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+    }
+  }
+  ctx.restore();
 }
 
 function drawGrid() {
@@ -393,8 +1076,57 @@ function drawMapBorder() {
   ctx.strokeRect(0, 0, level.width * level.tileSize, level.height * level.tileSize);
 }
 
+function drawSelection() {
+  if (!selectionRect) {
+    return;
+  }
+  strokeTileRect(selectionRect, '#fffbdf', 2);
+}
+
+function drawShapePreview() {
+  if (!shapePreview) {
+    return;
+  }
+  if (shapePreview.mode === 'rect') {
+    strokeTileRect(makeRect(shapePreview.from.x, shapePreview.from.y, shapePreview.to.x, shapePreview.to.y), '#ffffff', 2);
+  } else {
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2 / camera.zoom;
+    ctx.beginPath();
+    ctx.moveTo((shapePreview.from.x + 0.5) * level.tileSize, (shapePreview.from.y + 0.5) * level.tileSize);
+    ctx.lineTo((shapePreview.to.x + 0.5) * level.tileSize, (shapePreview.to.y + 0.5) * level.tileSize);
+    ctx.stroke();
+  }
+}
+
+function drawMovingSelection() {
+  if (!movingSelection) {
+    return;
+  }
+  strokeTileRect({
+    x: movingSelection.targetX,
+    y: movingSelection.targetY,
+    width: movingSelection.buffer.width,
+    height: movingSelection.buffer.height,
+  }, '#8de7ff', 2);
+}
+
+function drawStampPreview() {
+  if (toolMode !== 'stamp' || !hoverTile) {
+    return;
+  }
+  const prefab = PREFABS[prefabSelect.value] ?? PREFABS.platform;
+  const rect = {
+    x: hoverTile.x - prefab.anchorX,
+    y: hoverTile.y - prefab.anchorY,
+    width: Math.max(...prefab.rows.map((row) => row.length)),
+    height: prefab.rows.length,
+  };
+  strokeTileRect(rect, '#9cffd0', 2);
+}
+
 function drawHover() {
-  if (!hoverTile) {
+  if (!hoverTile || ['rect', 'line', 'select', 'stamp', 'paste'].includes(toolMode)) {
     return;
   }
 
@@ -407,17 +1139,181 @@ function drawHover() {
   ctx.strokeRect(x, y, brushPixels, brushPixels);
 }
 
-function updateUi() {
+function strokeTileRect(rect, color, width) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width / camera.zoom;
+  ctx.strokeRect(rect.x * level.tileSize, rect.y * level.tileSize, rect.width * level.tileSize, rect.height * level.tileSize);
+}
+
+function updateUi(message = null) {
   const mergedSolid = mergeTilesToRects(level, ['solid', 'glass']).length;
   const mergedPlatforms = mergeTilesToRects(level, ['platform']).length;
   statsText.textContent =
     `${level.width}x${level.height} tiles, ${countNonEmptyTiles(level)} filled, ` +
     `${mergedSolid + mergedPlatforms} merged colliders`;
-  selectionText.textContent = TILE_DEFS[TILE_INDEX[selectedTile]].label;
+  selectionText.textContent = selectionRect
+    ? `Selection ${selectionRect.width}x${selectionRect.height}`
+    : `${TILE_DEFS[TILE_INDEX[selectedTile]].label} / ${toolMode}`;
+  levelWidthInput.value = String(level.width);
+  levelHeightInput.value = String(level.height);
+  updateCursorText();
+  updateHistoryButtons();
+  updateValidation();
+  if (message) {
+    setStatus(message);
+  }
+  draw();
+}
+
+function updateCursorText() {
+  const pickupText = hoverTile && level.grid[hoverTile.y * level.width + hoverTile.x] === TILE_INDEX.pickup
+    ? ` ${describePickupSpec(getPickupSpec(hoverTile.x, hoverTile.y))}`
+    : '';
+  cursorText.textContent = hoverTile ? `${hoverTile.x}, ${hoverTile.y}${pickupText}` : 'outside';
+}
+
+function updateValidation() {
+  const messages = validateLevel();
+  validationList.innerHTML = '';
+  if (!messages.length) {
+    const item = document.createElement('li');
+    item.className = 'ok';
+    item.textContent = 'No obvious issues.';
+    validationList.append(item);
+    return;
+  }
+  for (const message of messages) {
+    const item = document.createElement('li');
+    item.className = 'warning';
+    item.textContent = message;
+    validationList.append(item);
+  }
+}
+
+function validateLevel() {
+  const warnings = [];
+  const p1 = findTiles('p1');
+  const p2 = findTiles('p2');
+  if (p1.length !== 1) {
+    warnings.push(p1.length === 0 ? 'Missing P1 spawn.' : 'Multiple P1 spawns; only one should exist.');
+  }
+  if (p2.length !== 1) {
+    warnings.push(p2.length === 0 ? 'Missing P2 spawn.' : 'Multiple P2 spawns; only one should exist.');
+  }
+  for (const [label, points] of [['P1', p1], ['P2', p2]]) {
+    if (points[0] && !hasFloorBelow(points[0].x, points[0].y, 8)) {
+      warnings.push(`${label} spawn has no solid/platform within 8 tiles below.`);
+    }
+  }
+
+  const pickups = findTiles('pickup');
+  for (const pickup of pickups) {
+    if (!hasFloorBelow(pickup.x, pickup.y, 8)) {
+      warnings.push(`Pickup at ${pickup.x},${pickup.y} may be unreachable: no floor below.`);
+      break;
+    }
+  }
+
+  const ladders = findTiles('ladder');
+  if (ladders.length && !ladders.some((tile) => touchesSolidOrPlatform(tile.x, tile.y))) {
+    warnings.push('Ladders do not touch any solid/platform tile.');
+  }
+
+  for (let y = Math.max(0, level.height - 2); y < level.height; y += 1) {
+    for (let x = 0; x < level.width; x += 1) {
+      if (level.grid[y * level.width + x] === TILE_INDEX.platform) {
+        warnings.push('One-way platform exists on the bottom rows; use Solid for bottom floors.');
+        y = level.height;
+        break;
+      }
+    }
+  }
+
+  const colliderCount = mergeTilesToRects(level, ['solid']).length + mergeTilesToRects(level, ['platform']).length;
+  if (colliderCount > 250) {
+    warnings.push(`High collider count (${colliderCount}); use larger rectangles where possible.`);
+  }
+
+  return warnings;
+}
+
+function findTiles(tileId) {
+  const points = [];
+  const tileIndex = TILE_INDEX[tileId];
+  for (let y = 0; y < level.height; y += 1) {
+    for (let x = 0; x < level.width; x += 1) {
+      if (level.grid[y * level.width + x] === tileIndex) {
+        points.push({ x, y });
+      }
+    }
+  }
+  return points;
+}
+
+function hasFloorBelow(x, y, maxDistance) {
+  for (let yy = y + 1; yy <= Math.min(level.height - 1, y + maxDistance); yy += 1) {
+    const tile = level.grid[yy * level.width + x];
+    if (tile === TILE_INDEX.solid || tile === TILE_INDEX.platform) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function touchesSolidOrPlatform(x, y) {
+  return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => {
+    const xx = x + dx;
+    const yy = y + dy;
+    if (xx < 0 || yy < 0 || xx >= level.width || yy >= level.height) {
+      return false;
+    }
+    const tile = level.grid[yy * level.width + xx];
+    return tile === TILE_INDEX.solid || tile === TILE_INDEX.platform;
+  });
+}
+
+function describePickupSpec(spec) {
+  if (spec.kind === 'weapon') {
+    return `weapon:${spec.id}`;
+  }
+  if (spec.kind === 'grenade') {
+    return 'grenade';
+  }
+  if (spec.kind === 'powerup') {
+    return `powerup:${spec.id}`;
+  }
+  return 'random';
 }
 
 function setStatus(message) {
   statusText.textContent = message;
+}
+
+function makeRect(x0, y0, x1, y1) {
+  const x = Math.min(x0, x1);
+  const y = Math.min(y0, y1);
+  return {
+    x,
+    y,
+    width: Math.abs(x1 - x0) + 1,
+    height: Math.abs(y1 - y0) + 1,
+  };
+}
+
+function isTileInRect(x, y, rect) {
+  return x >= rect.x && y >= rect.y && x < rect.x + rect.width && y < rect.y + rect.height;
+}
+
+function normalizeEditorLevel(input) {
+  const normalized = normalizeLevel(input);
+  normalized.pickupSpecs = normalized.pickupSpecs.filter((spec) => (
+    normalized.grid[spec.y * normalized.width + spec.x] === TILE_INDEX.pickup
+  ));
+  return normalized;
+}
+
+function isTypingIntoFormField() {
+  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
 }
 
 function slugify(value) {

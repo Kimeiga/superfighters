@@ -27,6 +27,7 @@ body {
 
 button,
 input,
+select,
 a {
   font: inherit;
 }
@@ -166,6 +167,40 @@ textarea {
   gap: 10px;
 }
 
+.button-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.button-grid button {
+  min-height: 34px;
+  border: 1px solid #263448;
+  border-radius: 6px;
+  background: #101826;
+  color: #ffffff;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.button-grid button:hover {
+  border-color: #5ea8ff;
+}
+
+.button-grid button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.mode-button.selected {
+  border-color: #35f2ff;
+  box-shadow: inset 0 0 0 1px rgba(53, 242, 255, 0.35);
+}
+
+.two-col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .tool-grid label {
   display: grid;
   gap: 5px;
@@ -173,7 +208,8 @@ textarea {
   font-size: 12px;
 }
 
-.tool-grid input {
+.tool-grid input,
+.tool-grid select {
   min-width: 0;
   border: 1px solid #344257;
   border-radius: 5px;
@@ -182,10 +218,50 @@ textarea {
   padding: 7px 8px;
 }
 
+.check-row {
+  display: flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: 8px !important;
+}
+
+.check-row input {
+  width: 18px;
+  height: 18px;
+}
+
 .selection-text {
   margin: 0 0 6px;
   color: #dbe7ff;
   font-size: 12px;
+}
+
+.validation-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.validation-list li {
+  border: 1px solid #263448;
+  border-radius: 6px;
+  background: #101826;
+  color: #dbe7ff;
+  padding: 7px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.validation-list li.warning {
+  border-color: #c99a38;
+  color: #ffdf9e;
+}
+
+.validation-list li.ok {
+  border-color: #2d8b69;
+  color: #9cffd0;
 }
 
 .canvas-panel {

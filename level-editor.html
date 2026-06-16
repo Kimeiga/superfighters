@@ -15,6 +15,7 @@
         <nav>
           <a href="./">Game</a>
           <a href="./debug.html">Debug</a>
+          <button id="playtestLevelButton" type="button">Playtest</button>
           <button id="saveLevelButton" type="button">Save Local</button>
           <button id="exportLevelButton" type="button">Export JSON</button>
           <label class="file-button">
@@ -29,6 +30,20 @@
       <section class="editor-layout">
         <aside class="tool-panel">
           <section>
+            <h2>Tools</h2>
+            <div id="toolModes" class="button-grid">
+              <button class="mode-button selected" type="button" data-tool-mode="brush">Brush</button>
+              <button class="mode-button" type="button" data-tool-mode="erase">Erase</button>
+              <button class="mode-button" type="button" data-tool-mode="rect">Rect</button>
+              <button class="mode-button" type="button" data-tool-mode="line">Line</button>
+              <button class="mode-button" type="button" data-tool-mode="fill">Fill</button>
+              <button class="mode-button" type="button" data-tool-mode="select">Select</button>
+              <button class="mode-button" type="button" data-tool-mode="stamp">Stamp</button>
+              <button class="mode-button" type="button" data-tool-mode="paste">Paste</button>
+            </div>
+          </section>
+
+          <section>
             <h2>Tiles</h2>
             <div id="tilePalette" class="tile-palette"></div>
           </section>
@@ -42,12 +57,73 @@
               Zoom
               <input id="zoomInput" type="range" min="0.25" max="3" step="0.05" value="1" />
             </label>
+            <label>
+              Prefab
+              <select id="prefabSelect">
+                <option value="platform">Small Platform</option>
+                <option value="ladder">Ladder Shaft</option>
+                <option value="windowWall">Window Wall</option>
+                <option value="building">Building Chunk</option>
+                <option value="pickupCluster">Pickup Cluster</option>
+                <option value="spawnPair">Spawn Pair</option>
+              </select>
+            </label>
+            <label>
+              Pickup Kind
+              <select id="pickupKindInput">
+                <option value="random">Random</option>
+                <option value="weapon">Weapon</option>
+                <option value="grenade">Grenade</option>
+                <option value="powerup">Powerup</option>
+              </select>
+            </label>
+            <label>
+              Pickup Item
+              <select id="pickupIdInput">
+                <option value="random">Random</option>
+              </select>
+            </label>
+            <label class="check-row">
+              <input id="colliderPreviewInput" type="checkbox" />
+              Collider preview
+            </label>
           </section>
 
           <section>
             <h2>Selection</h2>
             <p id="selectionText" class="selection-text">Solid</p>
             <p id="cursorText" class="selection-text">0, 0</p>
+            <div class="button-grid">
+              <button id="copySelectionButton" type="button">Copy</button>
+              <button id="cutSelectionButton" type="button">Cut</button>
+              <button id="pasteSelectionButton" type="button">Paste</button>
+              <button id="deleteSelectionButton" type="button">Delete</button>
+              <button id="undoButton" type="button">Undo</button>
+              <button id="redoButton" type="button">Redo</button>
+            </div>
+          </section>
+
+          <section>
+            <h2>Level Size</h2>
+            <div class="tool-grid two-col">
+              <label>
+                Width
+                <input id="levelWidthInput" type="number" min="8" max="512" step="1" />
+              </label>
+              <label>
+                Height
+                <input id="levelHeightInput" type="number" min="8" max="512" step="1" />
+              </label>
+            </div>
+            <div class="button-grid">
+              <button id="resizeLevelButton" type="button">Resize</button>
+              <button id="cropLevelButton" type="button">Crop Empty</button>
+            </div>
+          </section>
+
+          <section>
+            <h2>Validation</h2>
+            <ul id="validationList" class="validation-list"></ul>
           </section>
         </aside>
 

@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import geckos from '@geckos.io/client';
 import { ANIMATION_ORDER, DEFAULT_EMPRESS_ANIMATION_CONFIG, makeFrameList1Based } from './animationConfig.js';
 import { getGameplayConfig } from './gameplayConfig.js';
-import { TILE_DEFS, TILE_INDEX, mergeTilesToRects } from './levelData.js';
+import { TILE_DEFS, TILE_INDEX, getSavedLevel, mergeTilesToRects } from './levelData.js';
 import './styles.css';
 
 const BASE_URL = import.meta.env.BASE_URL;
@@ -134,7 +134,7 @@ class FightScene extends Phaser.Scene {
     this.ladders = [];
     this.clouds = [];
     this.levelSpawns = null;
-    this.editorLevel = null;
+    this.editorLevel = pendingBootOptions?.editorLevel ? getSavedLevel() : null;
     this.worldWidth = WORLD_WIDTH;
     this.worldHeight = WORLD_HEIGHT;
     this.configData = getGameplayConfig();
@@ -686,7 +686,11 @@ class FightScene extends Phaser.Scene {
         const worldY = y * level.tileSize + level.tileSize / 2;
 
         if (tile === TILE_INDEX.pickup) {
-          this.pickupSpawnPoints.push({ x: worldX, y: worldY });
+          this.pickupSpawnPoints.push({
+            x: worldX,
+            y: worldY,
+            ...this.resolveLevelPickupSpec(level, x, y),
+          });
         } else if (tile === TILE_INDEX.p1) {
           this.levelSpawns.p1 = this.resolveEditorSpawn(level, worldX, worldY);
         } else if (tile === TILE_INDEX.p2) {
@@ -694,6 +698,17 @@ class FightScene extends Phaser.Scene {
         }
       }
     }
+  }
+
+  resolveLevelPickupSpec(level, tileX, tileY) {
+    const spec = level.pickupSpecs?.find((item) => item.x === tileX && item.y === tileY);
+    if (!spec) {
+      return { kind: 'random', id: 'random' };
+    }
+    return {
+      kind: ['random', 'weapon', 'grenade', 'powerup'].includes(spec.kind) ? spec.kind : 'random',
+      id: typeof spec.id === 'string' && spec.id ? spec.id : 'random',
+    };
   }
 
   resolveEditorSpawn(level, worldX, worldY) {
@@ -3330,7 +3345,7 @@ class FightScene extends Phaser.Scene {
 
     const guaranteedGunPoints = this.pickupSpawnPoints.slice(0, Math.max(0, this.configData.pickups.maxOnMap - spawnedCount));
     for (const point of guaranteedGunPoints) {
-      this.createPickup(point.x, point.y, 'weapon', this.pickWeightedWeapon());
+      this.createConfiguredPickup(point, true);
       spawnedCount += 1;
     }
 
@@ -3346,6 +3361,33 @@ class FightScene extends Phaser.Scene {
     }
 
     const point = Phaser.Utils.Array.GetRandom(openSpawnPoints);
+    this.createConfiguredPickup(point);
+  }
+
+  createConfiguredPickup(point, preferWeapon = false) {
+    const kind = point.kind ?? 'random';
+    const id = point.id ?? 'random';
+    if (kind === 'weapon') {
+      const weaponId = id !== 'random' && this.configData.weapons[id] ? id : this.pickWeightedWeapon();
+      this.createPickup(point.x, point.y, 'weapon', weaponId);
+      return;
+    }
+    if (kind === 'grenade') {
+      this.createPickup(point.x, point.y, 'grenade', 'grenade');
+      return;
+    }
+    if (kind === 'powerup') {
+      const powerupId = id !== 'random' && this.configData.powerups[id]
+        ? id
+        : Phaser.Utils.Array.GetRandom(Object.keys(this.configData.powerups));
+      this.createPickup(point.x, point.y, 'powerup', powerupId);
+      return;
+    }
+    if (preferWeapon) {
+      this.createPickup(point.x, point.y, 'weapon', this.pickWeightedWeapon());
+      return;
+    }
+
     const roll = Math.random();
 
     if (roll < 0.75) {
@@ -4532,7 +4574,14 @@ function createBootMenu() {
   if (initialCode) {
     showOnlinePanel();
     window.setTimeout(joinLobby, 250);
+  } else if (shouldAutoPlaytestEditorLevel()) {
+    startGameFromBoot(overlay, { mode: 'local', editorLevel: true });
   }
+}
+
+function shouldAutoPlaytestEditorLevel() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('playtestLevel') === '1';
 }
 
 function startGameFromBoot(bootOverlay, options) {

@@ -27,6 +27,7 @@ export function createEmptyLevel(name = 'Untitled Arena') {
     height: DEFAULT_LEVEL_HEIGHT,
     tileSize: TILE_SIZE,
     grid: new Uint8Array(DEFAULT_LEVEL_WIDTH * DEFAULT_LEVEL_HEIGHT),
+    pickupSpecs: [],
   };
 }
 
@@ -166,6 +167,7 @@ export function serializeLevel(level) {
     height: normalized.height,
     tileSize: normalized.tileSize,
     runs: encodeRuns(normalized.grid),
+    pickupSpecs: normalized.pickupSpecs,
   };
 }
 
@@ -190,6 +192,7 @@ export function normalizeLevel(input) {
     height,
     tileSize,
     grid,
+    pickupSpecs: normalizePickupSpecs(input?.pickupSpecs, width, height),
   };
 }
 
@@ -267,6 +270,38 @@ export function setTile(level, x, y, tileId) {
   }
 
   level.grid[y * level.width + x] = TILE_INDEX[tileId] ?? TILE_INDEX.empty;
+}
+
+function normalizePickupSpecs(specs, width, height) {
+  if (!Array.isArray(specs)) {
+    return [];
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  for (const spec of specs) {
+    const x = clampInteger(spec?.x, 0, width - 1, -1);
+    const y = clampInteger(spec?.y, 0, height - 1, -1);
+    if (x < 0 || y < 0) {
+      continue;
+    }
+    const key = `${x},${y}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    normalized.push({
+      x,
+      y,
+      kind: normalizePickupKind(spec?.kind),
+      id: typeof spec?.id === 'string' && spec.id ? spec.id : 'random',
+    });
+  }
+  return normalized;
+}
+
+function normalizePickupKind(kind) {
+  return ['random', 'weapon', 'grenade', 'powerup'].includes(kind) ? kind : 'random';
 }
 
 function addBuilding(level, spec) {
