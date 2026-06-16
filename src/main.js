@@ -1252,7 +1252,7 @@ class FightScene extends Phaser.Scene {
         this,
       );
       this.physics.add.collider(player.sprite, this.glassWindows);
-      this.physics.add.collider(player.sprite, this.grenades);
+      this.physics.add.collider(player.sprite, this.grenades, undefined, this.grenadePlayerProcess, this);
     }
 
     this.physics.add.collider(this.p1.sprite, this.p2.sprite);
@@ -2786,9 +2786,9 @@ class FightScene extends Phaser.Scene {
     player.grenadeAmmo -= 1;
 
     const direction = new Phaser.Math.Vector2(Math.cos(player.aimAngle), Math.sin(player.aimAngle));
-    const reticle = this.getAimReticlePosition(player, player.aimAngle);
+    const origin = this.getGrenadeOrigin(player);
     const grenade = this.physics.add
-      .image(reticle.x, reticle.y, 'grenade-pixel')
+      .image(origin.x, origin.y, 'grenade-pixel')
       .setDepth(9);
     this.grenades.add(grenade);
     grenade.setBounce(this.configData.grenades.bounce);
@@ -2802,6 +2802,10 @@ class FightScene extends Phaser.Scene {
         this.explodeGrenade(grenade, player.id);
       }
     });
+  }
+
+  getGrenadeOrigin(player) {
+    return this.getAimPivot(player);
   }
 
   handleMeleePressed(player, time) {
@@ -3004,6 +3008,13 @@ class FightScene extends Phaser.Scene {
     const sprite = bullet === objectA ? objectB : objectA;
     const player = this.playerBySprite.get(sprite);
     return Boolean(bullet?.active && player && bullet.getData('owner') !== player.id);
+  }
+
+  grenadePlayerProcess(objectA, objectB) {
+    const grenade = this.getCollisionObjectFromGroup(this.grenades, objectA, objectB, 'owner');
+    const sprite = grenade === objectA ? objectB : objectA;
+    const player = this.playerBySprite.get(sprite);
+    return Boolean(grenade?.active && player && grenade.getData('owner') !== player.id);
   }
 
   getCollisionObjectFromGroup(group, objectA, objectB, dataKey = null) {
