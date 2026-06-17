@@ -153,7 +153,10 @@ class FightScene extends Phaser.Scene {
     this.onlineLastInputPayload = '';
     this.onlineLastInputSentAt = 0;
     this.onlineLastSnapshotSentAt = 0;
+    this.onlineLastHostSnapshotServerTime = 0;
+    this.onlineRoundId = 0;
     this.touchInputDown = createInputDown();
+    this.rawKeyboardDown = new Set();
     this.uiButtons = [];
     this.endOverlayState = null;
     this.setViewportSize();
@@ -191,6 +194,16 @@ class FightScene extends Phaser.Scene {
         grenade: this.keys.three,
         powerup: this.keys.four,
       },
+      keyboardCodes: {
+        left: ['KeyA'],
+        right: ['KeyD'],
+        jump: ['KeyW'],
+        crouch: ['KeyS'],
+        melee: ['Digit1'],
+        shoot: ['Digit2'],
+        grenade: ['Digit3'],
+        powerup: ['Digit4'],
+      },
     });
 
     this.p2 = this.createPlayer({
@@ -210,6 +223,16 @@ class FightScene extends Phaser.Scene {
         shoot: this.keys.comma,
         grenade: this.keys.period,
         powerup: this.keys.slash,
+      },
+      keyboardCodes: {
+        left: ['ArrowLeft'],
+        right: ['ArrowRight'],
+        jump: ['ArrowUp'],
+        crouch: ['ArrowDown'],
+        melee: ['KeyM'],
+        shoot: ['Comma'],
+        grenade: ['Period'],
+        powerup: ['Slash'],
       },
     });
 
@@ -1027,14 +1050,27 @@ class FightScene extends Phaser.Scene {
       space: K.SPACE,
     });
 
-    this.gameKeyPreventDefaultHandler = (event) => {
+    this.gameKeyDownHandler = (event) => {
+      if (!isTypingIntoDomField() && this.input.keyboard.enabled) {
+        this.rawKeyboardDown.add(event.code || event.key);
+      }
       if (!isTypingIntoDomField() && GAME_DEFAULT_CAPTURE_CODES.has(event.code)) {
         event.preventDefault();
       }
     };
-    window.addEventListener('keydown', this.gameKeyPreventDefaultHandler, { capture: true });
+    this.gameKeyUpHandler = (event) => {
+      this.rawKeyboardDown.delete(event.code || event.key);
+    };
+    this.gameBlurHandler = () => {
+      this.rawKeyboardDown.clear();
+    };
+    window.addEventListener('keydown', this.gameKeyDownHandler, { capture: true });
+    window.addEventListener('keyup', this.gameKeyUpHandler, { capture: true });
+    window.addEventListener('blur', this.gameBlurHandler);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-      window.removeEventListener('keydown', this.gameKeyPreventDefaultHandler, { capture: true });
+      window.removeEventListener('keydown', this.gameKeyDownHandler, { capture: true });
+      window.removeEventListener('keyup', this.gameKeyUpHandler, { capture: true });
+      window.removeEventListener('blur', this.gameBlurHandler);
     });
 
     this.input.on('pointerdown', (pointer) => this.handleUiPointerDown(pointer));
@@ -1056,6 +1092,7 @@ class FightScene extends Phaser.Scene {
     }
 
     keyboard.enabled = enabled;
+    this.rawKeyboardDown.clear();
     if (!enabled) {
       for (const key of Object.values(this.keys ?? {})) {
         key?.reset?.();
@@ -1078,7 +1115,10 @@ class FightScene extends Phaser.Scene {
   }
 
   readOnlineKeyboardInput() {
-    return this.p1 ? this.readKeyboardInput(this.p1) : createInputDown();
+    return mergeInputDown(
+      this.p1 ? this.readKeyboardInput(this.p1) : null,
+      this.p2 ? this.readKeyboardInput(this.p2) : null,
+    );
   }
 
   readKeyboardInput(player) {
@@ -1088,9 +1128,13 @@ class FightScene extends Phaser.Scene {
     }
 
     for (const action of INPUT_ACTIONS) {
-      down[action] = Boolean(player.controls[action]?.isDown);
+      down[action] = Boolean(player.controls[action]?.isDown || this.isRawKeyDown(player.keyboardCodes?.[action]));
     }
     return down;
+  }
+
+  isRawKeyDown(codes = []) {
+    return codes.some((code) => this.rawKeyboardDown.has(code));
   }
 
   createMobileControls() {
@@ -1210,6 +1254,7 @@ class FightScene extends Phaser.Scene {
       inputState: createInputState(),
       keyboardInputDown: createInputDown(),
       remoteInputDown: createInputDown(),
+      remoteInputSeq: 0,
       aimAngle: config.facing > 0 ? 0 : Math.PI,
       aimFacing: config.facing > 0 ? 1 : -1,
       aimOffset: 0,
@@ -1476,10 +1521,12 @@ class FightScene extends Phaser.Scene {
     this.onlineLastInputPayload = '';
     this.onlineLastInputSentAt = 0;
     this.onlineLastSnapshotSentAt = 0;
+    this.onlineLastHostSnapshotServerTime = 0;
+    this.onlineRoundId = Number.isFinite(Number(options.roundId)) ? Number(options.roundId) : 0;
     if (this.onlineChannel) {
       this.bindOnlineChannel(this.onlineChannel);
     }
-    this.handleOnlineMatchStart({ code: options.code });
+    this.handleOnlineMatchStart({ code: options.code, roundId: this.onlineRoundId });
   }
 
   showStartOverlay() {
@@ -1637,6 +1684,8 @@ class FightScene extends Phaser.Scene {
   restartMatch() {
     if (this.onlineMode && this.onlineChannel) {
       this.onlineChannel.emit('restart-match', { lobbyCode: this.onlineLobbyCode }, { reliable: true });
+      this.showMessage('Rematch requested', 700);
+      return;
     }
     window.location.reload();
   }
@@ -1826,7 +1875,8 @@ class FightScene extends Phaser.Scene {
     channel.on('match-start', (data) => this.handleOnlineMatchStart(data));
     channel.on('player-input', (data) => this.handleOnlinePlayerInput(data));
     channel.on('player-snapshot', (data) => this.handleOnlinePlayerSnapshot(data));
-    channel.on('restart-match', () => window.location.reload());
+    channel.on('host-snapshot', (data) => this.handleOnlineHostSnapshot(data));
+    channel.on('restart-match', (data) => this.handleOnlineRestartMatch(data));
     channel.on('lobby-error', (data) => {
       this.setOnlineStatus(data?.message || 'Lobby error');
       this.showMessage(data?.message || 'Lobby error', 900);
@@ -1862,6 +1912,10 @@ class FightScene extends Phaser.Scene {
     this.onlineLastInputPayload = '';
     this.onlineLastInputSentAt = 0;
     this.onlineLastSnapshotSentAt = 0;
+    this.onlineLastHostSnapshotServerTime = 0;
+    if (Number.isFinite(Number(data.roundId))) {
+      this.onlineRoundId = Number(data.roundId);
+    }
     this.resetOnlineInputs();
     this.updateOnlineInviteDisplay();
     this.updateOnlineStartButton();
@@ -1900,6 +1954,9 @@ class FightScene extends Phaser.Scene {
     this.modeSelected = true;
     this.matchPaused = false;
     this.onlineLobbyCode = data?.code ?? this.onlineLobbyCode;
+    if (Number.isFinite(Number(data?.roundId))) {
+      this.onlineRoundId = Number(data.roundId);
+    }
     this.resetMatchForOnline();
     this.setOnlineStatus(`Playing online lobby ${this.onlineLobbyCode} as ${this.localOnlinePlayerId?.toUpperCase()}.`);
     this.closeStartOverlay();
@@ -1913,10 +1970,18 @@ class FightScene extends Phaser.Scene {
     if (!data || data.playerId === this.localOnlinePlayerId) {
       return;
     }
+    if (Number.isFinite(Number(data.roundId)) && Number(data.roundId) !== this.onlineRoundId) {
+      return;
+    }
     const player = this.getPlayerById(data.playerId);
     if (!player) {
       return;
     }
+    const seq = safeClientInteger(data.seq);
+    if (seq && seq < (player.remoteInputSeq ?? 0)) {
+      return;
+    }
+    player.remoteInputSeq = seq;
     player.remoteInputDown = sanitizeInputDown(data.input);
   }
 
@@ -1924,11 +1989,59 @@ class FightScene extends Phaser.Scene {
     if (!data || data.playerId === this.localOnlinePlayerId) {
       return;
     }
+    if (Number.isFinite(Number(data.roundId)) && Number(data.roundId) !== this.onlineRoundId) {
+      return;
+    }
     const player = this.getPlayerById(data.playerId);
     if (!player || !data.snapshot) {
       return;
     }
     this.applyRemoteSnapshot(player, data.snapshot);
+  }
+
+  handleOnlineHostSnapshot(data) {
+    if (!data || this.onlineIsHost) {
+      return;
+    }
+    if (Number.isFinite(Number(data.roundId)) && Number(data.roundId) !== this.onlineRoundId) {
+      return;
+    }
+    const serverTime = safeClientInteger(data.serverTime);
+    if (serverTime && serverTime < this.onlineLastHostSnapshotServerTime) {
+      return;
+    }
+    this.onlineLastHostSnapshotServerTime = serverTime;
+
+    for (const playerId of ['p1', 'p2']) {
+      const snapshot = data.snapshots?.[playerId];
+      const player = this.getPlayerById(playerId);
+      if (!player || !snapshot) {
+        continue;
+      }
+      this.applyRemoteSnapshot(player, snapshot, {
+        localReconcile: player.id === this.localOnlinePlayerId,
+      });
+    }
+  }
+
+  handleOnlineRestartMatch(data = {}) {
+    if (Number.isFinite(Number(data.roundId))) {
+      this.onlineRoundId = Number(data.roundId);
+    } else {
+      this.onlineRoundId += 1;
+    }
+    this.onlineMode = true;
+    this.onlineReady = true;
+    this.modeSelected = true;
+    this.matchPaused = false;
+    this.onlineLobbyStarted = true;
+    this.resetMatchForOnline();
+    this.closeStartOverlay();
+    this.closeOnlineOverlay();
+    this.closeMenu();
+    this.physics.world.resume();
+    this.setOnlineStatus(`Playing online lobby ${this.onlineLobbyCode} as ${this.localOnlinePlayerId?.toUpperCase()}.`);
+    this.showMessage('Rematch', 850);
   }
 
   updateOnlineInviteDisplay() {
@@ -1965,15 +2078,28 @@ class FightScene extends Phaser.Scene {
     for (const player of this.players) {
       player.inputState = createInputState();
       player.remoteInputDown = createInputDown();
+      player.remoteInputSeq = 0;
     }
     this.touchInputDown = createInputDown();
   }
 
   resetMatchForOnline() {
     this.matchOver = false;
+    this.endOverlayState = null;
+    this.endContainer?.destroy();
+    this.endContainer = null;
     this.physics.world.resume();
     this.roundEndsAt = this.time.now + this.configData.round.seconds * 1000;
     this.pickupSpawnTimer = 0;
+    this.onlineInputSeq = 0;
+    this.onlineLastInputPayload = '';
+    this.onlineLastInputSentAt = 0;
+    this.onlineLastSnapshotSentAt = 0;
+    this.onlineLastHostSnapshotServerTime = 0;
+    this.resetOnlineInputs();
+    this.clearGameObjectGroup(this.bullets);
+    this.clearGameObjectGroup(this.grenades);
+    this.clearGameObjectGroup(this.pickups);
     for (const player of this.players) {
       player.health = PLAYER_MAX_HEALTH;
       player.lives = this.configData.round.lives;
@@ -1985,6 +2111,18 @@ class FightScene extends Phaser.Scene {
       player.invulnerableUntil = 0;
       player.facing = player.id === 'p1' ? 1 : -1;
       this.respawn(player);
+    }
+    this.spawnInitialPickups();
+  }
+
+  clearGameObjectGroup(group) {
+    if (!group?.getChildren) {
+      return;
+    }
+    for (const child of [...group.getChildren()]) {
+      child.getData?.('labelObj')?.destroy?.();
+      child.getData?.('shine')?.destroy?.();
+      child.destroy();
     }
   }
 
@@ -2010,27 +2148,31 @@ class FightScene extends Phaser.Scene {
     this.onlineLastInputSentAt = time;
     this.onlineInputSeq += 1;
     this.onlineChannel.emit('player-input', {
+      roundId: this.onlineRoundId,
       seq: this.onlineInputSeq,
       input: player.inputState.down,
       t: Math.round(time),
-    });
+    }, { reliable: true });
   }
 
   syncOnlineState(time) {
     if (!this.onlineMode || !this.onlineReady || !this.onlineChannel || !this.localOnlinePlayerId) {
       return;
     }
+    if (!this.onlineIsHost) {
+      return;
+    }
     if (time - this.onlineLastSnapshotSentAt < ONLINE_SNAPSHOT_SEND_MS) {
       return;
     }
-    const player = this.getPlayerById(this.localOnlinePlayerId);
-    if (!player) {
-      return;
-    }
     this.onlineLastSnapshotSentAt = time;
-    this.onlineChannel.emit('player-snapshot', {
+    this.onlineChannel.emit('host-snapshot', {
+      roundId: this.onlineRoundId,
       t: Math.round(time),
-      snapshot: this.serializePlayerSnapshot(player),
+      snapshots: this.players.reduce((snapshots, player) => {
+        snapshots[player.id] = this.serializePlayerSnapshot(player);
+        return snapshots;
+      }, {}),
     });
   }
 
@@ -2057,12 +2199,22 @@ class FightScene extends Phaser.Scene {
     };
   }
 
-  applyRemoteSnapshot(player, snapshot) {
+  applyRemoteSnapshot(player, snapshot, options = {}) {
     const x = Number(snapshot.x);
     const y = Number(snapshot.y);
     if (Number.isFinite(x) && Number.isFinite(y)) {
-      player.sprite.x = Phaser.Math.Linear(player.sprite.x, x, 0.55);
-      player.sprite.y = Phaser.Math.Linear(player.sprite.y, y, 0.55);
+      const distance = Phaser.Math.Distance.Between(player.sprite.x, player.sprite.y, x, y);
+      const hardSnapDistance = options.localReconcile ? 96 : 58;
+      const minimumCorrection = options.localReconcile ? 4 : 1;
+      if (distance > hardSnapDistance) {
+        player.sprite.setPosition(x, y);
+        player.sprite.body.reset(x, y);
+      } else if (distance > minimumCorrection) {
+        const lerp = options.localReconcile ? 0.22 : 0.55;
+        player.sprite.x = Phaser.Math.Linear(player.sprite.x, x, lerp);
+        player.sprite.y = Phaser.Math.Linear(player.sprite.y, y, lerp);
+        player.sprite.body.updateFromGameObject?.();
+      }
     }
 
     if (Number.isFinite(snapshot.vx) && Number.isFinite(snapshot.vy)) {
@@ -3922,6 +4074,11 @@ function parseOnlineServerConfig() {
       port: Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80)),
     },
   };
+}
+
+function safeClientInteger(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.trunc(number) : 0;
 }
 
 function roundForNetwork(value) {

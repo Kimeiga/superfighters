@@ -99,6 +99,7 @@ io.onConnection((channel) => {
       playerId: 'p1',
       hostPlayerId: 'p1',
       started: lobby.started,
+      roundId: lobby.roundId,
       players: [...lobby.players.values()].map(publicPlayer),
     }, { reliable: true });
     emitLobbyState(lobby);
@@ -125,6 +126,7 @@ io.onConnection((channel) => {
       playerId,
       hostPlayerId: 'p1',
       started: lobby.started,
+      roundId: lobby.roundId,
       players: [...lobby.players.values()].map(publicPlayer),
     }, { reliable: true });
     emitLobbyState(lobby);
@@ -147,9 +149,13 @@ io.onConnection((channel) => {
     }
 
     lobby.started = true;
+    lobby.inputs.clear();
+    lobby.snapshots.clear();
+    lobby.hostSnapshot = null;
     emitLobbyState(lobby);
     io.room(lobby.code).emit('match-start', {
       code: lobby.code,
+      roundId: lobby.roundId,
       players: [...lobby.players.values()].map(publicPlayer),
       serverTime: Date.now(),
     }, { reliable: true });
@@ -169,13 +175,14 @@ io.onConnection((channel) => {
     }
     const packet = {
       playerId: player.playerId,
+      roundId: lobby.roundId,
       seq: safeInteger(data?.seq),
       t: safeInteger(data?.t),
       input: sanitizeInput(data?.input),
       serverTime: Date.now(),
     };
     lobby.inputs.set(player.playerId, packet);
-    io.room(lobby.code).emit('player-input', packet);
+    io.room(lobby.code).emit('player-input', packet, { reliable: true });
   });
 
   channel.on('player-snapshot', (data) => {
@@ -192,12 +199,33 @@ io.onConnection((channel) => {
     }
     const packet = {
       playerId: player.playerId,
+      roundId: lobby.roundId,
       t: safeInteger(data?.t),
       snapshot: sanitizeSnapshot(data?.snapshot),
       serverTime: Date.now(),
     };
     lobby.snapshots.set(player.playerId, packet);
-    channel.broadcast.emit('player-snapshot', packet);
+    io.room(lobby.code).emit('player-snapshot', packet);
+  });
+
+  channel.on('host-snapshot', (data) => {
+    const lobby = getLobbyForChannel(channel);
+    if (!lobby || !lobby.started) {
+      return;
+    }
+    const player = lobby.players.get(channel.id);
+    if (player?.playerId !== 'p1') {
+      return;
+    }
+    const packet = {
+      hostPlayerId: 'p1',
+      roundId: lobby.roundId,
+      t: safeInteger(data?.t),
+      snapshots: sanitizeSnapshotMap(data?.snapshots),
+      serverTime: Date.now(),
+    };
+    lobby.hostSnapshot = packet;
+    io.room(lobby.code).emit('host-snapshot', packet);
   });
 
   channel.on('restart-match', () => {
@@ -205,7 +233,16 @@ io.onConnection((channel) => {
     if (!lobby) {
       return;
     }
-    io.room(lobby.code).emit('restart-match', { code: lobby.code, serverTime: Date.now() }, { reliable: true });
+    lobby.started = true;
+    lobby.inputs.clear();
+    lobby.snapshots.clear();
+    lobby.hostSnapshot = null;
+    lobby.roundId = (lobby.roundId ?? 0) + 1;
+    io.room(lobby.code).emit('restart-match', {
+      code: lobby.code,
+      roundId: lobby.roundId,
+      serverTime: Date.now(),
+    }, { reliable: true });
   });
 
   channel.onDisconnect(() => {
@@ -294,6 +331,8 @@ function createLobby(channel) {
     players: new Map(),
     inputs: new Map(),
     snapshots: new Map(),
+    hostSnapshot: null,
+    roundId: 0,
     started: false,
   };
   lobbies.set(code, lobby);
@@ -326,6 +365,7 @@ function emitLobbyState(lobby) {
     ready: lobby.players.size === 2,
     started: lobby.started,
     hostPlayerId: 'p1',
+    roundId: lobby.roundId,
     serverTime: Date.now(),
   }, { reliable: true });
 }
@@ -398,6 +438,19 @@ function sanitizeSnapshot(snapshot) {
     grenadeAmmo: safeNumber(snapshot.grenadeAmmo),
     powerup: snapshot.powerup ? String(snapshot.powerup) : null,
   };
+}
+
+function sanitizeSnapshotMap(snapshots) {
+  const sanitized = {};
+  if (!snapshots || typeof snapshots !== 'object') {
+    return sanitized;
+  }
+  for (const playerId of ['p1', 'p2']) {
+    if (snapshots[playerId]) {
+      sanitized[playerId] = sanitizeSnapshot(snapshots[playerId]);
+    }
+  }
+  return sanitized;
 }
 
 function safeInteger(value) {
