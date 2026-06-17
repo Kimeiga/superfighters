@@ -222,6 +222,7 @@ io.onConnection((channel) => {
       roundId: lobby.roundId,
       t: safeInteger(data?.t),
       snapshots: sanitizeSnapshotMap(data?.snapshots),
+      pickups: sanitizePickupSnapshotList(data?.pickups),
       serverTime: Date.now(),
     };
     lobby.hostSnapshot = packet;
@@ -451,6 +452,33 @@ function sanitizeSnapshotMap(snapshots) {
     }
   }
   return sanitized;
+}
+
+function sanitizePickupSnapshotList(pickups) {
+  if (!Array.isArray(pickups)) {
+    return [];
+  }
+
+  return pickups
+    .slice(0, 40)
+    .map((pickup) => ({
+      x: safeNumber(pickup?.x),
+      y: safeNumber(pickup?.y),
+      kind: sanitizePickupKind(pickup?.kind),
+      id: sanitizeIdentifier(pickup?.id),
+    }))
+    .filter((pickup) => pickup.kind && pickup.id);
+}
+
+function sanitizePickupKind(kind) {
+  const value = String(kind ?? '');
+  return value === 'weapon' || value === 'grenade' || value === 'powerup' ? value : '';
+}
+
+function sanitizeIdentifier(value) {
+  return String(value ?? '')
+    .replace(/[^a-z0-9_-]/gi, '')
+    .slice(0, 64);
 }
 
 function safeInteger(value) {

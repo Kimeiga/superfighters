@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import geckos from '@geckos.io/client';
 import { ANIMATION_ORDER, DEFAULT_EMPRESS_ANIMATION_CONFIG, makeFrameList1Based } from './animationConfig.js';
-import { getGameplayConfig } from './gameplayConfig.js';
+import { DEFAULT_GAMEPLAY_CONFIG, getGameplayConfig } from './gameplayConfig.js';
 import { TILE_DEFS, TILE_INDEX, getSavedLevel, mergeTilesToRects } from './levelData.js';
 import './styles.css';
 
@@ -154,6 +154,7 @@ class FightScene extends Phaser.Scene {
     this.onlineLastInputSentAt = 0;
     this.onlineLastSnapshotSentAt = 0;
     this.onlineLastHostSnapshotServerTime = 0;
+    this.onlinePickupSnapshotKey = '';
     this.onlineRoundId = 0;
     this.touchInputDown = createInputDown();
     this.rawKeyboardDown = new Set();
@@ -161,7 +162,7 @@ class FightScene extends Phaser.Scene {
     this.endOverlayState = null;
     this.setViewportSize();
     this.pickupSpawnTimer = 0;
-    this.roundEndsAt = this.time.now + this.configData.round.seconds * 1000;
+    this.roundEndsAt = this.time.now + this.getRoundSeconds() * 1000;
 
     this.configureWorldAndCameraBounds();
     this.cameras.main.setBackgroundColor('#8dd8ff');
@@ -1549,6 +1550,7 @@ class FightScene extends Phaser.Scene {
 
   beginLocalGame() {
     this.disconnectOnlineChannel();
+    this.configData ??= getGameplayConfig();
     this.onlineMode = false;
     this.onlineReady = false;
     this.localOnlinePlayerId = null;
@@ -1557,9 +1559,13 @@ class FightScene extends Phaser.Scene {
     this.closeStartOverlay();
     this.closeOnlineOverlay();
     this.setGameKeyboardEnabled(true);
-    this.roundEndsAt = this.time.now + this.configData.round.seconds * 1000;
+    this.roundEndsAt = this.time.now + this.getRoundSeconds() * 1000;
     this.physics.world.resume();
     this.showMessage('Fight', 900);
+  }
+
+  getRoundSeconds() {
+    return this.configData?.round?.seconds ?? DEFAULT_GAMEPLAY_CONFIG.round.seconds;
   }
 
   beginOnlineFlow(prefillCode = '') {
@@ -2024,6 +2030,10 @@ class FightScene extends Phaser.Scene {
         localReconcile: player.id === this.localOnlinePlayerId,
       });
     }
+
+    if (Array.isArray(data.pickups)) {
+      this.applyRemotePickupSnapshot(data.pickups);
+    }
   }
 
   handleOnlineRestartMatch(data = {}) {
@@ -2091,13 +2101,14 @@ class FightScene extends Phaser.Scene {
     this.endContainer?.destroy();
     this.endContainer = null;
     this.physics.world.resume();
-    this.roundEndsAt = this.time.now + this.configData.round.seconds * 1000;
+    this.roundEndsAt = this.time.now + this.getRoundSeconds() * 1000;
     this.pickupSpawnTimer = 0;
     this.onlineInputSeq = 0;
     this.onlineLastInputPayload = '';
     this.onlineLastInputSentAt = 0;
     this.onlineLastSnapshotSentAt = 0;
     this.onlineLastHostSnapshotServerTime = 0;
+    this.onlinePickupSnapshotKey = '';
     this.resetOnlineInputs();
     this.clearGameObjectGroup(this.bullets);
     this.clearGameObjectGroup(this.grenades);
@@ -2114,7 +2125,9 @@ class FightScene extends Phaser.Scene {
       player.facing = player.id === 'p1' ? 1 : -1;
       this.respawn(player);
     }
-    this.spawnInitialPickups();
+    if (this.onlineIsHost) {
+      this.spawnInitialPickups();
+    }
   }
 
   clearGameObjectGroup(group) {
@@ -2175,7 +2188,49 @@ class FightScene extends Phaser.Scene {
         snapshots[player.id] = this.serializePlayerSnapshot(player);
         return snapshots;
       }, {}),
+      pickups: this.serializePickupSnapshot(),
     });
+  }
+
+  serializePickupSnapshot() {
+    return this.pickups
+      .getChildren()
+      .filter((pickup) => pickup.active)
+      .map((pickup) => ({
+        x: roundForNetwork(pickup.x),
+        y: roundForNetwork(pickup.y),
+        kind: pickup.getData('kind'),
+        id: pickup.getData('id'),
+      }))
+      .filter((pickup) => this.isValidPickup(pickup.kind, pickup.id))
+      .sort(comparePickupSnapshotEntries);
+  }
+
+  applyRemotePickupSnapshot(pickups) {
+    const normalizedPickups = pickups
+      .map((pickup) => ({
+        x: roundForNetwork(pickup?.x),
+        y: roundForNetwork(pickup?.y),
+        kind: String(pickup?.kind ?? ''),
+        id: String(pickup?.id ?? ''),
+      }))
+      .filter((pickup) => (
+        Number.isFinite(pickup.x) &&
+        Number.isFinite(pickup.y) &&
+        this.isValidPickup(pickup.kind, pickup.id)
+      ))
+      .slice(0, this.configData.pickups.maxOnMap + 8)
+      .sort(comparePickupSnapshotEntries);
+    const snapshotKey = JSON.stringify(normalizedPickups);
+    if (snapshotKey === this.onlinePickupSnapshotKey) {
+      return;
+    }
+
+    this.onlinePickupSnapshotKey = snapshotKey;
+    this.clearGameObjectGroup(this.pickups);
+    for (const pickup of normalizedPickups) {
+      this.createPickup(pickup.x, pickup.y, pickup.kind, pickup.id);
+    }
   }
 
   serializePlayerSnapshot(player) {
@@ -3484,6 +3539,9 @@ class FightScene extends Phaser.Scene {
   }
 
   updatePickups(time) {
+    if (this.isRemoteOnlineClient()) {
+      return;
+    }
     if (time < this.pickupSpawnTimer) {
       return;
     }
@@ -3604,6 +3662,23 @@ class FightScene extends Phaser.Scene {
     return this.configData.powerups[id].label;
   }
 
+  isValidPickup(kind, id) {
+    if (kind === 'weapon') {
+      return Boolean(this.configData.weapons[id]);
+    }
+    if (kind === 'grenade') {
+      return id === 'grenade';
+    }
+    if (kind === 'powerup') {
+      return Boolean(this.configData.powerups[id]);
+    }
+    return false;
+  }
+
+  isRemoteOnlineClient() {
+    return this.onlineMode && this.onlineReady && !this.onlineIsHost;
+  }
+
   findNearbyPickup(player) {
     let closest = null;
     let closestDistance = Infinity;
@@ -3623,6 +3698,9 @@ class FightScene extends Phaser.Scene {
   }
 
   tryAutoPickup(player) {
+    if (this.isRemoteOnlineClient()) {
+      return;
+    }
     const pickup = player.currentPickup;
     if (!pickup || !pickup.active) {
       return;
@@ -3657,6 +3735,9 @@ class FightScene extends Phaser.Scene {
   }
 
   swapPickup(player, pickup, time = this.time.now) {
+    if (this.isRemoteOnlineClient()) {
+      return;
+    }
     const kind = pickup.getData('kind');
     const oldX = pickup.x;
     const oldY = pickup.y;
@@ -3674,6 +3755,9 @@ class FightScene extends Phaser.Scene {
   }
 
   takePickup(player, pickup, time = null) {
+    if (this.isRemoteOnlineClient()) {
+      return;
+    }
     const kind = pickup.getData('kind');
     const id = pickup.getData('id');
 
@@ -4094,6 +4178,15 @@ function safeClientInteger(value) {
 
 function roundForNetwork(value) {
   return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function comparePickupSnapshotEntries(left, right) {
+  return (
+    left.y - right.y ||
+    left.x - right.x ||
+    String(left.kind).localeCompare(String(right.kind)) ||
+    String(left.id).localeCompare(String(right.id))
+  );
 }
 
 function clampNetworkNumber(value, min, max, fallback) {
