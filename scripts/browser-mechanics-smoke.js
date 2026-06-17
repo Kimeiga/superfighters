@@ -218,6 +218,21 @@ window.__superfightersMechanicsSmoke = (async () => {
   aimCheck('aim up while facing left', -1, -1, true);
   aimCheck('aim down while facing left', -1, 1, false);
 
+  resetPlayer(p1, 700, 484, 1);
+  p1.weapon = scene.makeWeaponState('pistol');
+  p1.aimMode = 'gun';
+  p1.aiming = true;
+  p1.aimFacing = 1;
+  p1.aimAngle = 0;
+  const bulletPivot = scene.getAimPivot(p1);
+  const gunAnchor = scene.getAimAnchor(p1, p1.aimAngle);
+  const bulletOrigin = scene.getBulletOrigin(p1);
+  check('bullet origin comes from gun hand instead of body center', bulletOrigin.x > gunAnchor.x && bulletOrigin.x > bulletPivot.x + 18, {
+    pivot: { x: Math.round(bulletPivot.x), y: Math.round(bulletPivot.y) },
+    anchor: { x: Math.round(gunAnchor.x), y: Math.round(gunAnchor.y) },
+    origin: { x: Math.round(bulletOrigin.x), y: Math.round(bulletOrigin.y) },
+  });
+
   for (const id of weaponIds) {
     clearGroup(scene.bullets);
     resetPlayer(p1, 700, 220, 1);
@@ -371,6 +386,7 @@ window.__superfightersMechanicsSmoke = (async () => {
   p1.grenadeAmmo = 3;
   scene.beginAim(p1, 'grenade', scene.time.now + 2200);
   scene.updateAim(p1, 0, -1, 250);
+  const expectedGrenadeOrigin = scene.getGrenadeOrigin(p1);
   scene.releaseAim(p1, scene.time.now + 2250);
   const grenades = active(scene.grenades);
   check('grenade aim release throws grenade', p1.grenadeAmmo === 2 && grenades.length >= 1, {
@@ -380,6 +396,20 @@ window.__superfightersMechanicsSmoke = (async () => {
       x: Math.round(grenades[0].body.velocity.x),
       y: Math.round(grenades[0].body.velocity.y),
     } : null,
+  });
+  check('grenade spawns from hand anchor', grenades[0] && Phaser.Math.Distance.Between(grenades[0].x, grenades[0].y, expectedGrenadeOrigin.x, expectedGrenadeOrigin.y) <= 2, {
+    expected: {
+      x: Math.round(expectedGrenadeOrigin.x),
+      y: Math.round(expectedGrenadeOrigin.y),
+    },
+    actual: grenades[0] ? {
+      x: Math.round(grenades[0].x),
+      y: Math.round(grenades[0].y),
+    } : null,
+  });
+  check('grenade uses high ground-slide drag', grenades[0]?.body?.drag?.x >= scene.configData.grenades.dragX, {
+    dragX: grenades[0]?.body?.drag?.x,
+    configured: scene.configData.grenades.dragX,
   });
 
   resetPlayer(p1, 700, 484, 1);

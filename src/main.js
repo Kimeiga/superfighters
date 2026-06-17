@@ -1052,6 +1052,7 @@ class FightScene extends Phaser.Scene {
 
     this.gameKeyDownHandler = (event) => {
       if (!isTypingIntoDomField() && this.input.keyboard.enabled) {
+        this.rawKeyboardDown ??= new Set();
         this.rawKeyboardDown.add(event.code || event.key);
       }
       if (!isTypingIntoDomField() && GAME_DEFAULT_CAPTURE_CODES.has(event.code)) {
@@ -1059,10 +1060,10 @@ class FightScene extends Phaser.Scene {
       }
     };
     this.gameKeyUpHandler = (event) => {
-      this.rawKeyboardDown.delete(event.code || event.key);
+      this.rawKeyboardDown?.delete(event.code || event.key);
     };
     this.gameBlurHandler = () => {
-      this.rawKeyboardDown.clear();
+      this.rawKeyboardDown?.clear();
     };
     window.addEventListener('keydown', this.gameKeyDownHandler, { capture: true });
     window.addEventListener('keyup', this.gameKeyUpHandler, { capture: true });
@@ -1092,6 +1093,7 @@ class FightScene extends Phaser.Scene {
     }
 
     keyboard.enabled = enabled;
+    this.rawKeyboardDown ??= new Set();
     this.rawKeyboardDown.clear();
     if (!enabled) {
       for (const key of Object.values(this.keys ?? {})) {
@@ -1134,7 +1136,7 @@ class FightScene extends Phaser.Scene {
   }
 
   isRawKeyDown(codes = []) {
-    return codes.some((code) => this.rawKeyboardDown.has(code));
+    return codes.some((code) => this.rawKeyboardDown?.has(code));
   }
 
   createMobileControls() {
@@ -2909,7 +2911,16 @@ class FightScene extends Phaser.Scene {
   }
 
   getBulletOrigin(player) {
-    return this.getAimPivot(player);
+    return this.getMuzzleOrigin(player, player.aimAngle);
+  }
+
+  getMuzzleOrigin(player, angle = player.aimAngle) {
+    const anchor = this.getAimAnchor(player, angle);
+    const offset = this.configData.visuals.gunMuzzleOffset ?? 28;
+    return {
+      x: anchor.x + Math.cos(angle) * offset,
+      y: anchor.y + Math.sin(angle) * offset,
+    };
   }
 
   spawnBullet(player, weapon, angle, originX, originY) {
@@ -2959,7 +2970,7 @@ class FightScene extends Phaser.Scene {
       .setDepth(9);
     this.grenades.add(grenade);
     grenade.setBounce(this.configData.grenades.bounce);
-    grenade.setDragX(50);
+    grenade.setDragX(this.configData.grenades.dragX ?? 900);
     grenade.body.setCircle(7);
     grenade.body.setVelocity(direction.x * this.configData.grenades.throwSpeed, direction.y * this.configData.grenades.throwSpeed);
     grenade.setData('owner', player.id);
@@ -2972,7 +2983,7 @@ class FightScene extends Phaser.Scene {
   }
 
   getGrenadeOrigin(player) {
-    return this.getAimPivot(player);
+    return this.getAimAnchor(player, player.aimAngle);
   }
 
   handleMeleePressed(player, time) {

@@ -633,6 +633,7 @@ export const DEFAULT_GAMEPLAY_CONFIG = {
     shoulderX: 8,
     shoulderY: -16,
     crosshairDistance: 92,
+    gunMuzzleOffset: 28,
     pickupTextOffset: 18,
   },
   playerBody: {
@@ -674,7 +675,8 @@ export const DEFAULT_GAMEPLAY_CONFIG = {
     throwSpeed: 510,
     throwLift: 0,
     fuseMs: 1700,
-    bounce: 0.55,
+    bounce: 0.42,
+    dragX: 900,
     radius: 116,
     damage: 28,
     selfDamage: 12,
