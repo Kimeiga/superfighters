@@ -80,7 +80,7 @@ body {
 .mobile-actions {
   right: max(12px, env(safe-area-inset-right));
   grid-template-columns: repeat(2, clamp(62px, 17vw, 76px));
-  grid-template-rows: repeat(3, clamp(48px, 13vw, 56px));
+  grid-template-rows: repeat(4, clamp(46px, 12.6vw, 54px));
 }
 
 .mobile-left {
@@ -122,6 +122,10 @@ body {
 .mobile-jump {
   grid-column: 1 / -1;
   grid-row: 1;
+}
+
+.mobile-powerup {
+  grid-column: 1 / -1;
 }
 
 .mobile-control,
@@ -419,7 +423,7 @@ textarea {
   .mobile-actions {
     right: max(10px, env(safe-area-inset-right));
     grid-template-columns: repeat(2, clamp(58px, 16.5vw, 68px));
-    grid-template-rows: repeat(3, clamp(46px, 12.8vw, 52px));
+    grid-template-rows: repeat(4, clamp(44px, 12.4vw, 50px));
   }
 
   .mobile-control {

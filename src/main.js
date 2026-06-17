@@ -19,8 +19,8 @@ const UI_FONT = 'FusionPixel12';
 const PLAYER_MAX_HEALTH = 100;
 const DROP_DURATION = 310;
 const AIM_HALF_ARC = Math.PI / 2;
-const INPUT_ACTIONS = ['left', 'right', 'jump', 'crouch', 'melee', 'shoot', 'grenade', 'powerup', 'aimUp', 'aimDown'];
-const GAME_DEFAULT_CAPTURE_CODES = new Set(['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'Slash']);
+const INPUT_ACTIONS = ['left', 'right', 'jump', 'crouch', 'melee', 'pickup', 'shoot', 'grenade', 'powerup', 'aimUp', 'aimDown'];
+const GAME_DEFAULT_CAPTURE_CODES = new Set(['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'Slash', 'KeyE', 'Quote']);
 const ONLINE_INPUT_SEND_MS = 50;
 const ONLINE_SNAPSHOT_SEND_MS = 90;
 const CHARACTER_SOURCE_KEY = 'empress-source';
@@ -191,6 +191,7 @@ class FightScene extends Phaser.Scene {
         jump: this.keys.w,
         crouch: this.keys.s,
         melee: this.keys.one,
+        pickup: this.keys.e,
         shoot: this.keys.two,
         grenade: this.keys.three,
         powerup: this.keys.four,
@@ -201,6 +202,7 @@ class FightScene extends Phaser.Scene {
         jump: ['KeyW'],
         crouch: ['KeyS'],
         melee: ['Digit1'],
+        pickup: ['KeyE'],
         shoot: ['Digit2'],
         grenade: ['Digit3'],
         powerup: ['Digit4'],
@@ -221,6 +223,7 @@ class FightScene extends Phaser.Scene {
         jump: this.keys.up,
         crouch: this.keys.down,
         melee: this.keys.m,
+        pickup: this.keys.quote,
         shoot: this.keys.comma,
         grenade: this.keys.period,
         powerup: this.keys.slash,
@@ -231,6 +234,7 @@ class FightScene extends Phaser.Scene {
         jump: ['ArrowUp'],
         crouch: ['ArrowDown'],
         melee: ['KeyM'],
+        pickup: ['Quote'],
         shoot: ['Comma'],
         grenade: ['Period'],
         powerup: ['Slash'],
@@ -1034,6 +1038,7 @@ class FightScene extends Phaser.Scene {
       a: K.A,
       s: K.S,
       d: K.D,
+      e: K.E,
       one: K.ONE,
       two: K.TWO,
       three: K.THREE,
@@ -1045,6 +1050,7 @@ class FightScene extends Phaser.Scene {
       m: K.M,
       comma: K.COMMA,
       period: K.PERIOD,
+      quote: K.QUOTES,
       slash: 191,
       esc: K.ESC,
       enter: K.ENTER,
@@ -1157,10 +1163,11 @@ class FightScene extends Phaser.Scene {
       </div>
       <div class="mobile-actions" aria-label="Action controls">
         <button class="mobile-control mobile-jump" data-action="jump" aria-label="Jump">Jump</button>
-        <button class="mobile-control" data-action="melee" aria-label="Melee">M</button>
-        <button class="mobile-control" data-action="shoot" aria-label="Shoot">Fire</button>
-        <button class="mobile-control" data-action="grenade" aria-label="Grenade">Grenade</button>
-        <button class="mobile-control" data-action="powerup" aria-label="Powerup">Power</button>
+        <button class="mobile-control mobile-melee" data-action="melee" aria-label="Melee">M</button>
+        <button class="mobile-control mobile-pickup" data-action="pickup" aria-label="Pickup">Pick</button>
+        <button class="mobile-control mobile-shoot" data-action="shoot" aria-label="Shoot">Fire</button>
+        <button class="mobile-control mobile-grenade" data-action="grenade" aria-label="Grenade">Grenade</button>
+        <button class="mobile-control mobile-powerup" data-action="powerup" aria-label="Powerup">Power</button>
       </div>
     `;
     document.body.appendChild(root);
@@ -1461,7 +1468,7 @@ class FightScene extends Phaser.Scene {
       .text(
         centerX,
         panelY + 172,
-        'P1: WASD + 1 melee, 2 shoot, 3 grenade, 4 power\nP2: Arrows + M melee, , shoot, . grenade, / power\nHold shoot/grenade to aim. Release to fire/throw.',
+        "P1: WASD + 1 melee, E pickup, 2 shoot, 3 grenade, 4 power\nP2: Arrows + M melee, ' pickup, , shoot, . grenade, / power\nHold shoot/grenade to aim. Release to fire/throw.",
         {
           fontFamily: UI_FONT,
           fontSize: '13px',
@@ -2330,7 +2337,6 @@ class FightScene extends Phaser.Scene {
       : (downHeld ? 1 : 0) - (upHeld ? 1 : 0);
 
     player.currentPickup = this.findNearbyPickup(player);
-    this.tryAutoPickup(player);
     if (!grounded) {
       player.onThinPlatform = false;
     }
@@ -2350,6 +2356,10 @@ class FightScene extends Phaser.Scene {
 
     if (input.pressed.powerup) {
       this.activatePowerup(player, time);
+    }
+
+    if (input.pressed.pickup) {
+      this.handlePickupPressed(player, time);
     }
 
     if (!player.aiming && player.shootStanceUntil > 0 && time >= player.shootStanceUntil) {
@@ -3046,21 +3056,6 @@ class FightScene extends Phaser.Scene {
       return;
     }
 
-    if (player.crouching && player.currentPickup) {
-      if (this.canTakePickup(player, player.currentPickup)) {
-        this.takePickup(player, player.currentPickup, time);
-        return;
-      }
-      if (this.canSwapPickup(player, player.currentPickup)) {
-        this.swapPickup(player, player.currentPickup, time);
-        return;
-      }
-    }
-
-    if (player.crouching && player.currentPickup?.getData('kind') === 'weapon') {
-      return;
-    }
-
     const grounded = player.sprite.body.blocked.down || player.sprite.body.touching.down;
     const horizontal = (player.inputState.down.right ? 1 : 0) - (player.inputState.down.left ? 1 : 0);
     if (!player.crouching && grounded && horizontal !== 0) {
@@ -3071,6 +3066,26 @@ class FightScene extends Phaser.Scene {
     }
 
     this.performMeleeCombo(player, time);
+  }
+
+  handlePickupPressed(player, time) {
+    if (time < player.meleeAnimationUntil || time < player.pickupAnimationUntil || this.isRemoteOnlineClient()) {
+      return;
+    }
+
+    const pickup = player.currentPickup;
+    if (!pickup?.active) {
+      return;
+    }
+
+    if (this.canTakePickup(player, pickup)) {
+      this.takePickup(player, pickup, time);
+      return;
+    }
+
+    if (this.canSwapPickup(player, pickup)) {
+      this.swapPickup(player, pickup, time);
+    }
   }
 
   performMeleeCombo(player, time) {
@@ -3695,25 +3710,6 @@ class FightScene extends Phaser.Scene {
     }
 
     return closest;
-  }
-
-  tryAutoPickup(player) {
-    if (this.isRemoteOnlineClient()) {
-      return;
-    }
-    const pickup = player.currentPickup;
-    if (!pickup || !pickup.active) {
-      return;
-    }
-
-    const kind = pickup.getData('kind');
-    if (kind === 'weapon' && !player.weapon) {
-      this.takePickup(player, pickup);
-    } else if (kind === 'grenade' && player.grenadeAmmo < this.configData.grenades.maxCount) {
-      this.takePickup(player, pickup);
-    } else if (kind === 'powerup' && !player.powerup) {
-      this.takePickup(player, pickup);
-    }
   }
 
   canTakePickup(player, pickup) {
