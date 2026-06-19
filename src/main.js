@@ -23,6 +23,10 @@ const INPUT_ACTIONS = ['left', 'right', 'jump', 'crouch', 'melee', 'pickup', 'sh
 const GAME_DEFAULT_CAPTURE_CODES = new Set(['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'Slash', 'KeyE', 'Quote']);
 const ONLINE_INPUT_SEND_MS = 50;
 const ONLINE_SNAPSHOT_SEND_MS = 90;
+const CPU_PLAYER_ID = 'p2';
+const CPU_SHOOT_HOLD_MS = 360;
+const CPU_GRENADE_HOLD_MS = 520;
+const CPU_ACTION_RELEASE_WINDOW_MS = 150;
 const CHARACTER_SOURCE_KEY = 'empress-source';
 const CHARACTER_TEXTURE_PREFIX = 'empress-frame';
 const HANDGUN_SOURCE_KEY = 'handgun-source';
@@ -141,6 +145,8 @@ class FightScene extends Phaser.Scene {
     this.modeSelected = false;
     this.matchPaused = true;
     this.matchOver = false;
+    this.cpuMode = false;
+    this.cpuPlayerId = null;
     this.onlineMode = false;
     this.onlineReady = false;
     this.onlineIsHost = false;
@@ -1085,6 +1091,8 @@ class FightScene extends Phaser.Scene {
   }
 
   refreshInputStates(time) {
+    this.updateCpuInputs(time);
+
     for (const player of this.players) {
       const down = this.getInputDownForPlayer(player);
       updateInputState(player.inputState, down);
@@ -1117,6 +1125,10 @@ class FightScene extends Phaser.Scene {
       return player.remoteInputDown;
     }
 
+    if (this.cpuMode && player.id === this.cpuPlayerId) {
+      return player.cpuInputDown ?? createInputDown();
+    }
+
     if (player.id === 'p1') {
       return mergeInputDown(this.readKeyboardInput(player), this.touchInputDown);
     }
@@ -1144,6 +1156,246 @@ class FightScene extends Phaser.Scene {
 
   isRawKeyDown(codes = []) {
     return codes.some((code) => this.rawKeyboardDown?.has(code));
+  }
+
+  updateCpuInputs(time) {
+    if (!this.cpuMode || this.onlineMode || this.matchPaused || this.matchOver) {
+      return;
+    }
+
+    const player = this.getPlayerById(this.cpuPlayerId);
+    if (!player) {
+      return;
+    }
+
+    player.cpuInputDown = this.buildCpuInput(player, time);
+  }
+
+  buildCpuInput(player, time) {
+    const input = createInputDown();
+    const state = player.cpuState ??= createCpuState();
+    const opponent = this.getOpponent(player);
+    if (!opponent?.sprite?.active || !player.sprite?.active || time < player.knockedUntil) {
+      state.action = null;
+      return input;
+    }
+
+    if (state.action) {
+      if (time < state.actionEndAt) {
+        return this.continueCpuAction(player, opponent, input, state, time);
+      }
+      state.action = null;
+      state.desiredAimAngle = null;
+    }
+
+    if (time < player.pickupAnimationUntil || time < player.meleeAnimationUntil) {
+      return input;
+    }
+
+    if (player.currentPickup && time >= state.nextPickupAt && this.shouldCpuTakePickup(player, player.currentPickup)) {
+      input.pickup = true;
+      state.nextPickupAt = time + 650;
+      return input;
+    }
+
+    if (player.powerup && time >= state.nextPowerupAt && (player.health <= 70 || opponent.health <= 45)) {
+      input.powerup = true;
+      state.nextPowerupAt = time + 1200;
+    }
+
+    const pickupTarget = this.findCpuPickupTarget(player);
+    if (pickupTarget && !player.aiming) {
+      this.applyCpuMoveToward(input, player, pickupTarget.x, time, state);
+      if (pickupTarget.y < player.sprite.y - 42 && Math.abs(pickupTarget.x - player.sprite.x) < 150) {
+        this.applyCpuJump(input, player, time, state);
+      }
+      return input;
+    }
+
+    const dx = opponent.sprite.x - player.sprite.x;
+    const dy = opponent.sprite.y - player.sprite.y;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+    const desiredFacing = dx >= 0 ? 1 : -1;
+    const grounded = player.sprite.body.blocked.down || player.sprite.body.touching.down;
+
+    if (absDy > 74 && grounded && time >= state.nextJumpAt && opponent.sprite.y < player.sprite.y) {
+      this.applyCpuJump(input, player, time, state);
+    }
+
+    if (absDx > 82) {
+      this.applyCpuMoveToward(input, player, opponent.sprite.x, time, state);
+    } else if (!player.aiming && player.facing !== desiredFacing) {
+      this.applyCpuMoveToward(input, player, player.sprite.x + desiredFacing * 20, time, state);
+    }
+
+    if (absDx < 76 && absDy < 62 && time >= state.nextMeleeAt) {
+      if (!player.crouching) {
+        input.melee = true;
+        state.nextMeleeAt = time + 680;
+      }
+      return input;
+    }
+
+    if (
+      player.grenadeAmmo > 0 &&
+      absDx > 170 &&
+      absDx < 470 &&
+      absDy < 170 &&
+      time >= state.nextGrenadeAt &&
+      player.facing === desiredFacing
+    ) {
+      this.startCpuAction(player, opponent, state, time, 'grenade');
+      return this.continueCpuAction(player, opponent, input, state, time);
+    }
+
+    if (
+      player.weapon &&
+      player.weapon.ammo > 0 &&
+      absDx > 100 &&
+      absDx < 760 &&
+      absDy < 190 &&
+      time >= state.nextShootAt &&
+      player.facing === desiredFacing
+    ) {
+      this.startCpuAction(player, opponent, state, time, 'shoot');
+      return this.continueCpuAction(player, opponent, input, state, time);
+    }
+
+    return input;
+  }
+
+  applyCpuMoveToward(input, player, targetX, time, state) {
+    const dx = targetX - player.sprite.x;
+    if (Math.abs(dx) < 18) {
+      return;
+    }
+    input.right = dx > 0;
+    input.left = dx < 0;
+    if (Math.abs(dx) > 210 && time >= state.nextJumpAt && (player.sprite.body.blocked.down || player.sprite.body.touching.down)) {
+      this.applyCpuJump(input, player, time, state);
+    }
+  }
+
+  applyCpuJump(input, player, time, state) {
+    if (!(player.sprite.body.blocked.down || player.sprite.body.touching.down) || player.crouching) {
+      return;
+    }
+    input.jump = true;
+    state.nextJumpAt = time + Phaser.Math.Between(760, 1150);
+  }
+
+  startCpuAction(player, opponent, state, time, action) {
+    const holdMs = action === 'grenade' ? CPU_GRENADE_HOLD_MS : CPU_SHOOT_HOLD_MS;
+    state.action = action;
+    state.actionStartedAt = time;
+    state.actionReleaseAt = time + holdMs;
+    state.actionEndAt = state.actionReleaseAt + CPU_ACTION_RELEASE_WINDOW_MS;
+    state.desiredAimAngle = this.getCpuAimAngle(player, opponent, action);
+
+    if (action === 'grenade') {
+      state.nextGrenadeAt = time + Phaser.Math.Between(3900, 5600);
+    } else {
+      const weapon = player.weapon ? this.configData.weapons[player.weapon.id] : null;
+      state.nextShootAt = time + (weapon?.cooldownMs ?? 300) + Phaser.Math.Between(420, 760);
+    }
+  }
+
+  continueCpuAction(player, opponent, input, state, time) {
+    if (state.action === 'shoot' && (!player.weapon || player.weapon.ammo <= 0)) {
+      state.action = null;
+      return input;
+    }
+    if (state.action === 'grenade' && player.grenadeAmmo <= 0) {
+      state.action = null;
+      return input;
+    }
+
+    state.desiredAimAngle = this.getCpuAimAngle(player, opponent, state.action);
+    this.applyCpuAimInput(player, input, state.desiredAimAngle);
+
+    if (time < state.actionReleaseAt) {
+      if (state.action === 'shoot') {
+        input.shoot = true;
+      } else {
+        input.grenade = true;
+      }
+    }
+
+    return input;
+  }
+
+  applyCpuAimInput(player, input, desiredAngle) {
+    const facing = player.aiming ? player.aimFacing : player.facing;
+    const baseAngle = facing >= 0 ? 0 : Math.PI;
+    const desiredOffset = Phaser.Math.Clamp(
+      Math.atan2(Math.sin(desiredAngle - baseAngle), Math.cos(desiredAngle - baseAngle)),
+      -AIM_HALF_ARC,
+      AIM_HALF_ARC,
+    );
+    const currentOffset = player.aiming ? (player.aimOffset ?? 0) : 0;
+    const diff = desiredOffset - currentOffset;
+    if (Math.abs(diff) < 0.06) {
+      return;
+    }
+
+    const vertical = Math.sign(diff) * facing;
+    input.aimDown = vertical > 0;
+    input.aimUp = vertical < 0;
+  }
+
+  getCpuAimAngle(player, opponent, action) {
+    const origin = this.getAimPivot(player);
+    const target = this.getAimPivot(opponent);
+    const leadX = Phaser.Math.Clamp(opponent.sprite.body.velocity.x * 0.16, -72, 72);
+    const leadY = Phaser.Math.Clamp(opponent.sprite.body.velocity.y * 0.08, -42, 42);
+    const arcBiasY = action === 'grenade' ? -76 : -4;
+    return Math.atan2(
+      target.y + leadY + arcBiasY - origin.y,
+      target.x + leadX - origin.x,
+    );
+  }
+
+  shouldCpuTakePickup(player, pickup) {
+    const kind = pickup.getData('kind');
+    if (this.canTakePickup(player, pickup)) {
+      return true;
+    }
+    return kind === 'weapon' && Boolean(player.weapon) && player.weapon.ammo <= 4;
+  }
+
+  findCpuPickupTarget(player) {
+    const wantsWeapon = !player.weapon || player.weapon.ammo <= 4;
+    const wantsGrenade = player.grenadeAmmo <= 1;
+    const wantsPowerup = !player.powerup && player.health <= 78;
+    if (!wantsWeapon && !wantsGrenade && !wantsPowerup) {
+      return null;
+    }
+
+    let best = null;
+    let bestScore = Infinity;
+    for (const pickup of this.pickups.getChildren()) {
+      if (!pickup.active) {
+        continue;
+      }
+      const kind = pickup.getData('kind');
+      if (
+        (kind === 'weapon' && !wantsWeapon) ||
+        (kind === 'grenade' && !wantsGrenade) ||
+        (kind === 'powerup' && !wantsPowerup)
+      ) {
+        continue;
+      }
+
+      const distance = Phaser.Math.Distance.Between(player.sprite.x, player.sprite.y, pickup.x, pickup.y);
+      const verticalPenalty = Math.max(0, player.sprite.y - pickup.y - 28) * 1.4;
+      const score = distance + verticalPenalty;
+      if (score < bestScore) {
+        best = pickup;
+        bestScore = score;
+      }
+    }
+    return best;
   }
 
   createMobileControls() {
@@ -1264,6 +1516,8 @@ class FightScene extends Phaser.Scene {
       inputState: createInputState(),
       keyboardInputDown: createInputDown(),
       remoteInputDown: createInputDown(),
+      cpuInputDown: createInputDown(),
+      cpuState: createCpuState(),
       remoteInputSeq: 0,
       aimAngle: config.facing > 0 ? 0 : Math.PI,
       aimFacing: config.facing > 0 ? 1 : -1,
@@ -1491,6 +1745,7 @@ class FightScene extends Phaser.Scene {
       <div class="start-panel">
         <h1>Superfighters</h1>
         <p>Choose how to play.</p>
+        <button class="start-cpu" type="button">Play vs CPU</button>
         <button class="start-local" type="button">Local Multiplayer</button>
         <button class="start-online" type="button">Online Multiplayer</button>
         <div class="start-links">
@@ -1501,6 +1756,7 @@ class FightScene extends Phaser.Scene {
     `;
     document.body.appendChild(overlay);
     this.startOverlayEl = overlay;
+    overlay.querySelector('.start-cpu')?.addEventListener('click', () => this.beginCpuGame());
     overlay.querySelector('.start-local')?.addEventListener('click', () => this.beginLocalGame());
     overlay.querySelector('.start-online')?.addEventListener('click', () => this.beginOnlineFlow());
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => overlay.remove());
@@ -1511,11 +1767,17 @@ class FightScene extends Phaser.Scene {
       this.applyOnlineBootOptions(options);
       return;
     }
+    if (options.mode === 'cpu') {
+      this.beginCpuGame();
+      return;
+    }
 
     this.beginLocalGame();
   }
 
   applyOnlineBootOptions(options) {
+    this.cpuMode = false;
+    this.cpuPlayerId = null;
     this.onlineMode = true;
     this.onlineReady = false;
     this.modeSelected = true;
@@ -1558,6 +1820,13 @@ class FightScene extends Phaser.Scene {
   beginLocalGame() {
     this.disconnectOnlineChannel();
     this.configData ??= getGameplayConfig();
+    this.cpuMode = false;
+    this.cpuPlayerId = null;
+    if (this.p2) {
+      this.p2.label = 'P2';
+      this.p2.cpuInputDown = createInputDown();
+      this.p2.cpuState = createCpuState();
+    }
     this.onlineMode = false;
     this.onlineReady = false;
     this.localOnlinePlayerId = null;
@@ -1571,12 +1840,37 @@ class FightScene extends Phaser.Scene {
     this.showMessage('Fight', 900);
   }
 
+  beginCpuGame() {
+    this.disconnectOnlineChannel();
+    this.configData ??= getGameplayConfig();
+    this.cpuMode = true;
+    this.cpuPlayerId = CPU_PLAYER_ID;
+    this.onlineMode = false;
+    this.onlineReady = false;
+    this.localOnlinePlayerId = null;
+    this.modeSelected = true;
+    this.matchPaused = false;
+    if (this.p2) {
+      this.p2.label = 'CPU';
+      this.p2.cpuInputDown = createInputDown();
+      this.p2.cpuState = createCpuState();
+    }
+    this.closeStartOverlay();
+    this.closeOnlineOverlay();
+    this.setGameKeyboardEnabled(true);
+    this.roundEndsAt = this.time.now + this.getRoundSeconds() * 1000;
+    this.physics.world.resume();
+    this.showMessage('CPU fight', 900);
+  }
+
   getRoundSeconds() {
     return this.configData?.round?.seconds ?? DEFAULT_GAMEPLAY_CONFIG.round.seconds;
   }
 
   beginOnlineFlow(prefillCode = '') {
     this.modeSelected = true;
+    this.cpuMode = false;
+    this.cpuPlayerId = null;
     this.onlineMode = true;
     this.onlineReady = false;
     this.matchPaused = true;
@@ -3428,6 +3722,8 @@ class FightScene extends Phaser.Scene {
     player.meleeAnimationKey = null;
     player.pickupAnimationUntil = 0;
     player.currentPickup = null;
+    player.cpuInputDown = createInputDown();
+    player.cpuState = createCpuState();
     player.shootStanceUntil = 0;
     player.slowedUntil = 0;
     player.shieldUntil = 0;
@@ -4080,6 +4376,22 @@ function createInputState() {
   };
 }
 
+function createCpuState() {
+  return {
+    action: null,
+    actionStartedAt: 0,
+    actionReleaseAt: 0,
+    actionEndAt: 0,
+    desiredAimAngle: null,
+    nextPickupAt: 0,
+    nextPowerupAt: 0,
+    nextJumpAt: 0,
+    nextMeleeAt: 0,
+    nextShootAt: 0,
+    nextGrenadeAt: 0,
+  };
+}
+
 function updateInputState(state, nextDown) {
   for (const action of INPUT_ACTIONS) {
     const isDown = Boolean(nextDown?.[action]);
@@ -4624,6 +4936,7 @@ function createBootMenu() {
       <h1>Superfighters</h1>
       <p class="boot-copy">Choose a match type.</p>
       <div class="boot-actions">
+        <button class="boot-cpu" type="button">Play vs CPU</button>
         <button class="boot-local" type="button">Local Multiplayer</button>
         <button class="boot-online" type="button">Online Multiplayer</button>
       </div>
@@ -4793,6 +5106,10 @@ function createBootMenu() {
   overlay.querySelector('.boot-local')?.addEventListener('click', () => {
     state.channel?.close();
     startGameFromBoot(overlay, { mode: 'local' });
+  });
+  overlay.querySelector('.boot-cpu')?.addEventListener('click', () => {
+    state.channel?.close();
+    startGameFromBoot(overlay, { mode: 'cpu' });
   });
   overlay.querySelector('.boot-online')?.addEventListener('click', showOnlinePanel);
   overlay.querySelector('.boot-create')?.addEventListener('click', createLobby);
