@@ -31,12 +31,21 @@ body {
   height: 100dvh;
   max-width: 100%;
   overflow: hidden;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
 }
 
 #game canvas {
   display: block;
   width: 100% !important;
   height: 100% !important;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
 }
 
 .mobile-controls,
@@ -54,6 +63,10 @@ body {
   pointer-events: none;
   touch-action: none;
   color: #f8fbff;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .mobile-controls.is-visible {
@@ -147,8 +160,11 @@ textarea {
   color: #ffffff;
   border-radius: 8px;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.3);
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
   -webkit-user-select: none;
   user-select: none;
+  touch-action: none;
 }
 
 .mobile-control {

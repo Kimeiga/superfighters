@@ -227,6 +227,7 @@ class FightScene extends Phaser.Scene {
     this.createInputs();
     this.createGroups();
     this.createMobileControls();
+    this.installPlaySurfaceInputGuards();
     this.events.on(Phaser.Scenes.Events.PRE_UPDATE, this.preResolveSlopeContacts, this);
     this.events.on(Phaser.Scenes.Events.POST_UPDATE, this.lateResolveSlopeContacts, this);
 
@@ -1967,6 +1968,38 @@ class FightScene extends Phaser.Scene {
     root.addEventListener('contextmenu', (event) => event.preventDefault());
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => root.remove());
     this.syncMobileControlsVisibility();
+  }
+
+  installPlaySurfaceInputGuards() {
+    const preventSelection = (event) => {
+      if (!isPlaySurfaceEventTarget(event.target)) {
+        return;
+      }
+      event.preventDefault();
+    };
+    const preventCanvasTouch = (event) => {
+      if (!isGameCanvasEventTarget(event.target)) {
+        return;
+      }
+      event.preventDefault();
+    };
+    const activeOptions = { passive: false };
+
+    document.addEventListener('selectstart', preventSelection, activeOptions);
+    document.addEventListener('dragstart', preventSelection, activeOptions);
+    document.addEventListener('contextmenu', preventSelection, activeOptions);
+    document.addEventListener('touchmove', preventSelection, activeOptions);
+    document.addEventListener('touchstart', preventCanvasTouch, activeOptions);
+    document.addEventListener('gesturestart', preventCanvasTouch, activeOptions);
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      document.removeEventListener('selectstart', preventSelection, activeOptions);
+      document.removeEventListener('dragstart', preventSelection, activeOptions);
+      document.removeEventListener('contextmenu', preventSelection, activeOptions);
+      document.removeEventListener('touchmove', preventSelection, activeOptions);
+      document.removeEventListener('touchstart', preventCanvasTouch, activeOptions);
+      document.removeEventListener('gesturestart', preventCanvasTouch, activeOptions);
+    });
   }
 
   syncMobileControlsVisibility() {
@@ -4019,6 +4052,9 @@ class FightScene extends Phaser.Scene {
         if (input.pressed.jump) {
           this.endShootStance(player);
           this.startJump(player, time);
+          if (horizontal !== 0) {
+            player.sprite.setVelocityX(horizontal * this.getMoveSpeed(player, time));
+          }
           this.updatePlayerAnimation(player, false, horizontal, time);
           this.updateAimVisuals(player);
           return;
@@ -4238,6 +4274,7 @@ class FightScene extends Phaser.Scene {
 
   startJump(player, time) {
     this.clearLadderState(player);
+    player.sprite.body.setAllowGravity(true);
     player.sprite.setVelocityY(-this.configData.movement.jumpSpeed);
     player.sprite.body.touching.down = false;
     player.sprite.body.blocked.down = false;
@@ -4405,6 +4442,7 @@ class FightScene extends Phaser.Scene {
   }
 
   clearLadderState(player) {
+    player.climbing = false;
     player.currentLadder = null;
     player.climbIntroUntil = 0;
     player.climbEndUntil = 0;
@@ -5217,6 +5255,9 @@ class FightScene extends Phaser.Scene {
     if (input.pressed.jump) {
       this.endShootStance(player);
       this.startJump(player, time);
+      if (horizontal !== 0) {
+        player.sprite.setVelocityX(horizontal * this.getMoveSpeed(player, time));
+      }
       return;
     }
 
@@ -5234,6 +5275,11 @@ class FightScene extends Phaser.Scene {
 
     const bounds = ladder.getData('bounds');
     const body = player.sprite.body;
+    if (horizontal !== 0 && this.shouldExitLadderSide(player, bounds, horizontal)) {
+      this.exitLadderSide(player, horizontal, time);
+      return;
+    }
+
     if (vertical < 0 && bounds && body.y + body.height <= bounds.y + 10) {
       this.startLadderEnd(player, ladder, time);
       return;
@@ -5257,6 +5303,28 @@ class FightScene extends Phaser.Scene {
     if (time < player.slowedUntil) {
       player.sprite.setVelocityY(player.sprite.body.velocity.y * this.configData.powerups.slowmo.slowMultiplier);
     }
+  }
+
+  shouldExitLadderSide(player, bounds, horizontal) {
+    const body = player?.sprite?.body;
+    if (!body || !bounds || horizontal === 0) {
+      return false;
+    }
+
+    const centerX = body.x + body.width / 2;
+    const edgeBuffer = Math.max(3, body.width * 0.12);
+    return horizontal > 0
+      ? centerX >= bounds.right + edgeBuffer
+      : centerX <= bounds.left - edgeBuffer;
+  }
+
+  exitLadderSide(player, horizontal, time) {
+    this.clearLadderState(player);
+    player.sprite.body.setAllowGravity(true);
+    player.facing = horizontal;
+    player.sprite.setFlipX(horizontal < 0);
+    player.sprite.setVelocityX(horizontal * this.getMoveSpeed(player, time));
+    player.sprite.setVelocityY(Math.max(player.sprite.body.velocity.y, 0));
   }
 
   getIntersectingLadder(player) {
@@ -6467,6 +6535,24 @@ function isTypingIntoDomField() {
     activeElement instanceof HTMLSelectElement ||
     activeElement.isContentEditable
   );
+}
+
+function isEditableDomTarget(target) {
+  return target instanceof Element && Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+}
+
+function isPlaySurfaceEventTarget(target) {
+  if (!(target instanceof Element) || isEditableDomTarget(target)) {
+    return false;
+  }
+  return Boolean(target.closest('#game, .mobile-controls'));
+}
+
+function isGameCanvasEventTarget(target) {
+  if (!(target instanceof Element) || isEditableDomTarget(target)) {
+    return false;
+  }
+  return Boolean(target.closest('#game canvas'));
 }
 
 function escapeHtml(value) {
