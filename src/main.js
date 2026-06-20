@@ -35,6 +35,12 @@ const CHARACTER_SOURCE_KEY = 'empress-source';
 const CHARACTER_TEXTURE_PREFIX = 'empress-frame';
 const HANDGUN_SOURCE_KEY = 'handgun-source';
 const PROJECTILE_TEXTURE_KEY = 'projectile-glow';
+const MELEE_ACTIVE_FRAMES = {
+  melee: { start: 47, end: 51 },
+  crouchMelee: { start: 83, end: 87 },
+  ladderMelee: { start: 231, end: 235 },
+  jumpMelee: { start: 127, end: 201 },
+};
 let pendingBootOptions = null;
 const CHARACTER_SHEET = {
   frameSize: 64,
@@ -152,6 +158,8 @@ class FightScene extends Phaser.Scene {
     this.slopeTiles = [];
     this.slopeTileMap = new Map();
     this.movingPlatforms = [];
+    this.dynamicProps = [];
+    this.dynamicPropGroup = null;
     this.swingingCrates = [];
     this.clouds = [];
   }
@@ -170,6 +178,8 @@ class FightScene extends Phaser.Scene {
     this.slopeTiles = [];
     this.slopeTileMap = new Map();
     this.movingPlatforms = [];
+    this.dynamicProps = [];
+    this.dynamicPropGroup = null;
     this.swingingCrates = [];
     this.clouds = [];
     this.levelSpawns = null;
@@ -428,6 +438,7 @@ class FightScene extends Phaser.Scene {
     }
 
     this.updateMovingPlatforms(time);
+    this.updateDynamicProps();
     this.updateSwingingCrates(delta);
 
     for (const player of this.players) {
@@ -704,6 +715,12 @@ class FightScene extends Phaser.Scene {
       jumpGunDown: 'girl-jump-down-gun',
       jumpGunLand: 'girl-jump-land-gun',
       jumpMelee: 'girl-jump-melee',
+      climbLadderBegin: 'girl-climb-ladder-begin',
+      climbLadder: 'girl-climb-ladder',
+      climbLadderEnd: 'girl-climb-ladder-end',
+      ladderGunDraw: 'girl-ladder-gun-draw',
+      ladderGunHold: 'girl-ladder-gun-hold',
+      ladderMelee: 'girl-ladder-melee',
       pickup: 'girl-pickup',
     };
 
@@ -726,6 +743,8 @@ class FightScene extends Phaser.Scene {
   createLevel() {
     this.glassWindows = this.physics.add.staticGroup();
     this.levelProps = this.physics.add.staticGroup();
+    this.dynamicProps = [];
+    this.dynamicPropGroup = this.physics.add.group();
     this.doors = [];
     this.slopeTiles = [];
     this.slopeTileMap = new Map();
@@ -906,10 +925,6 @@ class FightScene extends Phaser.Scene {
       TILE_INDEX.slopeDown,
       TILE_INDEX.slopePlatformUp,
       TILE_INDEX.slopePlatformDown,
-      TILE_INDEX.crate,
-      TILE_INDEX.barrel,
-      TILE_INDEX.smallExplosive,
-      TILE_INDEX.swingingCrate,
     ]);
 
     for (let y = startRow; y < level.height; y += 1) {
@@ -941,9 +956,23 @@ class FightScene extends Phaser.Scene {
 
     for (let y = 0; y < level.height; y += 1) {
       for (let x = 0; x < level.width; x += 1) {
+        const tile = level.backdrop?.[y * level.width + x] ?? TILE_INDEX.empty;
+        if (tile === TILE_INDEX.empty) {
+          continue;
+        }
+        const def = TILE_DEFS[tile] ?? TILE_DEFS[TILE_INDEX.backdrop];
+        graphics.fillStyle(parseHexColor(def.color, 0x5b5366), def.id === 'void' ? 0.96 : 0.62);
+        graphics.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+      }
+    }
+
+    for (let y = 0; y < level.height; y += 1) {
+      for (let x = 0; x < level.width; x += 1) {
         const tile = level.grid[y * level.width + x];
         if (
           tile === TILE_INDEX.empty ||
+          tile === TILE_INDEX.backdrop ||
+          tile === TILE_INDEX.void ||
           tile === TILE_INDEX.pickup ||
           tile === TILE_INDEX.p1 ||
           tile === TILE_INDEX.p2 ||
@@ -1084,9 +1113,16 @@ class FightScene extends Phaser.Scene {
       swingingCrate: 0xbf8f55,
     };
     const isSwinging = type === 'swingingCrate';
-    const propScale = type === 'smallExplosive' ? 0.56 : 0.9;
+    const isPushableProp = type === 'crate' || type === 'barrel' || type === 'smallExplosive';
+    const propScale = type === 'smallExplosive' ? 0.46 : 0.9;
     const anchor = isSwinging ? this.findSwingAnchor(options.tileX, options.tileY, x, y, height) : null;
     const visuals = [];
+    const addVisual = (visual, offsetX = 0, offsetY = 0) => {
+      visual.setData('offsetX', offsetX);
+      visual.setData('offsetY', offsetY);
+      visuals.push(visual);
+      return visual;
+    };
 
     const prop = this.add.rectangle(
       x,
@@ -1101,9 +1137,11 @@ class FightScene extends Phaser.Scene {
         .line(0, 0, anchor.x, anchor.y, prop.x, prop.y - prop.displayHeight / 2, 0xd7c1a1, 0.78)
         .setOrigin(0, 0)
         .setDepth(2);
-      visuals.push(rope);
+      rope.setData('rope', true);
+      addVisual(rope);
     }
     prop.setData('propType', type);
+    prop.setData('dynamicProp', isPushableProp);
     prop.setData('destructible', true);
     prop.setData('health', type === 'crate' || type === 'swingingCrate' ? 24 : 10);
     prop.setData('explosiveRadius', type === 'barrel' ? 98 : type === 'smallExplosive' ? 62 : 0);
@@ -1111,28 +1149,41 @@ class FightScene extends Phaser.Scene {
     prop.setData('levelGeometry', true);
     prop.setData('indestructible', false);
     prop.setData('visuals', visuals);
-    this.physics.add.existing(prop, !isSwinging);
+    this.physics.add.existing(prop, !(isSwinging || isPushableProp));
     prop.body.setSize(width * propScale, height * propScale);
     if (isSwinging) {
       prop.body.setAllowGravity(false);
       prop.body.setImmovable(true);
       prop.body.pushable = false;
+    } else if (isPushableProp) {
+      prop.body.setAllowGravity(true);
+      prop.body.setImmovable(false);
+      prop.body.pushable = true;
+      prop.body.setMass(type === 'smallExplosive' ? 2.2 : type === 'barrel' ? 6 : 8);
+      prop.body.setDragX(type === 'smallExplosive' ? 1050 : 1500);
+      prop.body.setBounce(type === 'barrel' ? 0.08 : 0.035, 0.02);
+      prop.body.setMaxVelocity(type === 'smallExplosive' ? 140 : 105, 720);
     }
     prop.body.updateFromGameObject();
-    if (!isSwinging) {
+    if (isPushableProp) {
+      this.dynamicProps.push(prop);
+      this.dynamicPropGroup?.add(prop);
+    } else if (!isSwinging) {
       this.levelProps.add(prop);
     }
     this.platforms.push(prop);
 
     if (type === 'crate' || type === 'swingingCrate') {
-      visuals.push(this.add.rectangle(prop.x, prop.y, prop.displayWidth - 7, prop.displayHeight - 7, 0x000000, 0).setStrokeStyle(2, 0x5e3f29, 0.95));
-      visuals.push(this.add.line(prop.x, prop.y, -prop.displayWidth * 0.28, -prop.displayHeight * 0.28, prop.displayWidth * 0.28, prop.displayHeight * 0.28, 0x5e3f29, 0.92));
-      visuals.push(this.add.line(prop.x, prop.y, prop.displayWidth * 0.28, -prop.displayHeight * 0.28, -prop.displayWidth * 0.28, prop.displayHeight * 0.28, 0x5e3f29, 0.92));
+      const halfX = (prop.displayWidth - 7) / 2;
+      const halfY = (prop.displayHeight - 7) / 2;
+      addVisual(this.add.rectangle(prop.x, prop.y, prop.displayWidth - 7, prop.displayHeight - 7, 0x000000, 0).setStrokeStyle(2, 0x5e3f29, 0.95));
+      addVisual(this.add.line(prop.x, prop.y, -halfX, -halfY, halfX, halfY, 0x5e3f29, 0.92));
+      addVisual(this.add.line(prop.x, prop.y, halfX, -halfY, -halfX, halfY, 0x5e3f29, 0.92));
     } else if (type === 'barrel') {
-      visuals.push(this.add.rectangle(prop.x, prop.y - prop.displayHeight * 0.24, prop.displayWidth, 3, 0xffd166, 0.95));
-      visuals.push(this.add.rectangle(prop.x, prop.y + prop.displayHeight * 0.24, prop.displayWidth, 3, 0xffd166, 0.95));
+      addVisual(this.add.rectangle(prop.x, prop.y - prop.displayHeight * 0.24, prop.displayWidth, 3, 0xffd166, 0.95), 0, -prop.displayHeight * 0.24);
+      addVisual(this.add.rectangle(prop.x, prop.y + prop.displayHeight * 0.24, prop.displayWidth, 3, 0xffd166, 0.95), 0, prop.displayHeight * 0.24);
     } else if (type === 'smallExplosive') {
-      visuals.push(this.add.rectangle(prop.x, prop.y, prop.displayWidth * 0.66, prop.displayHeight * 0.66, 0x332134, 1).setAngle(45));
+      addVisual(this.add.rectangle(prop.x, prop.y, prop.displayWidth * 0.66, prop.displayHeight * 0.66, 0x332134, 1).setAngle(45));
     }
 
     if (isSwinging && anchor) {
@@ -1988,6 +2039,11 @@ class FightScene extends Phaser.Scene {
       aiming: false,
       crouching: false,
       climbing: false,
+      currentLadder: null,
+      climbIntroUntil: 0,
+      climbEndUntil: 0,
+      ladderGunDrawUntil: 0,
+      ladderEndFootY: 0,
       onThinPlatform: false,
       onSlope: false,
       currentSlope: null,
@@ -2027,6 +2083,8 @@ class FightScene extends Phaser.Scene {
       dashHitTargets: new Set(),
       meleeAnimationUntil: 0,
       meleeAnimationKey: null,
+      meleeAttackId: 0,
+      meleeAttackState: null,
       pickupAnimationUntil: 0,
       shootStanceUntil: 0,
       jumpHeldUntil: 0,
@@ -2059,6 +2117,10 @@ class FightScene extends Phaser.Scene {
     }
 
     this.physics.add.collider(this.p1.sprite, this.p2.sprite);
+    if (this.dynamicPropGroup?.getChildren?.().length) {
+      this.physics.add.collider(this.dynamicPropGroup, this.getDynamicPropSupportPlatforms(), undefined, this.dynamicPropPlatformProcess, this);
+      this.physics.add.collider(this.dynamicPropGroup, this.dynamicPropGroup);
+    }
     this.physics.add.collider(this.bullets, this.platforms, this.handleBulletWall, this.bulletWallProcess, this);
     this.physics.add.collider(this.bullets, this.glassWindows, this.handleBulletWindow, undefined, this);
     this.physics.add.collider(this.grenades, this.platforms);
@@ -2507,7 +2569,7 @@ class FightScene extends Phaser.Scene {
           <button class="online-create" type="button">Create Lobby</button>
           <label class="online-code-field">
             <span>Code</span>
-            <input class="online-code-input" type="text" maxlength="4" autocomplete="off" spellcheck="false">
+            <input id="onlineOverlayCodeInput" name="onlineOverlayCode" class="online-code-input" type="text" maxlength="4" autocomplete="off" spellcheck="false">
           </label>
           <button class="online-join" type="button">Join</button>
         </div>
@@ -2930,6 +2992,7 @@ class FightScene extends Phaser.Scene {
     }
     for (const child of [...group.getChildren()]) {
       child.getData?.('labelObj')?.destroy?.();
+      child.getData?.('glowObj')?.destroy?.();
       child.getData?.('shine')?.destroy?.();
       child.destroy();
     }
@@ -2991,8 +3054,8 @@ class FightScene extends Phaser.Scene {
       .getChildren()
       .filter((pickup) => pickup.active)
       .map((pickup) => ({
-        x: roundForNetwork(pickup.x),
-        y: roundForNetwork(pickup.y),
+        x: roundForNetwork(pickup.getData('logicalX') ?? pickup.x),
+        y: roundForNetwork(pickup.getData('logicalY') ?? pickup.y),
         kind: pickup.getData('kind'),
         id: pickup.getData('id'),
       }))
@@ -3119,6 +3182,204 @@ class FightScene extends Phaser.Scene {
     }
   }
 
+  updateDynamicProps() {
+    if (!this.dynamicProps?.length) {
+      return;
+    }
+
+    for (const prop of this.dynamicProps) {
+      if (!prop?.active) {
+        continue;
+      }
+      if (prop.y > this.worldHeight + 900) {
+        this.removeLevelProp(prop);
+        continue;
+      }
+      this.resolveDynamicPropWallContact(prop);
+      this.resolveDynamicPropPlatformContact(prop);
+      this.resolveDynamicPropSlopeContact(prop);
+      this.syncPropVisuals(prop);
+    }
+  }
+
+  syncPropVisuals(prop) {
+    for (const visual of prop.getData('visuals') ?? []) {
+      if (!visual?.active || visual.getData('rope')) {
+        continue;
+      }
+      visual.setPosition(
+        prop.x + (visual.getData('offsetX') ?? 0),
+        prop.y + (visual.getData('offsetY') ?? 0),
+      );
+    }
+  }
+
+  resolveDynamicPropWallContact(prop) {
+    const body = prop?.body;
+    if (!body) {
+      return false;
+    }
+
+    let resolved = false;
+    for (const platform of this.getDynamicPropSupportPlatforms()) {
+      if (platform.getData?.('thin')) {
+        continue;
+      }
+      const platformBody = platform.body;
+      if (!platformBody || !Phaser.Geom.Intersects.RectangleToRectangle(getBodyBounds(prop), getBodyBounds(platform))) {
+        continue;
+      }
+
+      const prevLeft = body.prev?.x ?? body.x;
+      const prevRight = prevLeft + body.width;
+      const prevBottom = (body.prev?.y ?? body.y) + body.height;
+      const platformTop = platformBody.y;
+      const platformBottom = platformBody.y + platformBody.height;
+      const verticalOverlap = body.y + body.height > platformTop + 2 && body.y < platformBottom - 2;
+      const standingOnTop = prevBottom <= platformTop + 10 && body.y + body.height <= platformTop + 18;
+      if (!verticalOverlap || standingOnTop) {
+        continue;
+      }
+
+      if (prevRight <= platformBody.x + 8 && body.x + body.width > platformBody.x) {
+        this.setDynamicPropBodyLeft(prop, platformBody.x - body.width);
+        body.setVelocityX(Math.min(0, body.velocity.x));
+        resolved = true;
+      } else if (prevLeft >= platformBody.x + platformBody.width - 8 && body.x < platformBody.x + platformBody.width) {
+        this.setDynamicPropBodyLeft(prop, platformBody.x + platformBody.width);
+        body.setVelocityX(Math.max(0, body.velocity.x));
+        resolved = true;
+      }
+    }
+
+    const minX = 0;
+    const maxX = (this.editorLevel?.width ?? 0) * (this.editorLevel?.tileSize ?? 0) || this.worldWidth;
+    if (body.x < minX) {
+      this.setDynamicPropBodyLeft(prop, minX);
+      body.setVelocityX(Math.max(0, body.velocity.x));
+      resolved = true;
+    } else if (body.x + body.width > maxX) {
+      this.setDynamicPropBodyLeft(prop, maxX - body.width);
+      body.setVelocityX(Math.min(0, body.velocity.x));
+      resolved = true;
+    }
+
+    return resolved;
+  }
+
+  resolveDynamicPropPlatformContact(prop) {
+    const body = prop?.body;
+    if (!body || body.velocity.y < -24) {
+      return false;
+    }
+
+    const propLeft = body.x;
+    const propRight = body.x + body.width;
+    const propBottom = body.y + body.height;
+    const prevBottom = (body.prev?.y ?? body.y) + body.height;
+    const tolerance = Math.max(24, Math.abs(body.velocity.y) * (1 / 30) + 12);
+    let bestTop = Infinity;
+
+    for (const platform of this.getDynamicPropSupportPlatforms()) {
+      const platformBody = platform.body;
+      if (!platformBody) {
+        continue;
+      }
+      const platformTop = platformBody.y;
+      const overlapsX = propRight > platformBody.x + 1 && propLeft < platformBody.x + platformBody.width - 1;
+      if (!overlapsX) {
+        continue;
+      }
+      const crossedTop = prevBottom <= platformTop + 8 && propBottom >= platformTop - 6;
+      const nearTop = propBottom >= platformTop - 6 && propBottom <= platformTop + tolerance && body.y < platformTop;
+      if ((crossedTop || nearTop) && platformTop < bestTop) {
+        bestTop = platformTop;
+      }
+    }
+
+    if (!Number.isFinite(bestTop)) {
+      return false;
+    }
+
+    this.setDynamicPropBodyTop(prop, bestTop - body.height);
+    body.setVelocityY(0);
+    body.touching.down = true;
+    body.blocked.down = true;
+    return true;
+  }
+
+  resolveDynamicPropSlopeContact(prop) {
+    if (!this.slopeTiles.length || !prop.body || prop.body.velocity.y < -18) {
+      return false;
+    }
+
+    const body = prop.body;
+    const footY = body.y + body.height;
+    const sampleXs = [
+      body.x + body.width * 0.2,
+      body.x + body.width * 0.5,
+      body.x + body.width * 0.8,
+    ];
+    const tileSize = this.editorLevel?.tileSize ?? 24;
+    const tileY = Math.floor((footY + 3) / tileSize);
+    let bestSurface = Infinity;
+
+    for (const sampleX of sampleXs) {
+      const tileX = Math.floor(sampleX / tileSize);
+      for (let y = tileY - 1; y <= tileY + 1; y += 1) {
+        for (let x = tileX - 1; x <= tileX + 1; x += 1) {
+          const slope = this.slopeTileMap.get(`${x},${y}`);
+          if (!slope || slope.side !== 'floor' || slope.thin) {
+            continue;
+          }
+          if (sampleX < slope.x - 2 || sampleX > slope.x + slope.size + 2) {
+            continue;
+          }
+          const localX = Phaser.Math.Clamp(sampleX - slope.x, 0, slope.size);
+          const surfaceY = slope.type === 'up'
+            ? slope.y + slope.size - localX
+            : slope.y + localX;
+          if (footY >= surfaceY - 5 && footY <= surfaceY + Math.max(14, slope.size * 0.8) && surfaceY < bestSurface) {
+            bestSurface = surfaceY;
+          }
+        }
+      }
+    }
+
+    if (!Number.isFinite(bestSurface)) {
+      return false;
+    }
+
+    this.setDynamicPropBodyTop(prop, bestSurface - body.height);
+    if (body.velocity.y > 0) {
+      body.setVelocityY(0);
+    }
+    body.touching.down = true;
+    body.blocked.down = true;
+    body.updateCenter();
+    return true;
+  }
+
+  setDynamicPropBodyTop(prop, topY) {
+    const body = prop.body;
+    prop.y = topY + body.height / 2;
+    body.y = topY;
+    body.prev.y = topY;
+    body.prevFrame.y = topY;
+    body.autoFrame.y = topY;
+    body.updateCenter();
+  }
+
+  setDynamicPropBodyLeft(prop, leftX) {
+    const body = prop.body;
+    prop.x = leftX + body.width / 2;
+    body.x = leftX;
+    body.prev.x = leftX;
+    body.prevFrame.x = leftX;
+    body.autoFrame.x = leftX;
+    body.updateCenter();
+  }
+
   updateSwingingCrates(delta) {
     if (!this.swingingCrates.length) {
       return;
@@ -3221,7 +3482,7 @@ class FightScene extends Phaser.Scene {
 
   placePlayerAtDoorExit(player, door) {
     player.crouching = false;
-    player.climbing = false;
+    this.clearLadderState(player);
     this.applyBodyPose(player, true);
     const footY = this.getDoorFootY(door);
     const body = player.sprite.body;
@@ -3243,7 +3504,7 @@ class FightScene extends Phaser.Scene {
     const tileSize = door.height / 2;
     player.aiming = false;
     player.aimMode = null;
-    player.climbing = false;
+    this.clearLadderState(player);
     player.crouching = false;
     player.doorIgnoreKey = door.key;
     player.doorExitDirection = exitDirection;
@@ -3312,20 +3573,7 @@ class FightScene extends Phaser.Scene {
 
   isSolidFloorTile(tile) {
     return (
-      tile === TILE_INDEX.solid ||
-      tile === TILE_INDEX.crate ||
-      tile === TILE_INDEX.barrel ||
-      tile === TILE_INDEX.smallExplosive ||
-      tile === TILE_INDEX.swingingCrate
-    );
-  }
-
-  isPropFloorTile(tile) {
-    return (
-      tile === TILE_INDEX.crate ||
-      tile === TILE_INDEX.barrel ||
-      tile === TILE_INDEX.smallExplosive ||
-      tile === TILE_INDEX.swingingCrate
+      tile === TILE_INDEX.solid
     );
   }
 
@@ -3367,7 +3615,7 @@ class FightScene extends Phaser.Scene {
         if (!this.isSolidFloorTile(tile)) {
           continue;
         }
-        const maxBelowTop = this.isPropFloorTile(tile) ? Math.max(6, tileSize * 0.35) : Math.max(18, tileSize * 1.35);
+        const maxBelowTop = Math.max(18, tileSize * 1.35);
         if (footY <= topY + maxBelowTop && topY < bestTop) {
           bestTop = topY;
         }
@@ -3741,6 +3989,27 @@ class FightScene extends Phaser.Scene {
     }
 
     if (player.aiming) {
+      if (player.climbing) {
+        player.crouching = false;
+        body.setAllowGravity(false);
+        body.setVelocity(0, 0);
+        if (input.pressed.jump) {
+          this.endShootStance(player);
+          this.startJump(player, time);
+          this.updatePlayerAnimation(player, false, horizontal, time);
+          this.updateAimVisuals(player);
+          return;
+        }
+        this.updateAim(player, 0, vertical, delta);
+        if (
+          (player.aimMode === 'gun' && input.released.shoot) ||
+          (player.aimMode === 'grenade' && input.released.grenade)
+        ) {
+          this.releaseAim(player, time);
+        }
+        this.updatePlayerAnimation(player, true, 0, time);
+        return;
+      }
       this.updateCrouchState(player, grounded, false, time);
       this.applyBodyPose(player, grounded);
       this.updateAim(player, horizontal, vertical, delta);
@@ -3752,6 +4021,20 @@ class FightScene extends Phaser.Scene {
         this.releaseAim(player, time);
       }
       this.updatePlayerAnimation(player, grounded, horizontal, time);
+      return;
+    }
+
+    const ladder = this.getIntersectingLadder(player) ?? this.getLadderUnderPlayer(player) ?? player.currentLadder;
+    if (player.climbing || (ladder && vertical !== 0)) {
+      if (!player.climbing) {
+        this.startLadderClimb(player, ladder, vertical, time);
+      }
+      if (input.pressed.melee) {
+        this.handleMeleePressed(player, time);
+      }
+      this.resetJumpState(player);
+      this.updateClimbing(player, ladder, vertical, horizontal, time, input);
+      this.updatePlayerAnimation(player, true, horizontal, time);
       return;
     }
 
@@ -3769,17 +4052,6 @@ class FightScene extends Phaser.Scene {
 
     if (input.pressed.crouch && this.tryStartPlatformDrop(player, grounded, time)) {
       player.lastTapDownAt = -Infinity;
-    }
-
-    const ladder = this.getIntersectingLadder(player);
-    if (ladder && vertical !== 0) {
-      player.climbing = true;
-    }
-    if (player.climbing) {
-      this.resetJumpState(player);
-      this.updateClimbing(player, ladder, vertical, horizontal, time, input);
-      this.updatePlayerAnimation(player, true, horizontal, time);
-      return;
     }
 
     body.setAllowGravity(true);
@@ -3853,7 +4125,7 @@ class FightScene extends Phaser.Scene {
   updateKnockedPlayer(player) {
     player.aiming = false;
     this.endShootStance(player);
-    player.climbing = false;
+    this.clearLadderState(player);
     player.sprite.body.setAllowGravity(true);
     player.sprite.setAngle(player.facing > 0 ? 82 : -82);
     player.sprite.play('girl-crouch', true);
@@ -3942,6 +4214,7 @@ class FightScene extends Phaser.Scene {
   }
 
   startJump(player, time) {
+    this.clearLadderState(player);
     player.sprite.setVelocityY(-this.configData.movement.jumpSpeed);
     player.sprite.body.touching.down = false;
     player.sprite.body.blocked.down = false;
@@ -4011,6 +4284,7 @@ class FightScene extends Phaser.Scene {
     player.shootStanceUntil = 0;
     player.aiming = false;
     player.aimMode = null;
+    player.ladderGunDrawUntil = 0;
     this.setAimVisible(player, false);
   }
 
@@ -4079,6 +4353,13 @@ class FightScene extends Phaser.Scene {
       jumpGunDown: 'girl-jump-down-gun',
       jumpGunLand: 'girl-jump-land-gun',
       jumpMelee: 'girl-jump-melee',
+      climbLadderBegin: 'girl-climb-ladder-begin',
+      climbLadder: 'girl-climb-ladder',
+      climbLadderEnd: 'girl-climb-ladder-end',
+      ladderGunDraw: 'girl-ladder-gun-draw',
+      ladderGunHold: 'girl-ladder-gun-hold',
+      ladderGun: 'girl-ladder-gun-hold',
+      ladderMelee: 'girl-ladder-melee',
       pickup: 'girl-pickup',
     };
     return animationKeys[animationName] ?? 'girl-idle';
@@ -4098,6 +4379,15 @@ class FightScene extends Phaser.Scene {
 
     const frames = makeFrameList1Based(setting, this.animationFrameCount ?? 1);
     return Math.max(80, (frames.length / Math.max(1, setting.fps)) * 1000);
+  }
+
+  clearLadderState(player) {
+    this.clearLadderState(player);
+    player.currentLadder = null;
+    player.climbIntroUntil = 0;
+    player.climbEndUntil = 0;
+    player.ladderGunDrawUntil = 0;
+    player.ladderEndFootY = 0;
   }
 
   applyBodyPose(player) {
@@ -4127,6 +4417,39 @@ class FightScene extends Phaser.Scene {
   updatePlayerAnimation(player, grounded, horizontal, time) {
     const { sprite } = player;
     const gunStanceActive = player.aiming || this.isInShootStance(player, time);
+
+    if (player.climbing) {
+      if (time < player.meleeAnimationUntil && player.meleeAnimationKey) {
+        this.continueOneShotAnimation(sprite, player.meleeAnimationKey);
+        return;
+      }
+      if (player.aiming && player.aimMode === 'gun' && time < player.ladderGunDrawUntil) {
+        this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey('ladderGunDraw'));
+        return;
+      }
+      if ((player.aiming || this.isInShootStance(player, time)) && player.aimMode === 'gun') {
+        sprite.play(this.getPlayerAnimationKey('ladderGunHold'), true);
+        return;
+      }
+      if (time < player.climbIntroUntil) {
+        this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey('climbLadderBegin'));
+        return;
+      }
+      if (time < player.climbEndUntil) {
+        this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey('climbLadderEnd'));
+        return;
+      }
+      if (Math.abs(sprite.body.velocity.y) > 8 || horizontal !== 0) {
+        sprite.anims.resume();
+        sprite.play(this.getPlayerAnimationKey('climbLadder'), true);
+      } else if (sprite.anims.currentAnim?.key !== this.getPlayerAnimationKey('climbLadder')) {
+        sprite.play(this.getPlayerAnimationKey('climbLadder'), true);
+        sprite.anims.pause();
+      } else {
+        sprite.anims.pause();
+      }
+      return;
+    }
 
     if (gunStanceActive && !player.crouching && time < player.standTransitionUntil) {
       this.continueOneShotAnimation(sprite, player.standTransitionGun ? 'girl-stand-up-gun' : 'girl-stand-up');
@@ -4231,6 +4554,12 @@ class FightScene extends Phaser.Scene {
     player.aiming = true;
     player.aimMode = mode;
     player.shootStanceUntil = 0;
+    if (player.climbing && mode === 'gun') {
+      player.ladderGunDrawUntil = time + this.getAnimationDurationMs('ladderGunDraw');
+      player.sprite.play(this.getPlayerAnimationKey('ladderGunDraw'));
+    } else {
+      player.ladderGunDrawUntil = 0;
+    }
     if (continuingGunStance) {
       player.aimFacing = player.aimFacing || (player.facing >= 0 ? 1 : -1);
       player.aimOffset = this.getAimOffsetFromAngle(player.aimAngle, player.aimFacing);
@@ -4346,6 +4675,9 @@ class FightScene extends Phaser.Scene {
     if (!player.weapon) {
       return false;
     }
+    if (player.climbing && this.time.now < player.ladderGunDrawUntil) {
+      return false;
+    }
 
     const key = player.sprite.anims.currentAnim?.key;
     return (
@@ -4362,6 +4694,7 @@ class FightScene extends Phaser.Scene {
         'girl-jump-peak-gun',
         'girl-jump-down-gun',
         'girl-jump-land-gun',
+        'girl-ladder-gun-hold',
       ].includes(key)
     );
   }
@@ -4401,6 +4734,7 @@ class FightScene extends Phaser.Scene {
       'girl-jump-peak-gun',
       'girl-jump-down-gun',
       'girl-jump-land-gun',
+      'girl-ladder-gun-hold',
     ].includes(key);
   }
 
@@ -4597,6 +4931,11 @@ class FightScene extends Phaser.Scene {
       return;
     }
 
+    if (player.climbing) {
+      this.performMeleeCombo(player, time);
+      return;
+    }
+
     const grounded = player.sprite.body.blocked.down || player.sprite.body.touching.down;
     const horizontal = (player.inputState.down.right ? 1 : 0) - (player.inputState.down.left ? 1 : 0);
     if (!player.crouching && grounded && horizontal !== 0) {
@@ -4645,44 +4984,95 @@ class FightScene extends Phaser.Scene {
     player.nextMeleeAt = time + Math.max(this.configData.melee.cooldownMs, animationDuration);
     player.comboResetAt = time + this.configData.melee.comboResetMs;
     player.comboIndex = (player.comboIndex + 1) % this.configData.melee.hits.length;
-    this.startMeleeAnimation(player, animationName, time, animationDuration);
-
-    const pivot = this.getAimPivot(player);
-    const centerX = pivot.x + player.facing * 34;
-    const centerY = pivot.y;
-    this.flashHitbox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, player.facing, 0xffffff, 0.28);
-    this.breakWindowsInBox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, hit.damage);
-    this.damagePropsInBox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, hit.damage, player.id);
-
-    const opponent = this.getOpponent(player);
-    if (this.time.now < opponent.knockedUntil) {
-      return;
-    }
-
-    if (this.isTargetInBox(opponent.sprite, centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight)) {
-      this.damagePlayer(opponent, hit.damage, player.facing, hit.knockbackX, hit.knockbackY, {
-        source: `${player.label} combo ${comboNumber}`,
-      });
-    }
+    this.startMeleeAnimation(player, animationName, time, animationDuration, hit, comboNumber);
   }
 
   getMeleeAnimationName(player) {
+    if (player.climbing) {
+      return 'ladderMelee';
+    }
     if (!player.sprite.body.blocked.down && !player.sprite.body.touching.down) {
       return 'jumpMelee';
     }
     return player.crouching ? 'crouchMelee' : 'melee';
   }
 
-  startMeleeAnimation(player, animationName, time, duration) {
+  startMeleeAnimation(player, animationName, time, duration, hit = this.configData.melee.hits[0], comboNumber = 1) {
     const keyByAnimation = {
       melee: 'girl-melee',
       crouchMelee: 'girl-crouch-melee',
       jumpMelee: 'girl-jump-melee',
+      ladderMelee: 'girl-ladder-melee',
     };
     const animationKey = keyByAnimation[animationName] ?? 'girl-melee';
     player.meleeAnimationKey = animationKey;
     player.meleeAnimationUntil = time + duration;
+    player.meleeAttackId += 1;
+    player.meleeAttackState = {
+      id: player.meleeAttackId,
+      animationName,
+      hit,
+      comboNumber,
+      hitTargets: new Set(),
+      environmentHitApplied: false,
+    };
     player.sprite.play(animationKey);
+    this.scheduleMeleeActiveFrames(player, player.meleeAttackState);
+  }
+
+  scheduleMeleeActiveFrames(player, attackState) {
+    const setting = this.animationConfig?.[attackState.animationName];
+    const active = MELEE_ACTIVE_FRAMES[attackState.animationName];
+    if (!setting || !active) {
+      this.time.delayedCall(0, () => this.resolveMeleeActiveFrame(player, attackState.id));
+      return;
+    }
+
+    const frames = makeFrameList1Based(setting, this.animationFrameCount ?? 1);
+    const frameMs = 1000 / Math.max(1, setting.fps);
+    let scheduled = 0;
+    frames.forEach((frame, index) => {
+      if (frame < active.start || frame > active.end) {
+        return;
+      }
+      scheduled += 1;
+      this.time.delayedCall(index * frameMs, () => this.resolveMeleeActiveFrame(player, attackState.id));
+    });
+
+    if (scheduled === 0) {
+      this.time.delayedCall(Math.min(120, frameMs), () => this.resolveMeleeActiveFrame(player, attackState.id));
+    }
+  }
+
+  resolveMeleeActiveFrame(player, attackId) {
+    const attack = player.meleeAttackState;
+    if (!attack || attack.id !== attackId || this.time.now > player.meleeAnimationUntil || !player.sprite.active) {
+      return;
+    }
+
+    const hit = attack.hit;
+    const pivot = this.getAimPivot(player);
+    const centerX = pivot.x + player.facing * 34;
+    const centerY = pivot.y;
+    this.flashHitbox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, player.facing, 0xffffff, 0.2);
+
+    if (!attack.environmentHitApplied) {
+      this.breakWindowsInBox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, hit.damage);
+      this.damagePropsInBox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, hit.damage, player.id);
+      attack.environmentHitApplied = true;
+    }
+
+    const opponent = this.getOpponent(player);
+    if (!opponent?.sprite?.active || attack.hitTargets.has(opponent.id) || this.time.now < opponent.knockedUntil) {
+      return;
+    }
+
+    if (this.isTargetInBox(opponent.sprite, centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight)) {
+      attack.hitTargets.add(opponent.id);
+      this.damagePlayer(opponent, hit.damage, player.facing, hit.knockbackX, hit.knockbackY, {
+        source: `${player.label} combo ${attack.comboNumber}`,
+      });
+    }
   }
 
   startPickupAnimation(player, time) {
@@ -4732,25 +5122,114 @@ class FightScene extends Phaser.Scene {
     }
   }
 
-  updateClimbing(player, ladder, vertical, horizontal, time, input) {
+  startLadderClimb(player, ladder, vertical, time) {
     if (!ladder) {
-      player.climbing = false;
+      return;
+    }
+    player.climbing = true;
+    player.currentLadder = ladder;
+    player.crouching = false;
+    player.crouchTransitionUntil = 0;
+    player.standTransitionUntil = 0;
+    player.sprite.body.setAllowGravity(false);
+    player.sprite.setVelocity(0, 0);
+    this.applyBodyPose(player, true);
+
+    if (vertical > 0 && (player.sprite.body.blocked.down || player.sprite.body.touching.down)) {
+      player.dropThroughPlatform = player.currentThinPlatform?.active
+        ? player.currentThinPlatform
+        : this.findThinPlatformUnderPlayer(player);
+      player.dropThroughSlope = player.currentThinSlope ?? (player.currentSlope?.thin ? player.currentSlope : null);
+      player.dropUntil = time + DROP_DURATION;
+      player.climbIntroUntil = time + this.getAnimationDurationMs('climbLadderBegin');
+      player.sprite.setVelocityY(this.configData.movement.climbSpeed * 0.38);
+      player.sprite.play(this.getPlayerAnimationKey('climbLadderBegin'));
+    } else {
+      player.climbIntroUntil = 0;
+    }
+  }
+
+  startLadderEnd(player, ladder, time) {
+    const bounds = ladder?.getData('bounds');
+    player.currentLadder = ladder;
+    player.climbIntroUntil = 0;
+    player.climbEndUntil = time + this.getAnimationDurationMs('climbLadderEnd');
+    player.ladderEndFootY = bounds ? bounds.y + 2 : player.sprite.body.y + player.sprite.body.height;
+    player.sprite.setVelocity(0, 0);
+    player.sprite.body.setAllowGravity(false);
+    player.sprite.play(this.getPlayerAnimationKey('climbLadderEnd'));
+  }
+
+  finishLadderEnd(player) {
+    const body = player.sprite.body;
+    const footY = player.ladderEndFootY || body.y + body.height;
+    this.clearLadderState(player);
+    player.crouching = false;
+    player.wasGrounded = true;
+    body.setAllowGravity(true);
+    this.applyBodyPose(player, true);
+    this.snapPlayerBodyTo(player, body.x, footY - body.height);
+    player.sprite.setVelocity(0, 0);
+  }
+
+  updateClimbing(player, ladder, vertical, horizontal, time, input) {
+    if (player.climbEndUntil > 0) {
+      if (time < player.climbEndUntil) {
+        player.sprite.body.setAllowGravity(false);
+        player.sprite.setVelocity(0, 0);
+        return;
+      }
+      this.finishLadderEnd(player);
+      return;
+    }
+
+    if (!ladder) {
+      this.clearLadderState(player);
       player.sprite.body.setAllowGravity(true);
       return;
     }
 
+    player.currentLadder = ladder;
     player.sprite.body.setAllowGravity(false);
+
+    if (input.pressed.jump) {
+      this.endShootStance(player);
+      this.startJump(player, time);
+      return;
+    }
+
+    if (time < player.climbIntroUntil) {
+      player.sprite.setVelocityX(0);
+      player.sprite.setVelocityY(this.configData.movement.climbSpeed * 0.38);
+      return;
+    }
+    player.climbIntroUntil = 0;
+
+    if (time < player.meleeAnimationUntil || player.aiming) {
+      player.sprite.setVelocity(0, 0);
+      return;
+    }
+
+    const bounds = ladder.getData('bounds');
+    const body = player.sprite.body;
+    if (vertical < 0 && bounds && body.y + body.height <= bounds.y + 10) {
+      this.startLadderEnd(player, ladder, time);
+      return;
+    }
+
+    if (vertical > 0 && bounds && body.y > bounds.bottom + 4) {
+      this.clearLadderState(player);
+      player.sprite.body.setAllowGravity(true);
+      return;
+    }
+
     player.sprite.setVelocityY(vertical * this.configData.movement.climbSpeed);
     if (horizontal !== 0) {
       player.sprite.setVelocityX(horizontal * this.configData.movement.walkSpeed * 0.45);
       player.facing = horizontal;
       player.sprite.setFlipX(horizontal < 0);
-    }
-
-    if (input.pressed.jump) {
-      player.climbing = false;
-      player.sprite.body.setAllowGravity(true);
-      player.sprite.setVelocityY(-this.configData.movement.jumpSpeed * 0.75);
+    } else {
+      player.sprite.setVelocityX(0);
     }
 
     if (time < player.slowedUntil) {
@@ -4761,6 +5240,24 @@ class FightScene extends Phaser.Scene {
   getIntersectingLadder(player) {
     const playerBounds = getBodyBounds(player.sprite);
     return this.ladders.find((ladder) => Phaser.Geom.Intersects.RectangleToRectangle(playerBounds, ladder.getData('bounds'))) ?? null;
+  }
+
+  getLadderUnderPlayer(player) {
+    const body = player?.sprite?.body;
+    if (!body) {
+      return null;
+    }
+    const footY = body.y + body.height;
+    const centerX = body.x + body.width / 2;
+    return this.ladders.find((ladder) => {
+      const bounds = ladder.getData('bounds');
+      return (
+        centerX >= bounds.x - 4 &&
+        centerX <= bounds.right + 4 &&
+        footY >= bounds.y - 10 &&
+        footY <= bounds.y + 18
+      );
+    }) ?? null;
   }
 
   handleBulletHit(spriteOrBullet, maybeSprite) {
@@ -4990,6 +5487,8 @@ class FightScene extends Phaser.Scene {
     player.nextPowerupAt = 0;
     player.meleeAnimationUntil = 0;
     player.meleeAnimationKey = null;
+    player.meleeAttackState = null;
+    player.meleeAttackId += 1;
     player.pickupAnimationUntil = 0;
     player.currentPickup = null;
     player.cpuInputDown = createInputDown();
@@ -5012,7 +5511,7 @@ class FightScene extends Phaser.Scene {
     player.crouching = false;
     player.crouchTransitionUntil = 0;
     player.standTransitionUntil = 0;
-    player.climbing = false;
+    this.clearLadderState(player);
     player.sprite.body.setAllowGravity(true);
     player.invulnerableUntil = this.time.now + this.configData.round.respawnInvulnerabilityMs;
     player.sprite.setAngle(0);
@@ -5210,22 +5709,39 @@ class FightScene extends Phaser.Scene {
   isPickupSpawnOccupied(point) {
     return this.pickups.getChildren().some((pickup) => (
       pickup.active &&
-      Phaser.Math.Distance.Between(point.x, point.y, pickup.x, pickup.y) < 44
+      Phaser.Math.Distance.Between(point.x, point.y, pickup.getData('logicalX') ?? pickup.x, pickup.getData('logicalY') ?? pickup.y) < 44
     ));
   }
 
   createPickup(x, y, kind, id) {
     const texture = kind === 'weapon' ? `weapon-${id}` : kind === 'grenade' ? 'grenade-pixel' : `powerup-${id}`;
-    const pickup = this.physics.add.staticImage(x, y, texture).setDepth(8);
+    const visualY = kind === 'weapon' ? y + 9 : y + 4;
+    const pickup = this.physics.add.staticImage(x, visualY, texture).setDepth(9);
     pickup.setData('kind', kind);
     pickup.setData('id', id);
-    pickup.setScale(kind === 'weapon' ? 0.58 : 1.1);
-    pickup.body.setSize(28, 28);
+    pickup.setData('logicalX', x);
+    pickup.setData('logicalY', y);
+    pickup.setScale(kind === 'weapon' ? 0.62 : 1.05);
+    pickup.body.setSize(kind === 'weapon' ? 34 : 28, 22);
     pickup.refreshBody();
+
+    const glowColor = kind === 'weapon' ? 0xffe45c : kind === 'grenade' ? COLORS.grenade : parseHexColor(this.configData.powerups[id]?.color, 0x8cffab);
+    const glow = this.add
+      .ellipse(pickup.x, pickup.y + 1, kind === 'weapon' ? 48 : 34, kind === 'weapon' ? 18 : 20, glowColor, 0.22)
+      .setDepth(7);
+    this.tweens.add({
+      targets: glow,
+      alpha: { from: 0.14, to: 0.34 },
+      scaleX: { from: 0.92, to: 1.08 },
+      duration: 760,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
 
     const label = this.pickupLabel(kind, id);
     const text = this.add
-      .text(x, y + this.configData.visuals.pickupTextOffset, label, {
+      .text(pickup.x, pickup.y + (kind === 'weapon' ? 15 : 16), label, {
         fontFamily: UI_FONT,
         fontSize: '10px',
         color: '#ffffff',
@@ -5234,6 +5750,7 @@ class FightScene extends Phaser.Scene {
       })
       .setOrigin(0.5, 0)
       .setDepth(8);
+    pickup.setData('glowObj', glow);
     pickup.setData('labelObj', text);
     this.pickups.add(pickup);
     return pickup;
@@ -5307,8 +5824,8 @@ class FightScene extends Phaser.Scene {
       return;
     }
     const kind = pickup.getData('kind');
-    const oldX = pickup.x;
-    const oldY = pickup.y;
+    const oldX = pickup.getData('logicalX') ?? pickup.x;
+    const oldY = pickup.getData('logicalY') ?? pickup.y;
 
     if (kind === 'weapon' && player.weapon) {
       this.createPickup(oldX, oldY, 'weapon', player.weapon.id);
@@ -5344,6 +5861,7 @@ class FightScene extends Phaser.Scene {
     }
 
     pickup.getData('labelObj')?.destroy();
+    pickup.getData('glowObj')?.destroy();
     pickup.destroy();
   }
 
@@ -5426,6 +5944,28 @@ class FightScene extends Phaser.Scene {
     const playerBottom = sprite.body.y + sprite.body.height;
     const platformTop = platform.body.y;
     return playerBottom <= platformTop + 14;
+  }
+
+  dynamicPropPlatformProcess(prop, platform) {
+    if (!prop?.body || !platform?.body || prop === platform || platform.getData?.('dynamicProp')) {
+      return false;
+    }
+    if (!platform.getData?.('thin')) {
+      return true;
+    }
+    if (prop.body.velocity.y < -8) {
+      return false;
+    }
+    const propBottom = prop.body.y + prop.body.height;
+    return propBottom <= platform.body.y + 14;
+  }
+
+  getDynamicPropSupportPlatforms() {
+    return this.platforms.filter((platform) => (
+      platform?.active &&
+      platform.body &&
+      !platform.getData?.('dynamicProp')
+    ));
   }
 
   shouldIgnoreSlopeLandingSide(player, platform) {
@@ -5562,6 +6102,7 @@ class FightScene extends Phaser.Scene {
   getLevelProps() {
     return [
       ...(this.levelProps?.getChildren?.() ?? []),
+      ...(this.dynamicProps ?? []),
       ...this.swingingCrates.map((crate) => crate.body).filter(Boolean),
     ];
   }
@@ -5597,15 +6138,7 @@ class FightScene extends Phaser.Scene {
     const width = prop.displayWidth;
     const height = prop.displayHeight;
     const color = prop.fillColor ?? COLORS.crate;
-    const index = this.platforms.indexOf(prop);
-    if (index >= 0) {
-      this.platforms.splice(index, 1);
-    }
-    this.swingingCrates = this.swingingCrates.filter((crate) => crate.body !== prop);
-    for (const visual of prop.getData('visuals') ?? []) {
-      visual.destroy();
-    }
-    prop.destroy();
+    this.removeLevelProp(prop);
 
     for (let i = 0; i < 8; i += 1) {
       const chunk = this.add.rectangle(
@@ -5627,6 +6160,23 @@ class FightScene extends Phaser.Scene {
         onComplete: () => chunk.destroy(),
       });
     }
+  }
+
+  removeLevelProp(prop) {
+    if (!prop?.active) {
+      return;
+    }
+    const index = this.platforms.indexOf(prop);
+    if (index >= 0) {
+      this.platforms.splice(index, 1);
+    }
+    this.dynamicProps = (this.dynamicProps ?? []).filter((candidate) => candidate !== prop);
+    this.dynamicPropGroup?.remove?.(prop, false, false);
+    this.swingingCrates = this.swingingCrates.filter((crate) => crate.body !== prop);
+    for (const visual of prop.getData('visuals') ?? []) {
+      visual.destroy();
+    }
+    prop.destroy();
   }
 
   breakWindow(windowPane, impactX, impactY) {
@@ -6395,6 +6945,9 @@ function getGunArmOverlayFrame(bodyFrame) {
   if (bodyFrame >= 133 && bodyFrame <= 143) {
     return bodyFrame + 11;
   }
+  if (bodyFrame === 227) {
+    return 228;
+  }
   return 37;
 }
 
@@ -6424,7 +6977,7 @@ function createBootMenu() {
           <button class="boot-create" type="button">Create Lobby</button>
           <label class="online-code-field">
             <span>Code</span>
-            <input class="boot-code-input" type="text" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text" value="${escapeHtml(initialCode)}">
+            <input id="onlineLobbyCodeInput" name="onlineLobbyCode" class="boot-code-input" type="text" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text" value="${escapeHtml(initialCode)}">
           </label>
           <button class="boot-join" type="button">Join</button>
         </div>
@@ -6637,7 +7190,10 @@ function shouldAutoPlaytestEditorLevel() {
 }
 
 function startGameFromBoot(bootOverlay, options) {
-  pendingBootOptions = options;
+  pendingBootOptions = {
+    editorLevel: true,
+    ...(options ?? {}),
+  };
   bootOverlay?.remove();
   window.__superfightersGame?.destroy(true);
   window.__superfightersGame = new Phaser.Game({
@@ -6666,7 +7222,7 @@ function startGameFromBoot(bootOverlay, options) {
 }
 
 function consumeBootOptions() {
-  const options = pendingBootOptions ?? { mode: 'local' };
+  const options = pendingBootOptions ?? { mode: 'local', editorLevel: true };
   pendingBootOptions = null;
   return options;
 }

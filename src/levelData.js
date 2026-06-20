@@ -46,6 +46,7 @@ export function createEmptyLevel(name = 'Untitled Arena') {
     height: DEFAULT_LEVEL_HEIGHT,
     tileSize: TILE_SIZE,
     grid: new Uint8Array(DEFAULT_LEVEL_WIDTH * DEFAULT_LEVEL_HEIGHT),
+    backdrop: new Uint8Array(DEFAULT_LEVEL_WIDTH * DEFAULT_LEVEL_HEIGHT),
     pickupSpecs: [],
     doorLinks: [],
   };
@@ -93,6 +94,7 @@ export function serializeLevel(level) {
     height: normalized.height,
     tileSize: normalized.tileSize,
     runs: encodeRuns(normalized.grid),
+    backdropRuns: encodeRuns(normalized.backdrop),
     pickupSpecs: normalized.pickupSpecs,
     doorLinks: normalized.doorLinks,
   };
@@ -103,6 +105,7 @@ export function normalizeLevel(input) {
   const height = clampInteger(input?.height, 1, 512, DEFAULT_LEVEL_HEIGHT);
   const tileSize = clampInteger(input?.tileSize, 1, 128, TILE_SIZE);
   const grid = new Uint8Array(width * height);
+  const backdrop = new Uint8Array(width * height);
 
   if (input?.grid?.length === width * height) {
     for (let i = 0; i < grid.length; i += 1) {
@@ -112,6 +115,23 @@ export function normalizeLevel(input) {
     decodeRuns(input.runs, grid);
   }
 
+  if (input?.backdrop?.length === width * height) {
+    for (let i = 0; i < backdrop.length; i += 1) {
+      backdrop[i] = normalizeBackdropTile(input.backdrop[i]);
+    }
+  } else if (Array.isArray(input?.backdropRuns)) {
+    decodeRuns(input.backdropRuns, backdrop, normalizeBackdropTile);
+  }
+
+  for (let i = 0; i < grid.length; i += 1) {
+    if (grid[i] === TILE_INDEX.backdrop || grid[i] === TILE_INDEX.void) {
+      if (backdrop[i] === TILE_INDEX.empty) {
+        backdrop[i] = normalizeBackdropTile(grid[i]);
+      }
+      grid[i] = TILE_INDEX.empty;
+    }
+  }
+
   return {
     version: LEVEL_VERSION,
     name: typeof input?.name === 'string' ? input.name : 'Untitled Arena',
@@ -119,6 +139,7 @@ export function normalizeLevel(input) {
     height,
     tileSize,
     grid,
+    backdrop,
     pickupSpecs: normalizePickupSpecs(input?.pickupSpecs, width, height),
     doorLinks: normalizeDoorLinks(input?.doorLinks, width, height),
   };
@@ -189,6 +210,11 @@ export function countNonEmptyTiles(level) {
       count += 1;
     }
   }
+  for (const tile of normalized.backdrop) {
+    if (tile !== TILE_INDEX.empty) {
+      count += 1;
+    }
+  }
   return count;
 }
 
@@ -198,6 +224,15 @@ export function setTile(level, x, y, tileId) {
   }
 
   level.grid[y * level.width + x] = TILE_INDEX[tileId] ?? TILE_INDEX.empty;
+}
+
+export function setBackdropTile(level, x, y, tileId) {
+  if (x < 0 || y < 0 || x >= level.width || y >= level.height) {
+    return;
+  }
+
+  level.backdrop ??= new Uint8Array(level.width * level.height);
+  level.backdrop[y * level.width + x] = normalizeBackdropTile(TILE_INDEX[tileId] ?? TILE_INDEX.empty);
 }
 
 export function getDoorKey(x, y) {
@@ -368,13 +403,21 @@ function fillRectWorld(level, tileId, left, top, width, height) {
 function fillRectTiles(level, tileId, x, y, width, height) {
   for (let row = y; row < y + height; row += 1) {
     for (let column = x; column < x + width; column += 1) {
-      setTile(level, column, row, tileId);
+      if (tileId === 'backdrop' || tileId === 'void') {
+        setBackdropTile(level, column, row, tileId);
+      } else {
+        setTile(level, column, row, tileId);
+      }
     }
   }
 }
 
 function setWorldTile(level, tileId, worldX, worldY) {
-  setTile(level, Math.floor(worldX / level.tileSize), Math.floor(worldY / level.tileSize), tileId);
+  if (tileId === 'backdrop' || tileId === 'void') {
+    setBackdropTile(level, Math.floor(worldX / level.tileSize), Math.floor(worldY / level.tileSize), tileId);
+  } else {
+    setTile(level, Math.floor(worldX / level.tileSize), Math.floor(worldY / level.tileSize), tileId);
+  }
 }
 
 function encodeRuns(grid) {
@@ -402,15 +445,22 @@ function encodeRuns(grid) {
   return runs;
 }
 
-function decodeRuns(runs, grid) {
+function decodeRuns(runs, grid, normalizeTile = (tile) => tile) {
   for (const run of runs) {
-    const type = TILE_INDEX[run.type] ?? TILE_INDEX.empty;
+    const type = normalizeTile(TILE_INDEX[run.type] ?? TILE_INDEX.empty);
     const start = clampInteger(run.start, 0, grid.length, 0);
     const length = clampInteger(run.length, 0, grid.length - start, 0);
     for (let i = start; i < start + length; i += 1) {
       grid[i] = type;
     }
   }
+}
+
+function normalizeBackdropTile(tile) {
+  const normalized = clampInteger(tile, 0, TILE_DEFS.length - 1, TILE_INDEX.empty);
+  return normalized === TILE_INDEX.empty || normalized === TILE_INDEX.void
+    ? normalized
+    : TILE_INDEX.backdrop;
 }
 
 function clampInteger(value, min, max, fallback) {

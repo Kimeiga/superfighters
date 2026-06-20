@@ -14,6 +14,7 @@ import {
   normalizeLevel,
   saveLevel,
   serializeLevel,
+  setBackdropTile,
   setTile,
 } from './levelData.js';
 import './levelEditor.css';
@@ -28,6 +29,7 @@ const doorSelectionText = document.querySelector('#doorSelectionText');
 const doorLinkAText = document.querySelector('#doorLinkAText');
 const doorLinkBText = document.querySelector('#doorLinkBText');
 const brushSizeInput = document.querySelector('#brushSizeInput');
+const paintLayerInput = document.querySelector('#paintLayerInput');
 const zoomInput = document.querySelector('#zoomInput');
 const saveButton = document.querySelector('#saveLevelButton');
 const exportButton = document.querySelector('#exportLevelButton');
@@ -251,6 +253,7 @@ const PREFABS = {
 
 let level = normalizeEditorLevel(getSavedLevel() ?? createCurrentArenaSeed());
 let selectedTile = 'solid';
+let paintLayer = 'foreground';
 let toolMode = 'brush';
 let brushSize = 1;
 let camera = { x: 0, y: 0, zoom: 1 };
@@ -514,6 +517,12 @@ brushSizeInput.addEventListener('input', () => {
   brushSizeInput.value = String(brushSize);
 });
 
+paintLayerInput.addEventListener('change', () => {
+  paintLayer = paintLayerInput.value === 'backdrop' ? 'backdrop' : 'foreground';
+  updateUi(`Layer: ${paintLayer === 'backdrop' ? 'Backdrop' : 'Tiles'}.`);
+  draw();
+});
+
 zoomInput.addEventListener('input', () => {
   const centerX = canvasSize.width / 2;
   const centerY = canvasSize.height / 2;
@@ -736,7 +745,7 @@ function startSelectionPointer(tile) {
   if (selectionRect && isTileInRect(tile.x, tile.y, selectionRect)) {
     pushHistory('Move Selection');
     const buffer = copyRectBuffer(selectionRect);
-    clearTileRect(selectionRect);
+    clearTileRect(selectionRect, 'both');
     movingSelection = {
       buffer,
       offsetX: tile.x - selectionRect.x,
@@ -775,6 +784,11 @@ function setEditorTile(x, y, tileId, options = {}) {
     return;
   }
 
+  if (paintLayer === 'backdrop' || tileId === 'backdrop' || tileId === 'void') {
+    setEditorBackdropTile(x, y, tileId);
+    return;
+  }
+
   const previousTile = level.grid[y * level.width + x];
   if (tileId === 'p1' || tileId === 'p2') {
     clearTileType(tileId);
@@ -790,6 +804,24 @@ function setEditorTile(x, y, tileId, options = {}) {
     pruneDoorLinks();
     updateSelectedDoorFromTile(x, y);
   }
+}
+
+function setEditorBackdropTile(x, y, tileId) {
+  if (x < 0 || y < 0 || x >= level.width || y >= level.height) {
+    return;
+  }
+  setBackdropTile(level, x, y, getBackdropPaintTile(tileId));
+}
+
+function getActiveLayerGrid() {
+  return paintLayer === 'backdrop' ? level.backdrop : level.grid;
+}
+
+function getBackdropPaintTile(tileId) {
+  if (tileId === 'empty' || tileId === 'void') {
+    return tileId;
+  }
+  return 'backdrop';
 }
 
 function getCurrentPickupSpec() {
@@ -1004,10 +1036,19 @@ function fillTileRect(rect, tileId) {
   }
 }
 
-function clearTileRect(rect) {
+function clearTileRect(rect, layerMode = 'active') {
   for (let y = rect.y; y < rect.y + rect.height; y += 1) {
     for (let x = rect.x; x < rect.x + rect.width; x += 1) {
-      setEditorTile(x, y, 'empty');
+      if (layerMode === 'both') {
+        const previousLayer = paintLayer;
+        paintLayer = 'foreground';
+        setEditorTile(x, y, 'empty');
+        paintLayer = 'backdrop';
+        setEditorTile(x, y, 'empty');
+        paintLayer = previousLayer;
+      } else {
+        setEditorTile(x, y, 'empty');
+      }
     }
   }
 }
@@ -1037,8 +1078,11 @@ function paintLine(x0, y0, x1, y1, tileId) {
 }
 
 function floodFill(startX, startY, tileId) {
-  const target = level.grid[startY * level.width + startX];
-  const replacement = TILE_INDEX[tileId] ?? TILE_INDEX.empty;
+  const grid = getActiveLayerGrid();
+  const target = grid[startY * level.width + startX];
+  const replacement = paintLayer === 'backdrop'
+    ? TILE_INDEX[getBackdropPaintTile(tileId)]
+    : TILE_INDEX[tileId] ?? TILE_INDEX.empty;
   if (target === replacement) {
     return;
   }
@@ -1052,7 +1096,7 @@ function floodFill(startX, startY, tileId) {
       continue;
     }
     const index = y * level.width + x;
-    if (level.grid[index] !== target) {
+    if (grid[index] !== target) {
       continue;
     }
     seen.add(key);
@@ -1091,7 +1135,7 @@ function cutSelection() {
   }
   pushHistory('Cut');
   clipboard = copyRectBuffer(selectionRect);
-  clearTileRect(selectionRect);
+  clearTileRect(selectionRect, 'both');
   selectionRect = null;
   updateUi('Cut selection.');
 }
@@ -1102,7 +1146,7 @@ function deleteSelection() {
     return;
   }
   pushHistory('Delete');
-  clearTileRect(selectionRect);
+  clearTileRect(selectionRect, 'both');
   selectionRect = null;
   updateUi('Deleted selection.');
 }
@@ -1120,28 +1164,41 @@ function pasteClipboardAt(tileX, tileY) {
 
 function copyRectBuffer(rect) {
   const tiles = new Uint8Array(rect.width * rect.height);
+  const backdropTiles = new Uint8Array(rect.width * rect.height);
   const pickupSpecs = [];
   for (let y = 0; y < rect.height; y += 1) {
     for (let x = 0; x < rect.width; x += 1) {
       const sourceX = rect.x + x;
       const sourceY = rect.y + y;
       tiles[y * rect.width + x] = level.grid[sourceY * level.width + sourceX];
+      backdropTiles[y * rect.width + x] = level.backdrop[sourceY * level.width + sourceX];
       const spec = getPickupSpec(sourceX, sourceY);
       if (level.grid[sourceY * level.width + sourceX] === TILE_INDEX.pickup) {
         pickupSpecs.push({ ...spec, x, y });
       }
     }
   }
-  return { width: rect.width, height: rect.height, tiles, pickupSpecs };
+  return { width: rect.width, height: rect.height, tiles, backdropTiles, pickupSpecs };
 }
 
 function pasteBufferAt(buffer, tileX, tileY) {
   for (let y = 0; y < buffer.height; y += 1) {
     for (let x = 0; x < buffer.width; x += 1) {
+      const targetX = tileX + x;
+      const targetY = tileY + y;
+      if (targetX < 0 || targetY < 0 || targetX >= level.width || targetY >= level.height) {
+        continue;
+      }
+      if (buffer.backdropTiles) {
+        level.backdrop[targetY * level.width + targetX] = buffer.backdropTiles[y * buffer.width + x];
+      }
       const index = buffer.tiles[y * buffer.width + x];
       const tileId = TILE_DEFS[index]?.id ?? 'empty';
       const spec = buffer.pickupSpecs.find((item) => item.x === x && item.y === y);
-      setEditorTile(tileX + x, tileY + y, tileId, { pickupSpec: spec });
+      const previousLayer = paintLayer;
+      paintLayer = 'foreground';
+      setEditorTile(targetX, targetY, tileId, { pickupSpec: spec });
+      paintLayer = previousLayer;
     }
   }
 }
@@ -1152,6 +1209,7 @@ function resizeLevel(width, height, tileSize = level.tileSize) {
   next.height = height;
   next.tileSize = tileSize;
   next.grid = new Uint8Array(width * height);
+  next.backdrop = new Uint8Array(width * height);
   next.pickupSpecs = [];
 
   const copyWidth = Math.min(level.width, width);
@@ -1159,6 +1217,7 @@ function resizeLevel(width, height, tileSize = level.tileSize) {
   for (let y = 0; y < copyHeight; y += 1) {
     for (let x = 0; x < copyWidth; x += 1) {
       next.grid[y * width + x] = level.grid[y * level.width + x];
+      next.backdrop[y * width + x] = level.backdrop[y * level.width + x];
     }
   }
   next.pickupSpecs = level.pickupSpecs
@@ -1191,11 +1250,13 @@ function cropEmptySpace() {
   next.height = height;
   next.tileSize = level.tileSize;
   next.grid = new Uint8Array(width * height);
+  next.backdrop = new Uint8Array(width * height);
   next.pickupSpecs = [];
 
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       next.grid[y * width + x] = level.grid[(top + y) * level.width + left + x];
+      next.backdrop[y * width + x] = level.backdrop[(top + y) * level.width + left + x];
     }
   }
   next.pickupSpecs = level.pickupSpecs
@@ -1223,6 +1284,12 @@ function getNonEmptyBounds() {
   for (let y = 0; y < level.height; y += 1) {
     for (let x = 0; x < level.width; x += 1) {
       if (level.grid[y * level.width + x] !== TILE_INDEX.empty) {
+        left = Math.min(left, x);
+        top = Math.min(top, y);
+        right = Math.max(right, x);
+        bottom = Math.max(bottom, y);
+      }
+      if (level.backdrop[y * level.width + x] !== TILE_INDEX.empty) {
         left = Math.min(left, x);
         top = Math.min(top, y);
         right = Math.max(right, x);
@@ -1317,6 +1384,7 @@ function draw() {
   ctx.save();
   ctx.translate(camera.x, camera.y);
   ctx.scale(camera.zoom, camera.zoom);
+  drawBackdropTiles();
   drawTiles();
   drawDoorLinks();
   if (showColliderPreview) {
@@ -1340,7 +1408,15 @@ function drawSky() {
   ctx.fillRect(0, 0, canvasSize.width, canvasSize.height);
 }
 
+function drawBackdropTiles() {
+  drawTileLayer(level.backdrop, true);
+}
+
 function drawTiles() {
+  drawTileLayer(level.grid, false);
+}
+
+function drawTileLayer(grid, isBackdropLayer) {
   const tileSize = level.tileSize;
   const startX = clamp(Math.floor((-camera.x / camera.zoom) / tileSize) - 1, 0, level.width - 1);
   const startY = clamp(Math.floor((-camera.y / camera.zoom) / tileSize) - 1, 0, level.height - 1);
@@ -1349,7 +1425,7 @@ function drawTiles() {
 
   for (let y = startY; y < endY; y += 1) {
     for (let x = startX; x < endX; x += 1) {
-      const tile = level.grid[y * level.width + x];
+      const tile = grid[y * level.width + x];
       if (tile === TILE_INDEX.empty) {
         continue;
       }
@@ -1359,7 +1435,7 @@ function drawTiles() {
       const drawY = y * tileSize;
       drawEditorTile(ctx, def, drawX, drawY, tileSize, x, y);
 
-      if (def.marker && def.id !== 'door' && def.id !== 'light') {
+      if (!isBackdropLayer && def.marker && def.id !== 'door' && def.id !== 'light') {
         if (def.id !== 'door' && def.id !== 'light') {
           ctx.fillStyle = '#101622';
           ctx.fillRect(drawX + 5, drawY + 5, tileSize - 10, tileSize - 10);
@@ -1537,13 +1613,19 @@ function drawEditorTile(context, def, x, y, size, tileX, tileY) {
       context.fillRect(x + 2, y + size * 0.22, size - 4, size * 0.72);
       context.strokeStyle = '#5e3f29';
       context.lineWidth = 2;
-      context.strokeRect(x + 3, y + size * 0.25, size - 6, size * 0.66);
-      context.beginPath();
-      context.moveTo(x + size * 0.24, y + size * 0.32);
-      context.lineTo(x + size * 0.76, y + size * 0.84);
-      context.moveTo(x + size * 0.76, y + size * 0.32);
-      context.lineTo(x + size * 0.24, y + size * 0.84);
-      context.stroke();
+      {
+        const left = x + 3;
+        const top = y + size * 0.25;
+        const right = x + size - 3;
+        const bottom = y + size * 0.91;
+        context.strokeRect(left, top, right - left, bottom - top);
+        context.beginPath();
+        context.moveTo(left, top);
+        context.lineTo(right, bottom);
+        context.moveTo(right, top);
+        context.lineTo(left, bottom);
+        context.stroke();
+      }
       break;
     case 'barrel':
       context.fillStyle = def.color;
@@ -1844,7 +1926,8 @@ function updateUi(message = null) {
     `${mergedSolid + mergedPlatforms + slopeCount} collider pieces`;
   selectionText.textContent = selectionRect
     ? `Selection ${selectionRect.width}x${selectionRect.height}`
-    : `${TILE_DEFS[TILE_INDEX[selectedTile]].label} / ${toolMode}`;
+    : `${paintLayer === 'backdrop' ? 'Backdrop' : 'Tiles'}: ${TILE_DEFS[TILE_INDEX[selectedTile]].label} / ${toolMode}`;
+  paintLayerInput.value = paintLayer;
   levelWidthInput.value = String(level.width);
   levelHeightInput.value = String(level.height);
   levelTileSizeInput.value = String(level.tileSize);

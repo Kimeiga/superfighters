@@ -75,6 +75,7 @@ function validateDefaultLevelPayload(payload) {
     height,
     tileSize,
     runs: payload.runs.map(validateRun).filter(Boolean),
+    backdropRuns: Array.isArray(payload.backdropRuns) ? payload.backdropRuns.map(validateRun).filter(Boolean) : [],
     pickupSpecs: Array.isArray(payload.pickupSpecs) ? payload.pickupSpecs.map(validatePickupSpec).filter(Boolean) : [],
     doorLinks: Array.isArray(payload.doorLinks) ? payload.doorLinks.map((link) => validateDoorLink(link, width, height)).filter(Boolean) : [],
   };
