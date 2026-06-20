@@ -4405,7 +4405,6 @@ class FightScene extends Phaser.Scene {
   }
 
   clearLadderState(player) {
-    this.clearLadderState(player);
     player.currentLadder = null;
     player.climbIntroUntil = 0;
     player.climbEndUntil = 0;
