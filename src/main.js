@@ -6,16 +6,15 @@ import { TILE_DEFS, TILE_INDEX, getSavedLevel, mergeTilesToRects } from './level
 import './styles.css';
 
 const BASE_URL = import.meta.env.BASE_URL;
-const FUSION_FONT_URL = new URL('./assets/fonts/fusion-pixel-12px-monospaced-latin.woff', import.meta.url).href;
 const assetUrl = (path) => `${BASE_URL}${String(path).replace(/^\/+/, '')}`;
 const GAME_WIDTH = Math.floor(window.innerWidth);
 const GAME_HEIGHT = Math.floor(window.innerHeight);
-const RENDER_RESOLUTION = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+const RENDER_RESOLUTION = Math.min(3, Math.max(2, window.devicePixelRatio || 1));
 const WORLD_WIDTH = Math.max(1900, GAME_WIDTH);
 const WORLD_HEIGHT = Math.max(720, GAME_HEIGHT);
 const FRAME_SIZE = 64;
 const PLAYER_SCALE = 1;
-const UI_FONT = 'FusionPixel12';
+const UI_FONT = 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 const PLAYER_MAX_HEALTH = 100;
 const DROP_DURATION = 310;
 const AIM_HALF_ARC = Math.PI / 2;
@@ -195,6 +194,8 @@ class FightScene extends Phaser.Scene {
     this.createInputs();
     this.createGroups();
     this.createMobileControls();
+    this.events.on(Phaser.Scenes.Events.PRE_UPDATE, this.preResolveSlopeContacts, this);
+    this.events.on(Phaser.Scenes.Events.POST_UPDATE, this.lateResolveSlopeContacts, this);
 
     this.p1 = this.createPlayer({
       id: 'p1',
@@ -416,6 +417,46 @@ class FightScene extends Phaser.Scene {
     this.updateCamera(delta);
     this.updateUiLayer();
     this.drawHud(time);
+  }
+
+  preResolveSlopeContacts() {
+    if (!this.players.length || this.matchPaused || this.matchOver) {
+      return;
+    }
+
+    for (const player of this.players) {
+      if (!player.sprite?.active || player.climbing) {
+        continue;
+      }
+
+      this.resolveCeilingSlopeContact(player);
+      this.resolveSlopeContact(player);
+    }
+  }
+
+  lateResolveSlopeContacts(time) {
+    if (!this.players.length || this.matchPaused || this.matchOver) {
+      return;
+    }
+
+    for (const player of this.players) {
+      if (!player.sprite?.active || player.climbing) {
+        continue;
+      }
+
+      const wasGrounded = player.wasGrounded;
+      this.resolveCeilingSlopeContact(player);
+      const slopeGrounded = this.resolveSlopeContact(player);
+      if (!slopeGrounded) {
+        continue;
+      }
+
+      this.resetJumpState(player);
+      player.wasGrounded = true;
+      if (!wasGrounded) {
+        this.startJumpLand(player, time);
+      }
+    }
   }
 
   createGeneratedTextures() {
@@ -1780,6 +1821,9 @@ class FightScene extends Phaser.Scene {
       climbing: false,
       onThinPlatform: false,
       onSlope: false,
+      currentSlope: null,
+      lastFloorSlope: null,
+      lastSlopeGroundedAt: -Infinity,
       dropUntil: 0,
       doorCooldownUntil: 0,
       currentPickup: null,
@@ -2934,10 +2978,37 @@ class FightScene extends Phaser.Scene {
     }
     sprite.y = topY + sprite.displayOriginY * sprite.scaleY - body.offset.y;
     body.y = topY;
+    body.updateCenter();
+  }
+
+  snapPlayerBodyTo(player, leftX, topY) {
+    const { sprite } = player;
+    const body = sprite.body;
+    sprite.x = leftX - sprite.scaleX * (body.offset.x - sprite.displayOriginX);
+    sprite.y = topY - sprite.scaleY * (body.offset.y - sprite.displayOriginY);
+    body.x = leftX;
+    body.y = topY;
+    body.prev.set(leftX, topY);
+    body.prevFrame.set(leftX, topY);
+    body.autoFrame.set(leftX, topY);
+    body.updateCenter();
+  }
+
+  getEditorTileAt(tileX, tileY) {
+    const level = this.editorLevel;
+    if (!level || tileX < 0 || tileY < 0 || tileX >= level.width || tileY >= level.height) {
+      return TILE_INDEX.empty;
+    }
+    return level.grid[tileY * level.width + tileX];
+  }
+
+  isSlopeLandingTile(tile) {
+    return tile === TILE_INDEX.solid || tile === TILE_INDEX.platform || tile === TILE_INDEX.movingPlatform;
   }
 
   resolveSlopeContact(player) {
     player.onSlope = false;
+    player.currentSlope = null;
     if (!this.slopeTiles.length || player.climbing) {
       return false;
     }
@@ -2983,6 +3054,100 @@ class FightScene extends Phaser.Scene {
     body.touching.down = true;
     body.blocked.down = true;
     player.onSlope = true;
+    player.currentSlope = bestSlope;
+    player.lastFloorSlope = bestSlope;
+    player.lastSlopeGroundedAt = this.time.now;
+    return true;
+  }
+
+  resolveSlopeLandingBridge(player) {
+    const slope = player.lastFloorSlope;
+    if (!slope || slope.side !== 'floor' || this.time.now - player.lastSlopeGroundedAt > 90) {
+      return false;
+    }
+
+    const body = player.sprite.body;
+    if (!body || body.velocity.y < -20) {
+      return false;
+    }
+
+    const highDir = slope.type === 'up' ? 1 : -1;
+    const landingTile = this.getEditorTileAt(slope.tileX + highDir, slope.tileY);
+    if (!this.isSlopeLandingTile(landingTile)) {
+      return false;
+    }
+
+    const footX = body.x + body.width / 2;
+    const footY = body.y + body.height;
+    const highEdgeX = highDir > 0 ? slope.x + slope.size : slope.x;
+    const pastHighEdge = highDir > 0 ? footX >= highEdgeX - 1 : footX <= highEdgeX + 1;
+    const distancePastEdge = highDir > 0 ? footX - highEdgeX : highEdgeX - footX;
+    const landingTop = slope.y;
+
+    if (!pastHighEdge || distancePastEdge > body.width * 1.15) {
+      return false;
+    }
+    if (footY < landingTop - 5 || footY > landingTop + 8) {
+      return false;
+    }
+
+    this.setPlayerBodyTop(player, landingTop - body.height);
+    body.setVelocityY(0);
+    body.touching.down = true;
+    body.blocked.down = true;
+    player.onSlope = false;
+    player.currentSlope = null;
+    return true;
+  }
+
+  assistSlopeLanding(player, horizontal) {
+    const slope = player.currentSlope;
+    if (!slope || slope.side !== 'floor' || !horizontal) {
+      return false;
+    }
+
+    const highDir = slope.type === 'up' ? 1 : -1;
+    if (horizontal !== highDir) {
+      return false;
+    }
+
+    const body = player.sprite.body;
+    if (body.velocity.y < -20) {
+      return false;
+    }
+
+    const landingTile = this.getEditorTileAt(slope.tileX + highDir, slope.tileY);
+    if (!this.isSlopeLandingTile(landingTile)) {
+      return false;
+    }
+
+    const footX = body.x + body.width / 2;
+    const highEdgeX = highDir > 0 ? slope.x + slope.size : slope.x;
+    const distanceToEdge = highDir > 0 ? highEdgeX - footX : footX - highEdgeX;
+    const blockedTowardLanding = highDir > 0 ? body.blocked.right : body.blocked.left;
+    const maxDistance = blockedTowardLanding
+      ? Math.max(10, body.width * 0.7)
+      : Math.max(5, body.width * 0.38);
+
+    if (distanceToEdge < -4 || distanceToEdge > maxDistance) {
+      return false;
+    }
+
+    const landingTop = slope.y;
+    const footY = body.y + body.height;
+    if (footY < landingTop - 4 || footY > landingTop + slope.size) {
+      return false;
+    }
+
+    this.snapPlayerBodyTo(player, body.x, landingTop - body.height);
+    body.setVelocityY(0);
+    body.touching.down = true;
+    body.blocked.down = true;
+    body.blocked.left = false;
+    body.blocked.right = false;
+    player.onSlope = false;
+    player.currentSlope = null;
+    player.lastSlopeGroundedAt = this.time.now;
     return true;
   }
 
@@ -3040,7 +3205,8 @@ class FightScene extends Phaser.Scene {
     const body = player.sprite.body;
     this.resolveCeilingSlopeContact(player);
     const slopeGrounded = this.resolveSlopeContact(player);
-    const grounded = body.blocked.down || body.touching.down || slopeGrounded;
+    const slopeBridgeGrounded = !slopeGrounded && this.resolveSlopeLandingBridge(player);
+    const grounded = body.blocked.down || body.touching.down || slopeGrounded || slopeBridgeGrounded;
     const justLanded = grounded && !player.wasGrounded;
     player.wasGrounded = grounded;
     const input = player.inputState;
@@ -3154,6 +3320,8 @@ class FightScene extends Phaser.Scene {
       player.sprite.setVelocityX(0);
     }
 
+    const slopeLandingGrounded = this.assistSlopeLanding(player, horizontal);
+
     if (
       input.pressed.jump &&
       grounded &&
@@ -3163,13 +3331,13 @@ class FightScene extends Phaser.Scene {
       this.startJump(player, time);
     }
 
-    this.updateJumpPhysics(player, grounded, input, time);
+    this.updateJumpPhysics(player, grounded || slopeLandingGrounded, input, time);
 
     if (input.pressed.melee) {
       this.handleMeleePressed(player, time);
     }
 
-    this.updatePlayerAnimation(player, grounded, horizontal, time);
+    this.updatePlayerAnimation(player, grounded || slopeLandingGrounded, horizontal, time);
     this.updateAimVisuals(player);
   }
 
@@ -4560,8 +4728,12 @@ class FightScene extends Phaser.Scene {
 
   platformProcess(sprite, platform) {
     const player = this.playerBySprite.get(sprite);
-    if (!player || !platform.getData('thin')) {
+    if (!player) {
       return true;
+    }
+
+    if (!platform.getData('thin')) {
+      return !this.shouldIgnoreSlopeLandingSide(player, platform);
     }
 
     if (this.time.now < player.dropUntil || player.climbing) {
@@ -4575,6 +4747,42 @@ class FightScene extends Phaser.Scene {
     const playerBottom = sprite.body.y + sprite.body.height;
     const platformTop = platform.body.y;
     return playerBottom <= platformTop + 14;
+  }
+
+  shouldIgnoreSlopeLandingSide(player, platform) {
+    const slope = player.currentSlope;
+    const body = player.sprite.body;
+    const platformBody = platform.body;
+    if (!slope || slope.side !== 'floor' || !body || !platformBody) {
+      return false;
+    }
+
+    const highDir = slope.type === 'up' ? 1 : -1;
+    const movingTowardLanding = highDir > 0
+      ? body.velocity.x > 1 || player.inputState?.down?.right
+      : body.velocity.x < -1 || player.inputState?.down?.left;
+    if (!movingTowardLanding) {
+      return false;
+    }
+
+    const highEdgeX = highDir > 0 ? slope.x + slope.size : slope.x;
+    const platformSideX = highDir > 0 ? platformBody.x : platformBody.x + platformBody.width;
+    if (Math.abs(platformSideX - highEdgeX) > 2 || Math.abs(platformBody.y - slope.y) > 2) {
+      return false;
+    }
+
+    const footX = body.x + body.width / 2;
+    const distanceToEdge = highDir > 0 ? highEdgeX - footX : footX - highEdgeX;
+    if (distanceToEdge < -body.width * 0.65 || distanceToEdge > body.width * 0.9) {
+      return false;
+    }
+
+    const footY = body.y + body.height;
+    const localX = Phaser.Math.Clamp(footX - slope.x, 0, slope.size);
+    const surfaceY = slope.type === 'up'
+      ? slope.y + slope.size - localX
+      : slope.y + localX;
+    return footY >= surfaceY - 5 && footY <= slope.y + slope.size + 6;
   }
 
   handlePlatformContact(sprite, platform) {
@@ -5436,10 +5644,8 @@ function getEmpressFrameNumber(textureKey) {
   return match ? Number.parseInt(match[1], 10) : null;
 }
 
-loadUiFont().finally(() => {
-  retireServiceWorkers();
-  createBootMenu();
-});
+retireServiceWorkers();
+createBootMenu();
 
 function createBootMenu() {
   const existing = document.querySelector('.boot-menu');
@@ -5687,12 +5893,12 @@ function startGameFromBoot(bootOverlay, options) {
     height: GAME_HEIGHT,
     resolution: RENDER_RESOLUTION,
     backgroundColor: '#8dd8ff',
-    antialias: false,
-    pixelArt: true,
-    roundPixels: true,
+    antialias: true,
+    pixelArt: false,
+    roundPixels: false,
     scale: {
       mode: Phaser.Scale.RESIZE,
-      autoRound: true,
+      autoRound: false,
     },
     physics: {
       default: 'arcade',
@@ -5753,16 +5959,6 @@ function startBootSpriteAnimation(canvas) {
     window.requestAnimationFrame(draw);
   };
   image.src = assetUrl('assets/empress.png');
-}
-
-async function loadUiFont() {
-  if (!('FontFace' in window) || !document.fonts) {
-    return;
-  }
-
-  const font = new FontFace(UI_FONT, `url("${FUSION_FONT_URL}") format("woff")`);
-  const loadedFont = await font.load();
-  document.fonts.add(loadedFont);
 }
 
 function retireServiceWorkers() {
