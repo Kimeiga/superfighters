@@ -1,0 +1,440 @@
+{
+  "version": 1,
+  "name": "Blank Arena",
+  "width": 96,
+  "height": 36,
+  "tileSize": 30,
+  "runs": [
+    {
+      "start": 773,
+      "length": 28,
+      "type": "solid"
+    },
+    {
+      "start": 869,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 896,
+      "length": 1,
+      "type": "solid"
+    },
+    {
+      "start": 965,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 992,
+      "length": 14,
+      "type": "solid"
+    },
+    {
+      "start": 1061,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1088,
+      "length": 1,
+      "type": "solid"
+    },
+    {
+      "start": 1100,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1157,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1184,
+      "length": 1,
+      "type": "solid"
+    },
+    {
+      "start": 1196,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1253,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1255,
+      "length": 1,
+      "type": "ladder"
+    },
+    {
+      "start": 1258,
+      "length": 1,
+      "type": "crate"
+    },
+    {
+      "start": 1280,
+      "length": 1,
+      "type": "solid"
+    },
+    {
+      "start": 1292,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1349,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1351,
+      "length": 1,
+      "type": "ladder"
+    },
+    {
+      "start": 1352,
+      "length": 5,
+      "type": "solid"
+    },
+    {
+      "start": 1376,
+      "length": 1,
+      "type": "glassLeft"
+    },
+    {
+      "start": 1388,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1445,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1447,
+      "length": 1,
+      "type": "ladder"
+    },
+    {
+      "start": 1472,
+      "length": 1,
+      "type": "glassLeft"
+    },
+    {
+      "start": 1484,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1541,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1543,
+      "length": 1,
+      "type": "ladder"
+    },
+    {
+      "start": 1557,
+      "length": 1,
+      "type": "crate"
+    },
+    {
+      "start": 1568,
+      "length": 1,
+      "type": "glassLeft"
+    },
+    {
+      "start": 1580,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1637,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1639,
+      "length": 1,
+      "type": "ladder"
+    },
+    {
+      "start": 1652,
+      "length": 5,
+      "type": "platform"
+    },
+    {
+      "start": 1664,
+      "length": 14,
+      "type": "solid"
+    },
+    {
+      "start": 1733,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1735,
+      "length": 1,
+      "type": "ladder"
+    },
+    {
+      "start": 1772,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1829,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1831,
+      "length": 1,
+      "type": "ladder"
+    },
+    {
+      "start": 1834,
+      "length": 1,
+      "type": "p1"
+    },
+    {
+      "start": 1842,
+      "length": 3,
+      "type": "platform"
+    },
+    {
+      "start": 1864,
+      "length": 1,
+      "type": "p2"
+    },
+    {
+      "start": 1868,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1925,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 1927,
+      "length": 1,
+      "type": "ladder"
+    },
+    {
+      "start": 1964,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 2021,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 2023,
+      "length": 9,
+      "type": "platform"
+    },
+    {
+      "start": 2032,
+      "length": 1,
+      "type": "slopePlatformDown"
+    },
+    {
+      "start": 2052,
+      "length": 8,
+      "type": "platform"
+    },
+    {
+      "start": 2060,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 2117,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 2129,
+      "length": 1,
+      "type": "slopePlatformDown"
+    },
+    {
+      "start": 2148,
+      "length": 1,
+      "type": "crate"
+    },
+    {
+      "start": 2156,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 2213,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 2226,
+      "length": 4,
+      "type": "platform"
+    },
+    {
+      "start": 2231,
+      "length": 4,
+      "type": "platform"
+    },
+    {
+      "start": 2241,
+      "length": 4,
+      "type": "platform"
+    },
+    {
+      "start": 2246,
+      "length": 4,
+      "type": "platform"
+    },
+    {
+      "start": 2252,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 2309,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 2348,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 2405,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 2418,
+      "length": 4,
+      "type": "platform"
+    },
+    {
+      "start": 2423,
+      "length": 4,
+      "type": "platform"
+    },
+    {
+      "start": 2433,
+      "length": 4,
+      "type": "platform"
+    },
+    {
+      "start": 2438,
+      "length": 4,
+      "type": "platform"
+    },
+    {
+      "start": 2444,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 2501,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 2517,
+      "length": 1,
+      "type": "crate"
+    },
+    {
+      "start": 2537,
+      "length": 1,
+      "type": "crate"
+    },
+    {
+      "start": 2540,
+      "length": 2,
+      "type": "solid"
+    },
+    {
+      "start": 2597,
+      "length": 9,
+      "type": "solid"
+    },
+    {
+      "start": 2606,
+      "length": 1,
+      "type": "slopeDown"
+    },
+    {
+      "start": 2610,
+      "length": 4,
+      "type": "platform"
+    },
+    {
+      "start": 2615,
+      "length": 4,
+      "type": "platform"
+    },
+    {
+      "start": 2623,
+      "length": 1,
+      "type": "slopeUp"
+    },
+    {
+      "start": 2624,
+      "length": 14,
+      "type": "solid"
+    },
+    {
+      "start": 2702,
+      "length": 1,
+      "type": "ceilingSlopeDown"
+    },
+    {
+      "start": 2703,
+      "length": 1,
+      "type": "slopeDown"
+    },
+    {
+      "start": 2718,
+      "length": 1,
+      "type": "slopeUp"
+    },
+    {
+      "start": 2719,
+      "length": 1,
+      "type": "ceilingSlopeUp"
+    },
+    {
+      "start": 2799,
+      "length": 1,
+      "type": "ceilingSlopeDown"
+    },
+    {
+      "start": 2800,
+      "length": 14,
+      "type": "solid"
+    },
+    {
+      "start": 2814,
+      "length": 1,
+      "type": "ceilingSlopeUp"
+    }
+  ],
+  "pickupSpecs": []
+}

@@ -1,6 +1,8 @@
+import defaultLevelSeed from './defaultLevel.json';
+
 export const LEVEL_STORAGE_KEY = 'superfighters.levelEditor.v1';
 export const LEVEL_VERSION = 1;
-export const TILE_SIZE = 24;
+export const TILE_SIZE = 30;
 export const DEFAULT_LEVEL_WIDTH = 96;
 export const DEFAULT_LEVEL_HEIGHT = 36;
 
@@ -49,101 +51,7 @@ export function createEmptyLevel(name = 'Untitled Arena') {
 }
 
 export function createCurrentArenaSeed() {
-  const level = createEmptyLevel('Current Arena Seed');
-
-  fillRectWorld(level, 'void', 530, 450, 190, 430);
-  fillRectWorld(level, 'void', 1150, 450, 150, 430);
-
-  addBuilding(level, {
-    x: 270,
-    width: 500,
-    floorY: 440,
-    floors: [
-      { y: 440, width: 500, solid: true },
-      { y: 350, width: 430, platform: true },
-      { y: 255, width: 360, platform: true },
-    ],
-    ladders: [
-      { x: 150, y: 395, height: 90 },
-      { x: 390, y: 302, height: 96 },
-    ],
-    windows: [
-      { x: 215, y: 395, width: 42, height: 54 },
-      { x: 315, y: 395, width: 42, height: 54 },
-      { x: 260, y: 306, width: 52, height: 48 },
-      { x: 435, y: 306, width: 44, height: 48 },
-      { x: 330, y: 218, width: 48, height: 42 },
-    ],
-  });
-
-  addBuilding(level, {
-    x: 935,
-    width: 400,
-    floorY: 420,
-    floors: [
-      { y: 420, width: 400, solid: true },
-      { y: 320, width: 330, platform: true },
-      { y: 230, width: 270, platform: true },
-    ],
-    ladders: [
-      { x: 845, y: 372, height: 98 },
-      { x: 1010, y: 276, height: 92 },
-    ],
-    windows: [
-      { x: 910, y: 374, width: 48, height: 54 },
-      { x: 1000, y: 374, width: 48, height: 54 },
-      { x: 935, y: 278, width: 50, height: 48 },
-      { x: 1038, y: 202, width: 44, height: 38 },
-    ],
-  });
-
-  addBuilding(level, {
-    x: 1580,
-    width: 520,
-    floorY: 440,
-    floors: [
-      { y: 440, width: 520, solid: true },
-      { y: 340, width: 440, platform: true },
-      { y: 245, width: 370, platform: true },
-    ],
-    ladders: [
-      { x: 1460, y: 390, height: 100 },
-      { x: 1690, y: 292, height: 100 },
-    ],
-    windows: [
-      { x: 1510, y: 392, width: 42, height: 56 },
-      { x: 1610, y: 392, width: 42, height: 56 },
-      { x: 1720, y: 392, width: 42, height: 56 },
-      { x: 1545, y: 294, width: 52, height: 48 },
-      { x: 1640, y: 294, width: 52, height: 48 },
-      { x: 1745, y: 208, width: 48, height: 42 },
-    ],
-  });
-
-  fillRectWorld(level, 'platform', 574, 358, 92, 14);
-  fillRectWorld(level, 'platform', 1194, 358, 92, 14);
-  fillRectWorld(level, 'platform', 590, 248, 120, 14);
-  fillRectWorld(level, 'platform', 1150, 243, 120, 14);
-
-  [
-    { x: 170, y: 398 },
-    { x: 330, y: 398 },
-    { x: 260, y: 300 },
-    { x: 440, y: 222 },
-    { x: 780, y: 372 },
-    { x: 920, y: 288 },
-    { x: 1030, y: 198 },
-    { x: 1260, y: 372 },
-    { x: 1460, y: 398 },
-    { x: 1635, y: 398 },
-    { x: 1545, y: 292 },
-    { x: 1745, y: 212 },
-  ].forEach((point) => setWorldTile(level, 'pickup', point.x, point.y));
-
-  setWorldTile(level, 'p1', 430, 392);
-  setWorldTile(level, 'p2', 1580, 392);
-
-  return level;
+  return normalizeLevel(defaultLevelSeed);
 }
 
 export function getSavedLevel() {
@@ -153,7 +61,7 @@ export function getSavedLevel() {
 
   try {
     const raw = window.localStorage.getItem(LEVEL_STORAGE_KEY);
-    return raw ? normalizeLevel(JSON.parse(raw)) : null;
+    return raw ? upgradeLegacySavedLevel(normalizeLevel(JSON.parse(raw))) : null;
   } catch {
     return null;
   }
@@ -319,6 +227,16 @@ function normalizePickupSpecs(specs, width, height) {
 
 function normalizePickupKind(kind) {
   return ['random', 'weapon', 'grenade', 'powerup'].includes(kind) ? kind : 'random';
+}
+
+function upgradeLegacySavedLevel(level) {
+  if ([24, 40, 45, 48, 60, 64].includes(level.tileSize)) {
+    return {
+      ...level,
+      tileSize: TILE_SIZE,
+    };
+  }
+  return level;
 }
 
 function addBuilding(level, spec) {

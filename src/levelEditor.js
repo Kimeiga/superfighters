@@ -42,6 +42,7 @@ const undoButton = document.querySelector('#undoButton');
 const redoButton = document.querySelector('#redoButton');
 const levelWidthInput = document.querySelector('#levelWidthInput');
 const levelHeightInput = document.querySelector('#levelHeightInput');
+const levelTileSizeInput = document.querySelector('#levelTileSizeInput');
 const resizeLevelButton = document.querySelector('#resizeLevelButton');
 const cropLevelButton = document.querySelector('#cropLevelButton');
 const validationList = document.querySelector('#validationList');
@@ -50,6 +51,7 @@ const ctx = canvas.getContext('2d');
 const HISTORY_LIMIT = 80;
 const AUTOSAVE_DELAY_MS = 450;
 const PLATFORM_STROKE_WIDTH = 4;
+const DEFAULT_LEVEL_SAVE_ENDPOINT = `${import.meta.env.BASE_URL}__superfighters/save-default-level`;
 const TILE_CATEGORIES = [
   { label: 'Terrain', tiles: ['empty', 'solid', 'slopeUp', 'slopeDown', 'ceilingSlopeUp', 'ceilingSlopeDown', 'backdrop', 'void'] },
   { label: 'Platforms', tiles: ['platform', 'slopePlatformUp', 'slopePlatformDown', 'movingPlatform'] },
@@ -299,8 +301,7 @@ window.addEventListener('keydown', (event) => {
   }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
     event.preventDefault();
-    saveLevel(level);
-    setStatus('Saved to this browser.');
+    saveEverywhere();
     return;
   }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c') {
@@ -509,8 +510,7 @@ zoomInput.addEventListener('input', () => {
 });
 
 saveButton.addEventListener('click', () => {
-  saveEditorLevelNow();
-  setStatus('Saved to this browser.');
+  saveEverywhere();
 });
 
 playtestButton.addEventListener('click', () => {
@@ -594,10 +594,11 @@ redoButton.addEventListener('click', redo);
 resizeLevelButton.addEventListener('click', () => {
   const width = clamp(Number.parseInt(levelWidthInput.value, 10) || level.width, 8, 512);
   const height = clamp(Number.parseInt(levelHeightInput.value, 10) || level.height, 8, 512);
+  const tileSize = clamp(Number.parseInt(levelTileSizeInput.value, 10) || level.tileSize, 16, 96);
   pushHistory('Resize');
-  resizeLevel(width, height);
+  resizeLevel(width, height, tileSize);
   fitToLevel();
-  updateUi(`Resized to ${width}x${height}.`);
+  updateUi(`Resized to ${width}x${height} at ${tileSize}px tiles.`);
 });
 
 cropLevelButton.addEventListener('click', () => {
@@ -950,11 +951,11 @@ function pasteBufferAt(buffer, tileX, tileY) {
   }
 }
 
-function resizeLevel(width, height) {
+function resizeLevel(width, height, tileSize = level.tileSize) {
   const next = createEmptyLevel(level.name);
   next.width = width;
   next.height = height;
-  next.tileSize = level.tileSize;
+  next.tileSize = tileSize;
   next.grid = new Uint8Array(width * height);
   next.pickupSpecs = [];
 
@@ -1566,13 +1567,14 @@ function updateUi(message = null) {
     findTiles('slopePlatformUp').length +
     findTiles('slopePlatformDown').length;
   statsText.textContent =
-    `${level.width}x${level.height} tiles, ${countNonEmptyTiles(level)} filled, ` +
+    `${level.width}x${level.height} tiles at ${level.tileSize}px, ${countNonEmptyTiles(level)} filled, ` +
     `${mergedSolid + mergedPlatforms + slopeCount} collider pieces`;
   selectionText.textContent = selectionRect
     ? `Selection ${selectionRect.width}x${selectionRect.height}`
     : `${TILE_DEFS[TILE_INDEX[selectedTile]].label} / ${toolMode}`;
   levelWidthInput.value = String(level.width);
   levelHeightInput.value = String(level.height);
+  levelTileSizeInput.value = String(level.tileSize);
   updateCursorText();
   updateHistoryButtons();
   updateValidation();
@@ -1603,6 +1605,29 @@ function saveEditorLevelNow() {
     autosaveTimer = null;
   }
   saveLevel(level);
+}
+
+async function saveEverywhere() {
+  saveEditorLevelNow();
+  if (!import.meta.env.DEV) {
+    setStatus('Saved to this browser.');
+    return;
+  }
+
+  try {
+    const response = await fetch(DEFAULT_LEVEL_SAVE_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(serializeLevel(level)),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || 'Default level save failed.');
+    }
+    setStatus('Saved to this browser and src/defaultLevel.json.');
+  } catch (error) {
+    setStatus(`Saved to this browser. Default file save failed: ${error.message}`);
+  }
 }
 
 function updateCursorText() {

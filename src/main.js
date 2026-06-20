@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import geckos from '@geckos.io/client';
 import { ANIMATION_ORDER, DEFAULT_EMPRESS_ANIMATION_CONFIG, makeFrameList1Based } from './animationConfig.js';
 import { DEFAULT_GAMEPLAY_CONFIG, getGameplayConfig } from './gameplayConfig.js';
-import { TILE_DEFS, TILE_INDEX, getSavedLevel, mergeTilesToRects } from './levelData.js';
+import { TILE_DEFS, TILE_INDEX, createCurrentArenaSeed, getSavedLevel, mergeTilesToRects } from './levelData.js';
 import './styles.css';
 
 const BASE_URL = import.meta.env.BASE_URL;
@@ -17,6 +17,7 @@ const PLAYER_SCALE = 1;
 const UI_FONT = 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 const PLAYER_MAX_HEALTH = 100;
 const DROP_DURATION = 310;
+const DOWN_DOUBLE_TAP_MS = 340;
 const PLATFORM_STROKE_WIDTH = 4;
 const JUMP_BUFFER_MS = 140;
 const PLAYER_HEAD_SUPPORT_MS = 130;
@@ -59,10 +60,26 @@ const CHARACTER_HAND_POINTS = {
   55: { x: 32, y: 46 },
   56: { x: 38, y: 50 },
   57: { x: 42, y: 64 },
+  58: { x: 39, y: 50 },
   59: { x: 42, y: 52 },
   60: { x: 42, y: 67 },
   61: { x: 42, y: 66 },
+  62: { x: 42, y: 66 },
+  63: { x: 42, y: 66 },
+  64: { x: 42, y: 66 },
+  68: { x: 42, y: 67 },
+  69: { x: 42, y: 52 },
+  70: { x: 39, y: 50 },
   133: { x: 41, y: 57 },
+  134: { x: 41, y: 57 },
+  135: { x: 41, y: 57 },
+  136: { x: 41, y: 57 },
+  137: { x: 41, y: 57 },
+  138: { x: 41, y: 57 },
+  139: { x: 41, y: 57 },
+  140: { x: 41, y: 57 },
+  141: { x: 41, y: 57 },
+  142: { x: 41, y: 57 },
   143: { x: 41, y: 57 },
 };
 const DEFAULT_GUN_GRIP_POINT = { x: 18, y: 35 };
@@ -153,7 +170,7 @@ class FightScene extends Phaser.Scene {
     this.movingPlatforms = [];
     this.clouds = [];
     this.levelSpawns = null;
-    this.editorLevel = pendingBootOptions?.editorLevel ? getSavedLevel() : null;
+    this.editorLevel = pendingBootOptions?.editorLevel ? getSavedLevel() ?? createCurrentArenaSeed() : null;
     this.worldWidth = WORLD_WIDTH;
     this.worldHeight = WORLD_HEIGHT;
     this.configData = getGameplayConfig();
@@ -284,8 +301,10 @@ class FightScene extends Phaser.Scene {
   setViewportSize(width = this.scale?.width ?? window.innerWidth, height = this.scale?.height ?? window.innerHeight) {
     this.viewportWidth = Math.max(1, Math.floor(width || GAME_WIDTH));
     this.viewportHeight = Math.max(1, Math.floor(height || GAME_HEIGHT));
-    this.worldWidth = Math.max(WORLD_WIDTH, this.viewportWidth);
-    this.worldHeight = Math.max(WORLD_HEIGHT, this.viewportHeight);
+    const editorWorldWidth = this.editorLevel ? this.editorLevel.width * this.editorLevel.tileSize : 0;
+    const editorWorldHeight = this.editorLevel ? this.editorLevel.height * this.editorLevel.tileSize : 0;
+    this.worldWidth = Math.max(WORLD_WIDTH, this.viewportWidth, editorWorldWidth);
+    this.worldHeight = Math.max(WORLD_HEIGHT, this.viewportHeight, editorWorldHeight);
   }
 
   getViewportWidth() {
@@ -1803,14 +1822,19 @@ class FightScene extends Phaser.Scene {
     sprite.play('girl-idle');
     sprite.setFlipX(config.facing < 0);
 
-    const arm = this.add.image(sprite.x, sprite.y, 'arm-pixel').setOrigin(0, 0.5).setDepth(12).setVisible(false);
+    const arm = this.add
+      .sprite(sprite.x, sprite.y, this.getCharacterTextureKey(37))
+      .setScale(PLAYER_SCALE)
+      .setDepth(14)
+      .setOrigin(0.5)
+      .setVisible(false);
     const weaponSprite = this.add
       .image(sprite.x, sprite.y, 'weapon-pistol')
       .setOrigin(DEFAULT_GUN_GRIP_POINT.x / HANDGUN_SHEET.frameSize, DEFAULT_GUN_GRIP_POINT.y / HANDGUN_SHEET.frameSize)
       .setScale(0.74)
       .setDepth(13)
       .setVisible(false);
-    const crosshair = this.add.image(sprite.x, sprite.y, 'crosshair-pixel').setDepth(14).setVisible(false);
+    const crosshair = this.add.image(sprite.x, sprite.y, 'crosshair-pixel').setDepth(15).setVisible(false);
     const aimGraphics = this.add.graphics().setDepth(11).setVisible(false);
 
     return {
@@ -1843,6 +1867,10 @@ class FightScene extends Phaser.Scene {
       lastFloorSlope: null,
       lastSlopeGroundedAt: -Infinity,
       dropUntil: 0,
+      currentThinPlatform: null,
+      currentThinSlope: null,
+      dropThroughPlatform: null,
+      dropThroughSlope: null,
       doorCooldownUntil: 0,
       currentPickup: null,
       weapon: null,
@@ -1858,6 +1886,7 @@ class FightScene extends Phaser.Scene {
       runDirection: config.facing,
       lastTapLeftAt: -Infinity,
       lastTapRightAt: -Infinity,
+      lastTapDownAt: -Infinity,
       crouchTransitionUntil: 0,
       crouchTransitionGun: false,
       standTransitionUntil: 0,
@@ -3054,6 +3083,15 @@ class FightScene extends Phaser.Scene {
     );
   }
 
+  isPropFloorTile(tile) {
+    return (
+      tile === TILE_INDEX.crate ||
+      tile === TILE_INDEX.barrel ||
+      tile === TILE_INDEX.smallExplosive ||
+      tile === TILE_INDEX.swingingCrate
+    );
+  }
+
   getBodyFootSampleXs(body) {
     return [
       body.x + Math.max(2, body.width * 0.08),
@@ -3088,7 +3126,12 @@ class FightScene extends Phaser.Scene {
         if (tileX < 0 || tileX >= level.width) {
           continue;
         }
-        if (this.isSolidFloorTile(this.getEditorTileAt(tileX, y)) && topY < bestTop) {
+        const tile = this.getEditorTileAt(tileX, y);
+        if (!this.isSolidFloorTile(tile)) {
+          continue;
+        }
+        const maxBelowTop = this.isPropFloorTile(tile) ? Math.max(6, tileSize * 0.35) : Math.max(18, tileSize * 1.35);
+        if (footY <= topY + maxBelowTop && topY < bestTop) {
           bestTop = topY;
         }
       }
@@ -3104,6 +3147,9 @@ class FightScene extends Phaser.Scene {
     body.blocked.down = true;
     player.onSlope = false;
     player.currentSlope = null;
+    player.onThinPlatform = false;
+    player.currentThinPlatform = null;
+    player.currentThinSlope = null;
     return true;
   }
 
@@ -3140,6 +3186,9 @@ class FightScene extends Phaser.Scene {
       body.blocked.down = true;
       player.onSlope = false;
       player.currentSlope = null;
+      player.onThinPlatform = false;
+      player.currentThinPlatform = null;
+      player.currentThinSlope = null;
       player.headSupportUntil = time + PLAYER_HEAD_SUPPORT_MS;
       player.headSupportPlayerId = other.id;
       return true;
@@ -3183,7 +3232,7 @@ class FightScene extends Phaser.Scene {
           const surfaceY = slope.type === 'up'
             ? slope.y + slope.size - localX
             : slope.y + localX;
-          if (body.velocity.y < -8 || (slope.thin && this.time.now < player.dropUntil)) {
+          if (body.velocity.y < -8 || this.isDroppingThroughSlope(player, slope)) {
             continue;
           }
           const tolerance = body.velocity.y >= -20 ? 18 : 4;
@@ -3212,6 +3261,10 @@ class FightScene extends Phaser.Scene {
     player.lastSlopeGroundedAt = this.time.now;
     if (bestSlope.thin) {
       player.onThinPlatform = true;
+      player.currentThinSlope = bestSlope;
+      player.currentThinPlatform = null;
+    } else {
+      player.currentThinSlope = null;
     }
     return true;
   }
@@ -3226,7 +3279,7 @@ class FightScene extends Phaser.Scene {
     if (!body || body.velocity.y < -20) {
       return false;
     }
-    if (slope.thin && this.time.now < player.dropUntil) {
+    if (this.isDroppingThroughSlope(player, slope)) {
       return false;
     }
 
@@ -3256,6 +3309,9 @@ class FightScene extends Phaser.Scene {
     body.blocked.down = true;
     player.onSlope = false;
     player.currentSlope = null;
+    player.onThinPlatform = false;
+    player.currentThinPlatform = null;
+    player.currentThinSlope = null;
     return true;
   }
 
@@ -3274,7 +3330,7 @@ class FightScene extends Phaser.Scene {
     if (body.velocity.y < -20) {
       return false;
     }
-    if (slope.thin && this.time.now < player.dropUntil) {
+    if (this.isDroppingThroughSlope(player, slope)) {
       return false;
     }
 
@@ -3309,6 +3365,9 @@ class FightScene extends Phaser.Scene {
     body.blocked.right = false;
     player.onSlope = false;
     player.currentSlope = null;
+    player.onThinPlatform = false;
+    player.currentThinPlatform = null;
+    player.currentThinSlope = null;
     player.lastSlopeGroundedAt = this.time.now;
     return true;
   }
@@ -3365,6 +3424,7 @@ class FightScene extends Phaser.Scene {
 
   updatePlayer(player, time, delta) {
     const body = player.sprite.body;
+    this.clearCompletedPlatformDrop(player, time);
     this.resolveCeilingSlopeContact(player);
     const slopeGrounded = this.resolveSlopeContact(player);
     const slopeBridgeGrounded = !slopeGrounded && this.resolveSlopeLandingBridge(player);
@@ -3401,6 +3461,8 @@ class FightScene extends Phaser.Scene {
     player.currentPickup = this.findNearbyPickup(player);
     if (!grounded) {
       player.onThinPlatform = false;
+      player.currentThinPlatform = null;
+      player.currentThinSlope = null;
     }
     if (justLanded) {
       this.startJumpLand(player, time);
@@ -3463,15 +3525,8 @@ class FightScene extends Phaser.Scene {
       return;
     }
 
-    if (
-      downHeld &&
-      grounded &&
-      player.onThinPlatform &&
-      time >= player.dropUntil
-    ) {
-      player.dropUntil = time + DROP_DURATION;
-      player.sprite.setVelocityY(110);
-      player.onThinPlatform = false;
+    if (input.pressed.crouch && this.tryStartPlatformDrop(player, grounded, time)) {
+      player.lastTapDownAt = -Infinity;
     }
 
     const ladder = this.getIntersectingLadder(player);
@@ -3531,6 +3586,87 @@ class FightScene extends Phaser.Scene {
     player.sprite.setVelocityX(player.sprite.body.velocity.x * 0.96);
   }
 
+  tryStartPlatformDrop(player, grounded, time) {
+    if (!grounded || time < player.dropUntil) {
+      return false;
+    }
+
+    const targetPlatform = player.currentThinPlatform?.active
+      ? player.currentThinPlatform
+      : this.findThinPlatformUnderPlayer(player);
+    const targetSlope = targetPlatform
+      ? null
+      : player.currentThinSlope ?? (player.currentSlope?.thin ? player.currentSlope : null);
+    if (!targetPlatform && !targetSlope) {
+      return false;
+    }
+
+    player.onThinPlatform = true;
+    player.currentThinPlatform = targetPlatform;
+    player.currentThinSlope = targetSlope;
+
+    const isDoubleTap = time - player.lastTapDownAt <= DOWN_DOUBLE_TAP_MS;
+    player.lastTapDownAt = time;
+    if (!isDoubleTap) {
+      return false;
+    }
+
+    player.dropUntil = time + DROP_DURATION;
+    player.dropThroughPlatform = targetPlatform;
+    player.dropThroughSlope = targetSlope;
+    player.sprite.setVelocityY(110);
+    player.onThinPlatform = false;
+    player.currentThinPlatform = null;
+    player.currentThinSlope = null;
+    return true;
+  }
+
+  clearCompletedPlatformDrop(player, time) {
+    const body = player?.sprite?.body;
+    let clearPlatform = false;
+    let clearSlope = false;
+
+    if (player.dropThroughPlatform) {
+      const platformBody = player.dropThroughPlatform.body;
+      clearPlatform = !body || !platformBody || time >= player.dropUntil || body.y > platformBody.y + 2;
+    }
+
+    if (player.dropThroughSlope) {
+      clearSlope = !body || time >= player.dropUntil || body.y > player.dropThroughSlope.y + player.dropThroughSlope.size - 2;
+    }
+
+    if (clearPlatform) {
+      player.dropThroughPlatform = null;
+    }
+    if (clearSlope) {
+      player.dropThroughSlope = null;
+    }
+    if (!player.dropThroughPlatform && !player.dropThroughSlope && (clearPlatform || clearSlope || time >= player.dropUntil)) {
+      player.dropUntil = 0;
+    }
+  }
+
+  findThinPlatformUnderPlayer(player) {
+    const body = player?.sprite?.body;
+    if (!body) {
+      return null;
+    }
+
+    const playerBottom = body.y + body.height;
+    for (const platform of this.platforms) {
+      if (!platform.active || !platform.getData('thin') || !platform.body) {
+        continue;
+      }
+      const platformBody = platform.body;
+      const overlapsX = body.x + body.width > platformBody.x + 1 && body.x < platformBody.x + platformBody.width - 1;
+      const closeToTop = playerBottom >= platformBody.y - 2 && playerBottom <= platformBody.y + 16;
+      if (overlapsX && closeToTop) {
+        return platform;
+      }
+    }
+    return null;
+  }
+
   startJump(player, time) {
     player.sprite.setVelocityY(-this.configData.movement.jumpSpeed);
     player.sprite.body.touching.down = false;
@@ -3544,6 +3680,10 @@ class FightScene extends Phaser.Scene {
     player.jumpPrepUntil = time + this.getAnimationDurationMs(animationName);
     player.jumpLandUntil = 0;
     player.onThinPlatform = false;
+    player.currentThinPlatform = null;
+    player.currentThinSlope = null;
+    player.dropThroughPlatform = null;
+    player.dropThroughSlope = null;
     player.sprite.play(this.getPlayerAnimationKey(animationName));
   }
 
@@ -3832,7 +3972,10 @@ class FightScene extends Phaser.Scene {
   updateAim(player, horizontal, vertical, delta) {
     const rotateSpeed = Phaser.Math.DegToRad(this.configData.movement.aimRotateDegPerSecond);
     const aimFacing = player.aimFacing || (player.facing >= 0 ? 1 : -1);
-    const nextOffset = (player.aimOffset ?? 0) + vertical * aimFacing * rotateSpeed * (delta / 1000);
+    const verticalAim = player.aimMode === 'gun' && player.crouching ? 0 : vertical;
+    const nextOffset = player.aimMode === 'gun' && player.crouching
+      ? 0
+      : (player.aimOffset ?? 0) + verticalAim * aimFacing * rotateSpeed * (delta / 1000);
     player.aimFacing = aimFacing;
     player.aimOffset = Phaser.Math.Clamp(nextOffset, -AIM_HALF_ARC, AIM_HALF_ARC);
     player.aimAngle = this.getAimAngle(player.aimFacing, player.aimOffset);
@@ -3881,7 +4024,9 @@ class FightScene extends Phaser.Scene {
   }
 
   setAimVisible(player, visible) {
-    player.arm.setVisible(false);
+    if (!visible) {
+      player.arm.setVisible(false);
+    }
     player.weaponSprite.setVisible(visible && player.aimMode === 'gun' && Boolean(player.weapon));
     player.crosshair.setVisible(visible);
     player.aimGraphics.setVisible(visible);
@@ -3898,13 +4043,14 @@ class FightScene extends Phaser.Scene {
     const carryAnchor = this.getAimAnchor(player, visualAngle);
     const direction = new Phaser.Math.Vector2(Math.cos(visualAngle), Math.sin(visualAngle));
     const reticle = this.getAimReticlePosition(player, visualAngle);
+    const armOverlayVisible = heldGunVisible && this.shouldShowGunArmOverlay(player, aimVisualActive);
 
-    player.arm.setVisible(false);
     player.weaponSprite.setTexture(player.weapon ? `weapon-${player.weapon.id}` : 'weapon-pistol');
     player.weaponSprite.setPosition(carryAnchor.x, carryAnchor.y);
     player.weaponSprite.setRotation(visualAngle);
     player.weaponSprite.setFlipY(visualFacing < 0);
     player.weaponSprite.setVisible(heldGunVisible);
+    this.updateGunArmOverlay(player, armOverlayVisible, visualFacing);
     player.crosshair.setPosition(reticle.x, reticle.y);
     player.crosshair.setVisible(aimVisualActive);
     player.aimGraphics.setVisible(aimVisualActive);
@@ -3923,6 +4069,48 @@ class FightScene extends Phaser.Scene {
     if (player.aimMode === 'grenade') {
       this.drawGrenadeArc(player, reticle, direction);
     }
+  }
+
+  shouldShowGunArmOverlay(player, aimVisualActive) {
+    if (!player.weapon) {
+      return false;
+    }
+
+    const key = player.sprite.anims.currentAnim?.key;
+    return (
+      aimVisualActive ||
+      [
+        'girl-aim',
+        'girl-idle-gun',
+        'girl-run-gun',
+        'girl-crouch-down-gun',
+        'girl-crouch',
+        'girl-stand-up-gun',
+        'girl-jump-prep-gun',
+        'girl-jump-up-gun',
+        'girl-jump-peak-gun',
+        'girl-jump-down-gun',
+        'girl-jump-land-gun',
+      ].includes(key)
+    );
+  }
+
+  updateGunArmOverlay(player, visible, facing) {
+    if (!visible) {
+      player.arm.setVisible(false);
+      return;
+    }
+
+    const bodyFrame = getEmpressFrameNumber(player.sprite.texture.key);
+    const armFrame = getGunArmOverlayFrame(bodyFrame);
+    player.arm.stop();
+    player.arm
+      .setTexture(this.getCharacterTextureKey(armFrame))
+      .setPosition(player.sprite.x, player.sprite.y)
+      .setScale(PLAYER_SCALE)
+      .setFlipX(facing < 0)
+      .setRotation(0)
+      .setVisible(true);
   }
 
   isGunCarryAnimation(player) {
@@ -4488,6 +4676,10 @@ class FightScene extends Phaser.Scene {
     player.powerup = null;
     player.grenadeAmmo = this.configData.grenades.startCount;
     player.dropUntil = 0;
+    player.currentThinPlatform = null;
+    player.currentThinSlope = null;
+    player.dropThroughPlatform = null;
+    player.dropThroughSlope = null;
     player.jumpBufferUntil = 0;
     player.headSupportUntil = 0;
     player.headSupportPlayerId = null;
@@ -4928,7 +5120,7 @@ class FightScene extends Phaser.Scene {
       return true;
     }
 
-    if (this.time.now < player.dropUntil || player.climbing) {
+    if (this.isDroppingThroughPlatform(player, platform) || player.climbing) {
       return false;
     }
 
@@ -4983,7 +5175,37 @@ class FightScene extends Phaser.Scene {
     const player = this.playerBySprite.get(sprite);
     if (player && platform.getData('thin')) {
       player.onThinPlatform = true;
+      player.currentThinPlatform = platform;
+      player.currentThinSlope = null;
     }
+  }
+
+  isDroppingThroughPlatform(player, platform) {
+    if (player.dropThroughPlatform !== platform) {
+      return false;
+    }
+    if (this.time.now >= player.dropUntil) {
+      player.dropThroughPlatform = null;
+      if (!player.dropThroughSlope) {
+        player.dropUntil = 0;
+      }
+      return false;
+    }
+    return true;
+  }
+
+  isDroppingThroughSlope(player, slope) {
+    if (player.dropThroughSlope !== slope) {
+      return false;
+    }
+    if (this.time.now >= player.dropUntil) {
+      player.dropThroughSlope = null;
+      if (!player.dropThroughPlatform) {
+        player.dropUntil = 0;
+      }
+      return false;
+    }
+    return true;
   }
 
   breakWindowsInBox(centerX, centerY, width, height, damage) {
@@ -5849,6 +6071,28 @@ function getBodyBounds(object) {
 function getEmpressFrameNumber(textureKey) {
   const match = /^empress-frame-(\d+)$/.exec(textureKey ?? '');
   return match ? Number.parseInt(match[1], 10) : null;
+}
+
+function getGunArmOverlayFrame(bodyFrame) {
+  if (bodyFrame >= 29 && bodyFrame <= 32) {
+    return bodyFrame + 8;
+  }
+  if (bodyFrame >= 58 && bodyFrame <= 60) {
+    return bodyFrame + 13;
+  }
+  if (bodyFrame >= 61 && bodyFrame <= 64) {
+    return 73;
+  }
+  if (bodyFrame >= 68 && bodyFrame <= 70) {
+    return bodyFrame + 10;
+  }
+  if (bodyFrame >= 106 && bodyFrame <= 113) {
+    return bodyFrame + 8;
+  }
+  if (bodyFrame >= 133 && bodyFrame <= 143) {
+    return bodyFrame + 11;
+  }
+  return 37;
 }
 
 retireServiceWorkers();

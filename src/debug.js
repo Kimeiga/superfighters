@@ -1,5 +1,6 @@
 import {
   ANIMATION_ORDER,
+  DEFAULT_EMPRESS_ARM_OVERLAY_CONFIG,
   DEFAULT_EMPRESS_ANIMATION_CONFIG,
   DEFAULT_ANIMATION_CONFIG,
   getAnimationConfig,
@@ -25,6 +26,27 @@ const DEFAULT_CHARACTER_GUN_HANDS = {
   55: { x: 32, y: 46 },
   56: { x: 38, y: 50 },
   57: { x: 42, y: 64 },
+  58: { x: 39, y: 50 },
+  59: { x: 42, y: 52 },
+  60: { x: 42, y: 67 },
+  61: { x: 42, y: 66 },
+  62: { x: 42, y: 66 },
+  63: { x: 42, y: 66 },
+  64: { x: 42, y: 66 },
+  68: { x: 42, y: 67 },
+  69: { x: 42, y: 52 },
+  70: { x: 39, y: 50 },
+  133: { x: 41, y: 57 },
+  134: { x: 41, y: 57 },
+  135: { x: 41, y: 57 },
+  136: { x: 41, y: 57 },
+  137: { x: 41, y: 57 },
+  138: { x: 41, y: 57 },
+  139: { x: 41, y: 57 },
+  140: { x: 41, y: 57 },
+  141: { x: 41, y: 57 },
+  142: { x: 41, y: 57 },
+  143: { x: 41, y: 57 },
 };
 const DEFAULT_ATTACHMENT_CONFIG = {
   characterGunHand: { x: 39, y: 50 },
@@ -199,6 +221,8 @@ const playtest = {
   actionAnimationName: null,
   actionUntil: 0,
   actionAir: false,
+  shootFlashUntil: 0,
+  shootFlashFacing: 1,
   animationName: null,
   animationStartedAt: performance.now(),
   keys: new Set(),
@@ -1105,6 +1129,17 @@ function migrateSavedSheetAnimationConfig(sheet, saved) {
   migrateExactAnimationRange(migrated, 'jumpPrep', { start: 120, end: 120, fps: 1 }, { start: 122, end: 122, fps: 12 });
   migrateExactAnimationRange(migrated, 'jumpUp', { start: 121, end: 125 }, { start: 123, end: 125 });
   migrateExactAnimationRange(migrated, 'jumpMelee', { start: 120 }, { start: 122 });
+  migrateExactAnimationRange(migrated, 'crouchDownGun', { start: 71, end: 73 }, { start: 58, end: 60 });
+  migrateExactAnimationRange(migrated, 'standUpGun', { start: 78, end: 80 }, { start: 68, end: 70 });
+  migrateExactAnimationRange(migrated, 'runGun', { start: 114, end: 121 }, { start: 106, end: 113 });
+  migrateExactAnimationRange(migrated, 'jumpPrepGun', { start: 144, end: 144 }, { start: 133, end: 133 });
+  migrateExactAnimationRange(migrated, 'jumpGunUp', { start: 145, end: 147 }, { start: 134, end: 136 });
+  migrateExactAnimationRange(migrated, 'jumpGunPeak', { start: 148, end: 150 }, { start: 137, end: 139 });
+  migrateExactAnimationRange(migrated, 'jumpGunDown', { start: 151, end: 153 }, { start: 140, end: 142 });
+  migrateExactAnimationRange(migrated, 'jumpGunLand', { start: 154, end: 154 }, { start: 143, end: 143 });
+  migrateExactAnimationRange(migrated, 'jumpAimStraight', { start: 145, end: 147 }, { start: 134, end: 136 });
+  migrateExactAnimationRange(migrated, 'jumpAimUp', { start: 148, end: 150 }, { start: 137, end: 139 });
+  migrateExactAnimationRange(migrated, 'jumpAimDown', { start: 151, end: 153 }, { start: 140, end: 142 });
 
   if (migrated.jumpMelee?.frames === '120,195-203') {
     migrated.jumpMelee.frames = '122,195-203';
@@ -1186,6 +1221,13 @@ function loadAttachmentConfig() {
 
   if (configToLoad.gunFrame === 1) {
     configToLoad.gunFrame = DEFAULT_ATTACHMENT_CONFIG.gunFrame;
+  }
+
+  for (const frame of ['62', '63', '64']) {
+    const point = configToLoad.characterGunHands[frame];
+    if (point?.x === 39 && point?.y === 50) {
+      configToLoad.characterGunHands[frame] = { x: 42, y: 66 };
+    }
   }
 
   return configToLoad;
@@ -1773,15 +1815,21 @@ function getPlaybackSignature(animationName, setting, frames, repeats) {
 
 function getPlaybackFrame(setting, frames, elapsedMs, repeatOverride = setting.repeat) {
   const safeFrames = frames.length ? frames : [1];
+  return safeFrames[getPlaybackFrameIndex(setting, safeFrames, elapsedMs, repeatOverride)] ?? safeFrames[0] ?? 1;
+}
+
+function getPlaybackFrameIndex(setting, frames, elapsedMs, repeatOverride = setting.repeat) {
+  const safeFrames = frames.length ? frames : [1];
   const frameIndex = Math.floor(Math.max(0, elapsedMs) / 1000 * Math.max(1, setting.fps));
-  const clampedIndex = repeatOverride
+  return repeatOverride
     ? frameIndex % safeFrames.length
     : clamp(frameIndex, 0, safeFrames.length - 1);
-  return safeFrames[clampedIndex] ?? safeFrames[safeFrames.length - 1] ?? 1;
 }
 
 function drawPreview(frame) {
   const bitmap = getFrameBitmap(frame);
+  const setting = config[selectedAnimation] ?? config.idle;
+  const frames = makeFrameList1Based(setting, frameCount || 1);
   const frameSize = activeSheet.frameSize;
   const scale = activeSheet.previewScale;
   const size = frameSize * scale;
@@ -1811,6 +1859,7 @@ function drawPreview(frame) {
   } else {
     if (attachmentConfig.previewShowGun) {
       drawAttachedGun(previewCtx, x, y, scale, 1, frame, selectedAnimation, true, { force: true });
+      drawSyncedArmOverlay(previewCtx, x, y, scale, 1, selectedAnimation, frames, frame);
     }
     if (!cleanView) {
       drawCharacterHandGizmo(frame, x, y, scale);
@@ -1860,6 +1909,43 @@ function drawAttachedGun(context, frameX, frameY, scale, facing, frame, animatio
   if (recordPreviewBox) {
     lastPreviewGunBox = { x: drawX, y: drawY, scale };
   }
+}
+
+function drawSyncedArmOverlay(context, frameX, frameY, scale, facing, animationName, bodyFrames, bodyFrame) {
+  const armSetting = getArmOverlaySetting(animationName);
+  if (!armSetting) {
+    return;
+  }
+
+  const armFrames = makeFrameList1Based(armSetting, frameCount || 1);
+  if (!armFrames.length) {
+    return;
+  }
+
+  const bodyIndex = Math.max(0, bodyFrames.indexOf(bodyFrame));
+  const armFrame = armFrames[bodyIndex % armFrames.length] ?? armFrames[0];
+  drawFrameBitmap(context, getFrameBitmap(armFrame), frameX, frameY, scale, facing);
+}
+
+function drawFrameBitmap(context, bitmap, frameX, frameY, scale, facing) {
+  const frameSize = activeSheet.frameSize;
+  const drawY = Math.round(frameY - bitmap.render.originY * scale);
+  const drawWidth = bitmap.canvas.width * scale;
+  const drawHeight = bitmap.canvas.height * scale;
+
+  context.save();
+  context.imageSmoothingEnabled = false;
+  if (facing < 0) {
+    const rightExtension = bitmap.render.width - bitmap.render.originX - frameSize;
+    const drawX = Math.round(frameX - rightExtension * scale);
+    context.translate(drawX + drawWidth, drawY);
+    context.scale(-1, 1);
+    context.drawImage(bitmap.canvas, 0, 0, drawWidth, drawHeight);
+  } else {
+    const drawX = Math.round(frameX - bitmap.render.originX * scale);
+    context.drawImage(bitmap.canvas, drawX, drawY, drawWidth, drawHeight);
+  }
+  context.restore();
 }
 
 function drawCharacterHandGizmo(frame, frameX, frameY, scale) {
@@ -2040,6 +2126,17 @@ function shouldRenderGunForAnimation(animationName) {
   return attachmentConfig.playtestHasGun && GUN_ATTACHMENT_ANIMATIONS.has(animationName);
 }
 
+function shouldRenderArmOverlay(animationName) {
+  return Boolean(getArmOverlaySetting(animationName));
+}
+
+function getArmOverlaySetting(animationName) {
+  if (!attachmentConfig.playtestHasGun || activeSheet.id !== 'empress') {
+    return null;
+  }
+  return DEFAULT_EMPRESS_ARM_OVERLAY_CONFIG[animationName] ?? null;
+}
+
 function hasRenderExtension(render) {
   return Boolean(
     render &&
@@ -2181,9 +2278,6 @@ function drawPlaytest(now) {
   const baseDrawSize = frameSize * scale;
   const baseX = Math.round(playtest.x - baseDrawSize / 2);
   const baseY = Math.round(playtest.y - baseDrawSize);
-  const drawY = Math.round(baseY - bitmap.render.originY * scale);
-  const drawWidth = bitmap.canvas.width * scale;
-  const drawHeight = bitmap.canvas.height * scale;
 
   playtestCtx.imageSmoothingEnabled = false;
   playtestCtx.clearRect(0, 0, playtestCanvas.width, playtestCanvas.height);
@@ -2194,20 +2288,11 @@ function drawPlaytest(now) {
   playtestCtx.fillStyle = '#6cc36b';
   playtestCtx.fillRect(0, getPlaytestFloorY() - 4, playtestCanvas.width, 4);
 
-  playtestCtx.save();
-  if (playtest.facing < 0) {
-    const rightExtension = bitmap.render.width - bitmap.render.originX - frameSize;
-    const drawX = Math.round(baseX - rightExtension * scale);
-    playtestCtx.translate(drawX + drawWidth, drawY);
-    playtestCtx.scale(-1, 1);
-    playtestCtx.drawImage(bitmap.canvas, 0, 0, drawWidth, drawHeight);
-  } else {
-    const drawX = Math.round(baseX - bitmap.render.originX * scale);
-    playtestCtx.drawImage(bitmap.canvas, drawX, drawY, drawWidth, drawHeight);
-  }
-  playtestCtx.restore();
+  drawFrameBitmap(playtestCtx, bitmap, baseX, baseY, scale, playtest.facing);
   if (activeSheet.id !== 'handguns') {
     drawAttachedGun(playtestCtx, baseX, baseY, scale, playtest.facing, frame, animationName);
+    drawSyncedArmOverlay(playtestCtx, baseX, baseY, scale, playtest.facing, animationName, frames, frame);
+    drawPlaytestShotFlash(now, baseX, baseY, scale, frame);
   }
 
   playtestCtx.fillStyle = 'rgba(13, 20, 32, 0.78)';
@@ -2305,12 +2390,51 @@ function handlePlaytestKeyDown(code) {
     }
     const animationName = !playtest.grounded ? 'jumpMelee' : playtest.crouching ? 'crouchMelee' : 'melee';
     startPlaytestAction('melee', animationName, now);
+  } else if (code === 'Digit2') {
+    if (!attachmentConfig.playtestHasGun) {
+      setStatus('Enable Gun in the playable debug panel before firing.');
+      return;
+    }
+    playtest.action = 'shoot';
+    playtest.actionAnimationName = null;
+    playtest.actionUntil = now + 130;
+    playtest.actionAir = !playtest.grounded;
+    playtest.shootFlashUntil = now + 95;
+    playtest.shootFlashFacing = playtest.facing || 1;
   } else if (code === 'Digit3') {
     playtest.action = 'grenadePrep';
     playtest.actionAnimationName = null;
     playtest.actionUntil = 0;
     playtest.actionAir = !playtest.grounded;
   }
+}
+
+function drawPlaytestShotFlash(now, frameX, frameY, scale, frame) {
+  if (now >= playtest.shootFlashUntil) {
+    return;
+  }
+
+  const facing = playtest.shootFlashFacing || playtest.facing || 1;
+  const hand = getCharacterHandPoint(frame, facing);
+  const handX = frameX + hand.x * scale;
+  const handY = frameY + hand.y * scale;
+  const muzzleX = handX + facing * 24 * scale;
+  const muzzleY = handY - scale;
+  const alpha = clamp((playtest.shootFlashUntil - now) / 95, 0, 1);
+
+  playtestCtx.save();
+  playtestCtx.globalAlpha = alpha;
+  playtestCtx.strokeStyle = '#ffe36e';
+  playtestCtx.lineWidth = 4;
+  playtestCtx.beginPath();
+  playtestCtx.moveTo(muzzleX, muzzleY);
+  playtestCtx.lineTo(muzzleX + facing * 60, muzzleY);
+  playtestCtx.stroke();
+  playtestCtx.fillStyle = '#fff6c2';
+  playtestCtx.beginPath();
+  playtestCtx.arc(muzzleX, muzzleY, 6, 0, Math.PI * 2);
+  playtestCtx.fill();
+  playtestCtx.restore();
 }
 
 function isPlaytestActionActive(now) {
@@ -2349,6 +2473,8 @@ function resetPlaytest() {
   playtest.actionAnimationName = null;
   playtest.actionUntil = 0;
   playtest.actionAir = false;
+  playtest.shootFlashUntil = 0;
+  playtest.shootFlashFacing = 1;
   resetPlaytestAnimationPlayback();
 }
 

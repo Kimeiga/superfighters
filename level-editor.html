@@ -16,7 +16,7 @@
           <a href="./">Game</a>
           <a href="./debug.html">Debug</a>
           <button id="playtestLevelButton" type="button">Playtest</button>
-          <button id="saveLevelButton" type="button">Save Local</button>
+          <button id="saveLevelButton" type="button">Save Default</button>
           <button id="exportLevelButton" type="button">Export JSON</button>
           <label class="file-button">
             Import JSON
@@ -115,6 +115,10 @@
               <label>
                 Height
                 <input id="levelHeightInput" type="number" min="8" max="512" step="1" />
+              </label>
+              <label>
+                Tile
+                <input id="levelTileSizeInput" type="number" min="16" max="96" step="1" />
               </label>
             </div>
             <div class="button-grid">
