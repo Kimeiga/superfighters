@@ -48,6 +48,7 @@ const validationList = document.querySelector('#validationList');
 const ctx = canvas.getContext('2d');
 
 const HISTORY_LIMIT = 80;
+const AUTOSAVE_DELAY_MS = 450;
 const TILE_CATEGORIES = [
   { label: 'Terrain', tiles: ['empty', 'solid', 'slopeUp', 'slopeDown', 'backdrop', 'void'] },
   { label: 'Platforms', tiles: ['platform', 'movingPlatform'] },
@@ -209,12 +210,15 @@ let fittedOnce = false;
 let showColliderPreview = false;
 let history = [];
 let redoStack = [];
+let autosaveEnabled = false;
+let autosaveTimer = null;
 
 buildPalette();
 buildPickupOptions();
 resizeCanvas();
 fitToLevel();
 updateUi();
+autosaveEnabled = true;
 requestAnimationFrame(draw);
 
 window.addEventListener('resize', () => {
@@ -456,12 +460,12 @@ zoomInput.addEventListener('input', () => {
 });
 
 saveButton.addEventListener('click', () => {
-  saveLevel(level);
+  saveEditorLevelNow();
   setStatus('Saved to this browser.');
 });
 
 playtestButton.addEventListener('click', () => {
-  saveLevel(level);
+  saveEditorLevelNow();
   window.location.href = './?playtestLevel=1';
 });
 
@@ -507,7 +511,7 @@ resetSeedButton.addEventListener('click', () => {
 clearButton.addEventListener('click', () => {
   pushHistory('New Blank');
   level = normalizeEditorLevel(createEmptyLevel('Blank Arena'));
-  saveLevel(level);
+  saveEditorLevelNow();
   selectionRect = null;
   fitToLevel();
   updateUi('Started a blank level and saved it locally.');
@@ -1465,7 +1469,30 @@ function updateUi(message = null) {
   if (message) {
     setStatus(message);
   }
+  scheduleAutosave();
   draw();
+}
+
+function scheduleAutosave() {
+  if (!autosaveEnabled) {
+    return;
+  }
+  if (autosaveTimer) {
+    window.clearTimeout(autosaveTimer);
+  }
+  autosaveTimer = window.setTimeout(() => {
+    autosaveTimer = null;
+    saveEditorLevelNow();
+    setStatus(`Autosaved to this browser at ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.`);
+  }, AUTOSAVE_DELAY_MS);
+}
+
+function saveEditorLevelNow() {
+  if (autosaveTimer) {
+    window.clearTimeout(autosaveTimer);
+    autosaveTimer = null;
+  }
+  saveLevel(level);
 }
 
 function updateCursorText() {
