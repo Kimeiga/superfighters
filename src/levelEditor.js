@@ -48,6 +48,15 @@ const validationList = document.querySelector('#validationList');
 const ctx = canvas.getContext('2d');
 
 const HISTORY_LIMIT = 80;
+const TILE_CATEGORIES = [
+  { label: 'Terrain', tiles: ['empty', 'solid', 'slopeUp', 'slopeDown', 'backdrop', 'void'] },
+  { label: 'Platforms', tiles: ['platform', 'movingPlatform'] },
+  { label: 'Breakables', tiles: ['crate', 'barrel', 'smallExplosive', 'swingingCrate'] },
+  { label: 'Glass', tiles: ['glassLeft', 'glassRight', 'glass'] },
+  { label: 'Ladders', tiles: ['ladderLeft', 'ladderRight', 'ladder'] },
+  { label: 'Gameplay', tiles: ['pickup', 'door', 'light'] },
+  { label: 'Players', tiles: ['p1', 'p2'] },
+];
 const PREFABS = {
   platform: {
     label: 'Small Platform',
@@ -496,11 +505,12 @@ resetSeedButton.addEventListener('click', () => {
 });
 
 clearButton.addEventListener('click', () => {
-  pushHistory('Clear');
+  pushHistory('New Blank');
   level = normalizeEditorLevel(createEmptyLevel('Blank Arena'));
+  saveLevel(level);
   selectionRect = null;
   fitToLevel();
-  updateUi('Cleared editor canvas.');
+  updateUi('Started a blank level and saved it locally.');
 });
 
 for (const button of modeButtons) {
@@ -546,25 +556,64 @@ cropLevelButton.addEventListener('click', () => {
 
 function buildPalette() {
   palette.innerHTML = '';
+  const rendered = new Set();
 
-  for (const tile of TILE_DEFS) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = `tile-button${tile.id === selectedTile ? ' selected' : ''}`;
-    button.dataset.tile = tile.id;
+  for (const category of TILE_CATEGORIES) {
+    const section = document.createElement('section');
+    section.className = 'tile-category';
 
-    const swatch = document.createElement('span');
-    swatch.className = 'tile-swatch';
-    if (tile.id !== 'empty') {
-      swatch.style.background = tile.color;
+    const heading = document.createElement('h3');
+    heading.textContent = category.label;
+
+    const grid = document.createElement('div');
+    grid.className = 'tile-category-grid';
+
+    for (const tileId of category.tiles) {
+      const tile = TILE_DEFS[TILE_INDEX[tileId]];
+      if (!tile) {
+        continue;
+      }
+      grid.append(createTileButton(tile));
+      rendered.add(tile.id);
     }
 
-    const label = document.createElement('span');
-    label.textContent = tile.label;
-    button.append(swatch, label);
-    button.addEventListener('click', () => selectTile(tile.id));
-    palette.append(button);
+    section.append(heading, grid);
+    palette.append(section);
   }
+
+  const uncategorized = TILE_DEFS.filter((tile) => !rendered.has(tile.id));
+  if (uncategorized.length) {
+    const section = document.createElement('section');
+    section.className = 'tile-category';
+    const heading = document.createElement('h3');
+    heading.textContent = 'Other';
+    const grid = document.createElement('div');
+    grid.className = 'tile-category-grid';
+    for (const tile of uncategorized) {
+      grid.append(createTileButton(tile));
+    }
+    section.append(heading, grid);
+    palette.append(section);
+  }
+}
+
+function createTileButton(tile) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `tile-button${tile.id === selectedTile ? ' selected' : ''}`;
+  button.dataset.tile = tile.id;
+
+  const swatch = document.createElement('span');
+  swatch.className = 'tile-swatch';
+  if (tile.id !== 'empty') {
+    swatch.style.background = tile.color;
+  }
+
+  const label = document.createElement('span');
+  label.textContent = tile.label;
+  button.append(swatch, label);
+  button.addEventListener('click', () => selectTile(tile.id));
+  return button;
 }
 
 function buildPickupOptions() {

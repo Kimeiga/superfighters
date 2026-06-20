@@ -23,7 +23,7 @@
             <input id="importLevelInput" type="file" accept="application/json,.json" />
           </label>
           <button id="resetSeedButton" type="button">Reset Seed</button>
-          <button id="clearLevelButton" type="button">Clear</button>
+          <button id="clearLevelButton" type="button">New Blank</button>
         </nav>
       </header>
 
@@ -41,11 +41,6 @@
               <button class="mode-button" type="button" data-tool-mode="stamp">Stamp</button>
               <button class="mode-button" type="button" data-tool-mode="paste">Paste</button>
             </div>
-          </section>
-
-          <section>
-            <h2>Tiles</h2>
-            <div id="tilePalette" class="tile-palette"></div>
           </section>
 
           <section class="tool-grid">
@@ -135,6 +130,13 @@
         <section class="canvas-panel">
           <canvas id="levelCanvas"></canvas>
         </section>
+
+        <aside class="tile-panel">
+          <section>
+            <h2>Tiles</h2>
+            <div id="tilePalette" class="tile-palette"></div>
+          </section>
+        </aside>
       </section>
 
       <p id="editorStatus" class="editor-status"></p>
