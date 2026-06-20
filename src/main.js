@@ -1159,10 +1159,11 @@ class FightScene extends Phaser.Scene {
       prop.body.setAllowGravity(true);
       prop.body.setImmovable(false);
       prop.body.pushable = true;
-      prop.body.setMass(type === 'smallExplosive' ? 2.2 : type === 'barrel' ? 6 : 8);
-      prop.body.setDragX(type === 'smallExplosive' ? 1050 : 1500);
+      prop.body.setMass(type === 'smallExplosive' ? 5 : type === 'barrel' ? 16 : 22);
+      prop.body.setDragX(type === 'smallExplosive' ? 2600 : type === 'barrel' ? 4800 : 5600);
       prop.body.setBounce(type === 'barrel' ? 0.08 : 0.035, 0.02);
-      prop.body.setMaxVelocity(type === 'smallExplosive' ? 140 : 105, 720);
+      prop.body.setMaxVelocity(type === 'smallExplosive' ? 95 : type === 'barrel' ? 70 : 60, 720);
+      prop.setData('groundFriction', type === 'smallExplosive' ? 0.7 : type === 'barrel' ? 0.56 : 0.5);
     }
     prop.body.updateFromGameObject();
     if (isPushableProp) {
@@ -3195,10 +3196,30 @@ class FightScene extends Phaser.Scene {
         this.removeLevelProp(prop);
         continue;
       }
+      prop.setData('grounded', false);
       this.resolveDynamicPropWallContact(prop);
       this.resolveDynamicPropPlatformContact(prop);
       this.resolveDynamicPropSlopeContact(prop);
+      this.applyDynamicPropFloorFriction(prop);
       this.syncPropVisuals(prop);
+    }
+  }
+
+  applyDynamicPropFloorFriction(prop) {
+    const body = prop?.body;
+    if (!body) {
+      return;
+    }
+
+    const grounded = prop.getData('grounded') || body.blocked.down || body.touching.down;
+    if (!grounded) {
+      return;
+    }
+
+    const friction = prop.getData('groundFriction') ?? 0.58;
+    body.setVelocityX(body.velocity.x * friction);
+    if (Math.abs(body.velocity.x) < 8) {
+      body.setVelocityX(0);
     }
   }
 
@@ -3305,6 +3326,7 @@ class FightScene extends Phaser.Scene {
     body.setVelocityY(0);
     body.touching.down = true;
     body.blocked.down = true;
+    prop.setData('grounded', true);
     return true;
   }
 
@@ -3356,6 +3378,7 @@ class FightScene extends Phaser.Scene {
     }
     body.touching.down = true;
     body.blocked.down = true;
+    prop.setData('grounded', true);
     body.updateCenter();
     return true;
   }
