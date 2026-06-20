@@ -76,6 +76,7 @@ function validateDefaultLevelPayload(payload) {
     tileSize,
     runs: payload.runs.map(validateRun).filter(Boolean),
     pickupSpecs: Array.isArray(payload.pickupSpecs) ? payload.pickupSpecs.map(validatePickupSpec).filter(Boolean) : [],
+    doorLinks: Array.isArray(payload.doorLinks) ? payload.doorLinks.map((link) => validateDoorLink(link, width, height)).filter(Boolean) : [],
   };
 }
 
@@ -106,6 +107,30 @@ function validatePickupSpec(spec) {
     kind: ['random', 'weapon', 'grenade', 'powerup'].includes(spec.kind) ? spec.kind : 'random',
     id: typeof spec.id === 'string' && spec.id ? spec.id : 'random',
   };
+}
+
+function validateDoorLink(link, width, height) {
+  if (!link || typeof link !== 'object') {
+    return null;
+  }
+  const a = validateDoorEndpoint(link.a, width, height);
+  const b = validateDoorEndpoint(link.b, width, height);
+  if (!a || !b || (a.x === b.x && a.y === b.y)) {
+    return null;
+  }
+  return { a, b };
+}
+
+function validateDoorEndpoint(endpoint, width, height) {
+  if (!endpoint || typeof endpoint !== 'object') {
+    return null;
+  }
+  const x = clampInteger(endpoint.x, 0, width - 1, null);
+  const y = clampInteger(endpoint.y, 0, height - 1, null);
+  if (x === null || y === null) {
+    return null;
+  }
+  return { x, y };
 }
 
 function clampInteger(value, min, max, fallback) {

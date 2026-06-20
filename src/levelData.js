@@ -47,6 +47,7 @@ export function createEmptyLevel(name = 'Untitled Arena') {
     tileSize: TILE_SIZE,
     grid: new Uint8Array(DEFAULT_LEVEL_WIDTH * DEFAULT_LEVEL_HEIGHT),
     pickupSpecs: [],
+    doorLinks: [],
   };
 }
 
@@ -93,6 +94,7 @@ export function serializeLevel(level) {
     tileSize: normalized.tileSize,
     runs: encodeRuns(normalized.grid),
     pickupSpecs: normalized.pickupSpecs,
+    doorLinks: normalized.doorLinks,
   };
 }
 
@@ -118,6 +120,7 @@ export function normalizeLevel(input) {
     tileSize,
     grid,
     pickupSpecs: normalizePickupSpecs(input?.pickupSpecs, width, height),
+    doorLinks: normalizeDoorLinks(input?.doorLinks, width, height),
   };
 }
 
@@ -197,6 +200,54 @@ export function setTile(level, x, y, tileId) {
   level.grid[y * level.width + x] = TILE_INDEX[tileId] ?? TILE_INDEX.empty;
 }
 
+export function getDoorKey(x, y) {
+  return `${x},${y}`;
+}
+
+export function getDoorTopAt(level, x, y) {
+  const normalized = normalizeLevel(level);
+  if (x < 0 || y < 0 || x >= normalized.width || y >= normalized.height) {
+    return null;
+  }
+  if (normalized.grid[y * normalized.width + x] !== TILE_INDEX.door) {
+    return null;
+  }
+
+  let top = y;
+  while (top > 0 && normalized.grid[(top - 1) * normalized.width + x] === TILE_INDEX.door) {
+    top -= 1;
+  }
+  return { x, y: top };
+}
+
+export function getDoorInstances(level) {
+  const normalized = normalizeLevel(level);
+  const doors = [];
+  for (let y = 0; y < normalized.height; y += 1) {
+    for (let x = 0; x < normalized.width; x += 1) {
+      if (normalized.grid[y * normalized.width + x] !== TILE_INDEX.door) {
+        continue;
+      }
+      if (y > 0 && normalized.grid[(y - 1) * normalized.width + x] === TILE_INDEX.door) {
+        continue;
+      }
+
+      let height = 1;
+      while (y + height < normalized.height && normalized.grid[(y + height) * normalized.width + x] === TILE_INDEX.door) {
+        height += 1;
+      }
+      doors.push({
+        x,
+        y,
+        height,
+        key: getDoorKey(x, y),
+        valid: height === 2,
+      });
+    }
+  }
+  return doors;
+}
+
 function normalizePickupSpecs(specs, width, height) {
   if (!Array.isArray(specs)) {
     return [];
@@ -227,6 +278,43 @@ function normalizePickupSpecs(specs, width, height) {
 
 function normalizePickupKind(kind) {
   return ['random', 'weapon', 'grenade', 'powerup'].includes(kind) ? kind : 'random';
+}
+
+function normalizeDoorLinks(links, width, height) {
+  if (!Array.isArray(links)) {
+    return [];
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  for (const link of links) {
+    const a = normalizeDoorEndpoint(link?.a, width, height);
+    const b = normalizeDoorEndpoint(link?.b, width, height);
+    if (!a || !b) {
+      continue;
+    }
+    const aKey = getDoorKey(a.x, a.y);
+    const bKey = getDoorKey(b.x, b.y);
+    if (aKey === bKey) {
+      continue;
+    }
+    const pairKey = [aKey, bKey].sort().join('|');
+    if (seen.has(pairKey)) {
+      continue;
+    }
+    seen.add(pairKey);
+    normalized.push({ a, b });
+  }
+  return normalized;
+}
+
+function normalizeDoorEndpoint(endpoint, width, height) {
+  const x = clampInteger(endpoint?.x, 0, width - 1, -1);
+  const y = clampInteger(endpoint?.y, 0, height - 1, -1);
+  if (x < 0 || y < 0) {
+    return null;
+  }
+  return { x, y };
 }
 
 function upgradeLegacySavedLevel(level) {

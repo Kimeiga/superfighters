@@ -6,6 +6,9 @@ import {
   countNonEmptyTiles,
   createCurrentArenaSeed,
   createEmptyLevel,
+  getDoorInstances,
+  getDoorKey,
+  getDoorTopAt,
   getSavedLevel,
   mergeTilesToRects,
   normalizeLevel,
@@ -21,6 +24,9 @@ const statsText = document.querySelector('#levelStats');
 const statusText = document.querySelector('#editorStatus');
 const selectionText = document.querySelector('#selectionText');
 const cursorText = document.querySelector('#cursorText');
+const doorSelectionText = document.querySelector('#doorSelectionText');
+const doorLinkAText = document.querySelector('#doorLinkAText');
+const doorLinkBText = document.querySelector('#doorLinkBText');
 const brushSizeInput = document.querySelector('#brushSizeInput');
 const zoomInput = document.querySelector('#zoomInput');
 const saveButton = document.querySelector('#saveLevelButton');
@@ -38,6 +44,11 @@ const copySelectionButton = document.querySelector('#copySelectionButton');
 const cutSelectionButton = document.querySelector('#cutSelectionButton');
 const pasteSelectionButton = document.querySelector('#pasteSelectionButton');
 const deleteSelectionButton = document.querySelector('#deleteSelectionButton');
+const setDoorAButton = document.querySelector('#setDoorAButton');
+const setDoorBButton = document.querySelector('#setDoorBButton');
+const linkDoorsButton = document.querySelector('#linkDoorsButton');
+const unlinkDoorButton = document.querySelector('#unlinkDoorButton');
+const autoPairDoorsButton = document.querySelector('#autoPairDoorsButton');
 const undoButton = document.querySelector('#undoButton');
 const redoButton = document.querySelector('#redoButton');
 const levelWidthInput = document.querySelector('#levelWidthInput');
@@ -254,6 +265,9 @@ let selectionStart = null;
 let selectionRect = null;
 let movingSelection = null;
 let clipboard = null;
+let selectedDoorKey = null;
+let doorLinkAKey = null;
+let doorLinkBKey = null;
 let activeStroke = false;
 let lastPointer = { x: 0, y: 0 };
 let spaceDown = false;
@@ -367,6 +381,8 @@ canvas.addEventListener('pointerdown', (event) => {
   if (!tile.inBounds) {
     return;
   }
+
+  updateSelectedDoorFromTile(tile.x, tile.y);
 
   if (toolMode === 'select') {
     startSelectionPointer(tile);
@@ -588,6 +604,11 @@ copySelectionButton.addEventListener('click', copySelection);
 cutSelectionButton.addEventListener('click', cutSelection);
 pasteSelectionButton.addEventListener('click', () => setToolMode('paste'));
 deleteSelectionButton.addEventListener('click', deleteSelection);
+setDoorAButton.addEventListener('click', () => setDoorLinkEndpoint('a'));
+setDoorBButton.addEventListener('click', () => setDoorLinkEndpoint('b'));
+linkDoorsButton.addEventListener('click', linkSelectedDoors);
+unlinkDoorButton.addEventListener('click', unlinkSelectedDoor);
+autoPairDoorsButton.addEventListener('click', autoPairDoors);
 undoButton.addEventListener('click', undo);
 redoButton.addEventListener('click', redo);
 
@@ -754,6 +775,7 @@ function setEditorTile(x, y, tileId, options = {}) {
     return;
   }
 
+  const previousTile = level.grid[y * level.width + x];
   if (tileId === 'p1' || tileId === 'p2') {
     clearTileType(tileId);
   }
@@ -763,6 +785,10 @@ function setEditorTile(x, y, tileId, options = {}) {
     setPickupSpec(x, y, options.pickupSpec ?? getCurrentPickupSpec());
   } else {
     removePickupSpec(x, y);
+  }
+  if (previousTile === TILE_INDEX.door || tileId === 'door') {
+    pruneDoorLinks();
+    updateSelectedDoorFromTile(x, y);
   }
 }
 
@@ -790,6 +816,175 @@ function removePickupSpec(x, y) {
 
 function getPickupSpec(x, y) {
   return level.pickupSpecs.find((spec) => spec.x === x && spec.y === y) ?? { x, y, kind: 'random', id: 'random' };
+}
+
+function updateSelectedDoorFromTile(x, y) {
+  const top = getDoorTopAt(level, x, y);
+  if (!top) {
+    return;
+  }
+  selectedDoorKey = getDoorKey(top.x, top.y);
+  updateDoorUi();
+}
+
+function setDoorLinkEndpoint(slot) {
+  const key = getFocusedDoorKey();
+  if (!key) {
+    setStatus('Select a door tile first.');
+    return;
+  }
+
+  if (slot === 'a') {
+    doorLinkAKey = key;
+  } else {
+    doorLinkBKey = key;
+  }
+  updateDoorUi();
+  setStatus(`Door ${slot.toUpperCase()} set to ${key}.`);
+}
+
+function linkSelectedDoors() {
+  if (!doorLinkAKey || !doorLinkBKey) {
+    setStatus('Set door A and door B first.');
+    return;
+  }
+  if (doorLinkAKey === doorLinkBKey) {
+    setStatus('Door A and B must be different.');
+    return;
+  }
+
+  const a = getDoorInstanceByKey(doorLinkAKey);
+  const b = getDoorInstanceByKey(doorLinkBKey);
+  if (!a || !b) {
+    pruneDoorLinks();
+    setStatus('One of those doors no longer exists.');
+    return;
+  }
+
+  pushHistory('Link Doors');
+  removeDoorLinksForKeys([doorLinkAKey, doorLinkBKey]);
+  level.doorLinks.push({
+    a: { x: a.x, y: a.y },
+    b: { x: b.x, y: b.y },
+  });
+  level = normalizeEditorLevel(level);
+  selectedDoorKey = doorLinkAKey;
+  updateUi(`Linked doors ${doorLinkAKey} and ${doorLinkBKey}.`);
+}
+
+function unlinkSelectedDoor() {
+  const key = getFocusedDoorKey();
+  if (!key) {
+    setStatus('Select a linked door first.');
+    return;
+  }
+
+  const before = level.doorLinks.length;
+  if (!level.doorLinks.some((link) => getDoorKey(link.a.x, link.a.y) === key || getDoorKey(link.b.x, link.b.y) === key)) {
+    setStatus('That door is not linked.');
+    return;
+  }
+  pushHistory('Unlink Door');
+  removeDoorLinksForKeys([key]);
+  if (level.doorLinks.length === before) {
+    setStatus('That door is not linked.');
+    return;
+  }
+  updateUi(`Unlinked door ${key}.`);
+}
+
+function autoPairDoors() {
+  const doors = getDoorInstances(level).filter((door) => door.valid);
+  if (doors.length < 2) {
+    setStatus('Need at least two valid 1x2 doors.');
+    return;
+  }
+
+  pushHistory('Auto Pair Doors');
+  const sorted = [...doors].sort((a, b) => a.x - b.x || a.y - b.y);
+  level.doorLinks = [];
+  for (let i = 0; i < sorted.length - 1; i += 2) {
+    level.doorLinks.push({
+      a: { x: sorted[i].x, y: sorted[i].y },
+      b: { x: sorted[i + 1].x, y: sorted[i + 1].y },
+    });
+  }
+  level = normalizeEditorLevel(level);
+  updateUi(`Auto-paired ${level.doorLinks.length * 2} doors.`);
+}
+
+function getFocusedDoorKey() {
+  if (selectedDoorKey && getDoorInstanceByKey(selectedDoorKey)) {
+    return selectedDoorKey;
+  }
+  if (hoverTile) {
+    const top = getDoorTopAt(level, hoverTile.x, hoverTile.y);
+    if (top) {
+      return getDoorKey(top.x, top.y);
+    }
+  }
+  if (selectionRect) {
+    for (let y = selectionRect.y; y < selectionRect.y + selectionRect.height; y += 1) {
+      for (let x = selectionRect.x; x < selectionRect.x + selectionRect.width; x += 1) {
+        const top = getDoorTopAt(level, x, y);
+        if (top) {
+          return getDoorKey(top.x, top.y);
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function getDoorInstanceByKey(key) {
+  return getDoorInstances(level).find((door) => door.key === key) ?? null;
+}
+
+function getDoorLinkPartnerKey(key) {
+  for (const link of level.doorLinks) {
+    const aKey = getDoorKey(link.a.x, link.a.y);
+    const bKey = getDoorKey(link.b.x, link.b.y);
+    if (aKey === key) {
+      return bKey;
+    }
+    if (bKey === key) {
+      return aKey;
+    }
+  }
+  return null;
+}
+
+function removeDoorLinksForKeys(keys) {
+  const keySet = new Set(keys);
+  level.doorLinks = level.doorLinks.filter((link) => (
+    !keySet.has(getDoorKey(link.a.x, link.a.y)) &&
+    !keySet.has(getDoorKey(link.b.x, link.b.y))
+  ));
+}
+
+function pruneDoorLinks() {
+  const validKeys = new Set(getDoorInstances(level).filter((door) => door.valid).map((door) => door.key));
+  level.doorLinks = level.doorLinks.filter((link) => (
+    validKeys.has(getDoorKey(link.a.x, link.a.y)) &&
+    validKeys.has(getDoorKey(link.b.x, link.b.y))
+  ));
+  if (selectedDoorKey && !validKeys.has(selectedDoorKey)) {
+    selectedDoorKey = null;
+  }
+  if (doorLinkAKey && !validKeys.has(doorLinkAKey)) {
+    doorLinkAKey = null;
+  }
+  if (doorLinkBKey && !validKeys.has(doorLinkBKey)) {
+    doorLinkBKey = null;
+  }
+}
+
+function isDoorEndpointInBounds(endpoint, width, height) {
+  return endpoint?.x >= 0 && endpoint.x < width && endpoint?.y >= 0 && endpoint.y < height;
+}
+
+function isDoorEndpointInRect(endpoint, left, top, right, bottom) {
+  return endpoint?.x >= left && endpoint.x <= right && endpoint?.y >= top && endpoint.y <= bottom;
 }
 
 function clearTileType(tileId) {
@@ -969,6 +1164,9 @@ function resizeLevel(width, height, tileSize = level.tileSize) {
   next.pickupSpecs = level.pickupSpecs
     .filter((spec) => spec.x < width && spec.y < height)
     .map((spec) => ({ ...spec }));
+  next.doorLinks = level.doorLinks
+    .filter((link) => isDoorEndpointInBounds(link.a, width, height) && isDoorEndpointInBounds(link.b, width, height))
+    .map((link) => ({ a: { ...link.a }, b: { ...link.b } }));
   level = normalizeEditorLevel(next);
   selectionRect = null;
 }
@@ -1003,6 +1201,15 @@ function cropEmptySpace() {
   next.pickupSpecs = level.pickupSpecs
     .filter((spec) => spec.x >= left && spec.x <= right && spec.y >= top && spec.y <= bottom)
     .map((spec) => ({ ...spec, x: spec.x - left, y: spec.y - top }));
+  next.doorLinks = level.doorLinks
+    .filter((link) => (
+      isDoorEndpointInRect(link.a, left, top, right, bottom) &&
+      isDoorEndpointInRect(link.b, left, top, right, bottom)
+    ))
+    .map((link) => ({
+      a: { x: link.a.x - left, y: link.a.y - top },
+      b: { x: link.b.x - left, y: link.b.y - top },
+    }));
   level = normalizeEditorLevel(next);
   selectionRect = null;
 }
@@ -1111,6 +1318,7 @@ function draw() {
   ctx.translate(camera.x, camera.y);
   ctx.scale(camera.zoom, camera.zoom);
   drawTiles();
+  drawDoorLinks();
   if (showColliderPreview) {
     drawColliderPreview();
   }
@@ -1151,7 +1359,7 @@ function drawTiles() {
       const drawY = y * tileSize;
       drawEditorTile(ctx, def, drawX, drawY, tileSize, x, y);
 
-      if (def.marker) {
+      if (def.marker && def.id !== 'door' && def.id !== 'light') {
         if (def.id !== 'door' && def.id !== 'light') {
           ctx.fillStyle = '#101622';
           ctx.fillRect(drawX + 5, drawY + 5, tileSize - 10, tileSize - 10);
@@ -1166,7 +1374,59 @@ function drawTiles() {
   }
 }
 
-function drawEditorTile(context, def, x, y, size) {
+function drawDoorLinks() {
+  const doorsByKey = new Map(getDoorInstances(level).map((door) => [door.key, door]));
+  ctx.save();
+  ctx.lineWidth = 2 / camera.zoom;
+  ctx.font = `${Math.max(8, level.tileSize * 0.32)}px FusionPixel12, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  for (const link of level.doorLinks) {
+    const a = doorsByKey.get(getDoorKey(link.a.x, link.a.y));
+    const b = doorsByKey.get(getDoorKey(link.b.x, link.b.y));
+    if (!a || !b) {
+      continue;
+    }
+    const start = getDoorCenter(a);
+    const end = getDoorCenter(b);
+    ctx.strokeStyle = 'rgba(140, 255, 171, 0.82)';
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(11, 17, 28, 0.82)';
+    ctx.fillRect((start.x + end.x) / 2 - 12, (start.y + end.y) / 2 - 8, 24, 16);
+    ctx.fillStyle = '#8cffab';
+    ctx.fillText('LINK', (start.x + end.x) / 2, (start.y + end.y) / 2 + 1);
+  }
+
+  const selectedDoor = selectedDoorKey ? doorsByKey.get(selectedDoorKey) : null;
+  if (selectedDoor) {
+    const { x, y } = getDoorCenter(selectedDoor);
+    ctx.strokeStyle = '#fff36d';
+    ctx.lineWidth = 3 / camera.zoom;
+    ctx.strokeRect(
+      selectedDoor.x * level.tileSize + 2,
+      selectedDoor.y * level.tileSize + 2,
+      level.tileSize - 4,
+      selectedDoor.height * level.tileSize - 4,
+    );
+    ctx.fillStyle = '#fff36d';
+    ctx.fillText('SEL', x, y);
+  }
+  ctx.restore();
+}
+
+function getDoorCenter(door) {
+  return {
+    x: (door.x + 0.5) * level.tileSize,
+    y: (door.y + door.height / 2) * level.tileSize,
+  };
+}
+
+function drawEditorTile(context, def, x, y, size, tileX, tileY) {
   context.save();
   context.globalAlpha = def.id === 'backdrop' ? 0.75 : def.id === 'void' ? 0.92 : 1;
 
@@ -1279,10 +1539,10 @@ function drawEditorTile(context, def, x, y, size) {
       context.lineWidth = 2;
       context.strokeRect(x + 3, y + size * 0.25, size - 6, size * 0.66);
       context.beginPath();
-      context.moveTo(x + 4, y + size * 0.27);
-      context.lineTo(x + size - 4, y + size * 0.9);
-      context.moveTo(x + size - 4, y + size * 0.27);
-      context.lineTo(x + 4, y + size * 0.9);
+      context.moveTo(x + size * 0.24, y + size * 0.32);
+      context.lineTo(x + size * 0.76, y + size * 0.84);
+      context.moveTo(x + size * 0.76, y + size * 0.32);
+      context.lineTo(x + size * 0.24, y + size * 0.84);
       context.stroke();
       break;
     case 'barrel':
@@ -1296,13 +1556,13 @@ function drawEditorTile(context, def, x, y, size) {
       break;
     case 'smallExplosive':
       context.fillStyle = '#332134';
-      context.fillRect(x + 3, y + 3, size - 6, size - 6);
+      context.fillRect(x + size * 0.26, y + size * 0.26, size * 0.48, size * 0.48);
       context.fillStyle = def.color;
       context.beginPath();
-      context.moveTo(x + size / 2, y + 4);
-      context.lineTo(x + size - 4, y + size / 2);
-      context.lineTo(x + size / 2, y + size - 4);
-      context.lineTo(x + 4, y + size / 2);
+      context.moveTo(x + size / 2, y + size * 0.22);
+      context.lineTo(x + size * 0.78, y + size / 2);
+      context.lineTo(x + size / 2, y + size * 0.78);
+      context.lineTo(x + size * 0.22, y + size / 2);
       context.closePath();
       context.fill();
       break;
@@ -1345,15 +1605,28 @@ function drawEditorTile(context, def, x, y, size) {
       }
       break;
     }
-    case 'door':
+    case 'door': {
+      const top = getDoorTopAt(level, tileX, tileY);
+      const isTop = top?.x === tileX && top?.y === tileY;
+      const isBottom = top?.x === tileX && top?.y + 1 === tileY;
       context.fillStyle = '#111827';
-      context.fillRect(x + 4, y + 3, size - 8, size - 3);
+      context.fillRect(x + 4, y + (isTop ? 4 : 0), size - 8, size - (isTop ? 4 : 0));
       context.strokeStyle = def.color;
       context.lineWidth = 2;
-      context.strokeRect(x + 4, y + 3, size - 8, size - 3);
-      context.fillStyle = '#8cffab';
-      context.fillRect(x + 5, y + 1, size - 10, 4);
+      if (isTop) {
+        context.strokeRect(x + 4, y + 3, size - 8, size * 2 - 6);
+        context.fillStyle = '#8cffab';
+        context.fillRect(x + 5, y + 1, size - 10, 5);
+        context.fillStyle = '#0b111c';
+        context.font = '8px FusionPixel12, monospace';
+        context.textAlign = 'center';
+        context.textBaseline = 'top';
+        context.fillText('EXIT', x + size / 2, y + 1);
+      } else if (!isBottom) {
+        context.strokeRect(x + 4, y + 3, size - 8, size - 3);
+      }
       break;
+    }
     case 'light':
       context.strokeStyle = '#65758a';
       context.lineWidth = 2;
@@ -1576,6 +1849,7 @@ function updateUi(message = null) {
   levelHeightInput.value = String(level.height);
   levelTileSizeInput.value = String(level.tileSize);
   updateCursorText();
+  updateDoorUi();
   updateHistoryButtons();
   updateValidation();
   if (message) {
@@ -1583,6 +1857,20 @@ function updateUi(message = null) {
   }
   scheduleAutosave();
   draw();
+}
+
+function updateDoorUi() {
+  const selected = selectedDoorKey ? getDoorInstanceByKey(selectedDoorKey) : null;
+  const partnerKey = selected ? getDoorLinkPartnerKey(selected.key) : null;
+  doorSelectionText.textContent = selected
+    ? `Selected ${selected.key}, ${selected.height} tile${selected.height === 1 ? '' : 's'}${partnerKey ? ` -> ${partnerKey}` : ''}`
+    : 'No door selected';
+  doorLinkAText.textContent = `A: ${doorLinkAKey ?? 'none'}`;
+  doorLinkBText.textContent = `B: ${doorLinkBKey ?? 'none'}`;
+  setDoorAButton.disabled = !getFocusedDoorKey();
+  setDoorBButton.disabled = !getFocusedDoorKey();
+  linkDoorsButton.disabled = !doorLinkAKey || !doorLinkBKey || doorLinkAKey === doorLinkBKey;
+  unlinkDoorButton.disabled = !getFocusedDoorKey();
 }
 
 function scheduleAutosave() {
@@ -1699,6 +1987,35 @@ function validateLevel() {
     }
   }
 
+  const doors = getDoorInstances(level);
+  const validDoorKeys = new Set();
+  const doorLinkCounts = new Map();
+  for (const door of doors) {
+    if (!door.valid) {
+      warnings.push(`Door at ${door.x},${door.y} is ${door.height} tile${door.height === 1 ? '' : 's'} high; doors must be 1x2.`);
+    } else {
+      validDoorKeys.add(door.key);
+      doorLinkCounts.set(door.key, 0);
+    }
+  }
+  for (const link of level.doorLinks) {
+    const aKey = getDoorKey(link.a.x, link.a.y);
+    const bKey = getDoorKey(link.b.x, link.b.y);
+    if (!validDoorKeys.has(aKey) || !validDoorKeys.has(bKey)) {
+      warnings.push(`Door link ${aKey} -> ${bKey} points to a missing or invalid door.`);
+      continue;
+    }
+    doorLinkCounts.set(aKey, (doorLinkCounts.get(aKey) ?? 0) + 1);
+    doorLinkCounts.set(bKey, (doorLinkCounts.get(bKey) ?? 0) + 1);
+  }
+  for (const [key, count] of doorLinkCounts) {
+    if (count === 0) {
+      warnings.push(`Door ${key} is not linked.`);
+    } else if (count > 1) {
+      warnings.push(`Door ${key} has more than one link.`);
+    }
+  }
+
   const colliderCount =
     mergeTilesToRects(level, ['solid']).length +
     mergeTilesToRects(level, ['platform', 'movingPlatform']).length +
@@ -1804,6 +2121,21 @@ function normalizeEditorLevel(input) {
   normalized.pickupSpecs = normalized.pickupSpecs.filter((spec) => (
     normalized.grid[spec.y * normalized.width + spec.x] === TILE_INDEX.pickup
   ));
+  const validDoorKeys = new Set(getDoorInstances(normalized).filter((door) => door.valid).map((door) => door.key));
+  const seenLinks = new Set();
+  normalized.doorLinks = normalized.doorLinks.filter((link) => {
+    const aKey = getDoorKey(link.a.x, link.a.y);
+    const bKey = getDoorKey(link.b.x, link.b.y);
+    if (!validDoorKeys.has(aKey) || !validDoorKeys.has(bKey) || aKey === bKey) {
+      return false;
+    }
+    const pairKey = [aKey, bKey].sort().join('|');
+    if (seenLinks.has(pairKey)) {
+      return false;
+    }
+    seenLinks.add(pairKey);
+    return true;
+  });
   return normalized;
 }
 

@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import geckos from '@geckos.io/client';
 import { ANIMATION_ORDER, DEFAULT_EMPRESS_ANIMATION_CONFIG, makeFrameList1Based } from './animationConfig.js';
 import { DEFAULT_GAMEPLAY_CONFIG, getGameplayConfig } from './gameplayConfig.js';
-import { TILE_DEFS, TILE_INDEX, createCurrentArenaSeed, getSavedLevel, mergeTilesToRects } from './levelData.js';
+import { TILE_DEFS, TILE_INDEX, createCurrentArenaSeed, getDoorInstances, getDoorKey, getSavedLevel, mergeTilesToRects } from './levelData.js';
 import './styles.css';
 
 const BASE_URL = import.meta.env.BASE_URL;
@@ -21,6 +21,7 @@ const DOWN_DOUBLE_TAP_MS = 340;
 const PLATFORM_STROKE_WIDTH = 4;
 const JUMP_BUFFER_MS = 140;
 const PLAYER_HEAD_SUPPORT_MS = 130;
+const DOOR_EXIT_MS = 520;
 const AIM_HALF_ARC = Math.PI / 2;
 const INPUT_ACTIONS = ['left', 'right', 'jump', 'crouch', 'melee', 'pickup', 'shoot', 'grenade', 'powerup', 'aimUp', 'aimDown'];
 const GAME_DEFAULT_CAPTURE_CODES = new Set(['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'Slash', 'KeyE', 'Quote']);
@@ -151,6 +152,7 @@ class FightScene extends Phaser.Scene {
     this.slopeTiles = [];
     this.slopeTileMap = new Map();
     this.movingPlatforms = [];
+    this.swingingCrates = [];
     this.clouds = [];
   }
 
@@ -168,6 +170,7 @@ class FightScene extends Phaser.Scene {
     this.slopeTiles = [];
     this.slopeTileMap = new Map();
     this.movingPlatforms = [];
+    this.swingingCrates = [];
     this.clouds = [];
     this.levelSpawns = null;
     this.editorLevel = pendingBootOptions?.editorLevel ? getSavedLevel() ?? createCurrentArenaSeed() : null;
@@ -425,6 +428,7 @@ class FightScene extends Phaser.Scene {
     }
 
     this.updateMovingPlatforms(time);
+    this.updateSwingingCrates(delta);
 
     for (const player of this.players) {
       this.updatePlayer(player, time, delta);
@@ -726,6 +730,7 @@ class FightScene extends Phaser.Scene {
     this.slopeTiles = [];
     this.slopeTileMap = new Map();
     this.movingPlatforms = [];
+    this.swingingCrates = [];
     this.levelSpawns = null;
 
     if (this.editorLevel) {
@@ -818,10 +823,10 @@ class FightScene extends Phaser.Scene {
       this.createLadder(rect.x + rect.width - 6, rect.y + rect.height / 2, rect.height);
     }
 
-    for (const rect of mergeTilesToRects(level, ['door'])) {
-      this.createDoor(rect);
+    for (const door of getDoorInstances(level).filter((item) => item.valid)) {
+      this.createDoor(door, level.tileSize);
     }
-    this.pairDoors();
+    this.pairDoors(level);
 
     for (let y = 0; y < level.height; y += 1) {
       for (let x = 0; x < level.width; x += 1) {
@@ -860,7 +865,7 @@ class FightScene extends Phaser.Scene {
           tile === TILE_INDEX.smallExplosive ||
           tile === TILE_INDEX.swingingCrate
         ) {
-          this.createLevelProp(worldX, worldY, level.tileSize, level.tileSize, TILE_DEFS[tile].id);
+          this.createLevelProp(worldX, worldY, level.tileSize, level.tileSize, TILE_DEFS[tile].id, { tileX: x, tileY: y });
         } else if (tile === TILE_INDEX.light) {
           this.createLightFixture(worldX, worldY, level.tileSize);
         } else if (tile === TILE_INDEX.pickup) {
@@ -1071,26 +1076,33 @@ class FightScene extends Phaser.Scene {
     return platform;
   }
 
-  createLevelProp(x, y, width, height, type) {
+  createLevelProp(x, y, width, height, type, options = {}) {
     const colorByType = {
       crate: COLORS.crate,
       barrel: COLORS.barrel,
       smallExplosive: COLORS.smallExplosive,
       swingingCrate: 0xbf8f55,
     };
+    const isSwinging = type === 'swingingCrate';
+    const propScale = type === 'smallExplosive' ? 0.56 : 0.9;
+    const anchor = isSwinging ? this.findSwingAnchor(options.tileX, options.tileY, x, y, height) : null;
     const visuals = [];
-    if (type === 'swingingCrate') {
-      visuals.push(this.add.line(x, y - height * 0.7, 0, 0, 0, height * 0.62, 0xd7c1a1, 0.72).setOrigin(0.5, 0));
-    }
 
     const prop = this.add.rectangle(
       x,
-      type === 'swingingCrate' ? y + height * 0.12 : y,
-      width * 0.9,
-      height * 0.9,
+      isSwinging && anchor ? anchor.y + Math.max(height * 1.75, y - anchor.y) : y,
+      width * propScale,
+      height * propScale,
       colorByType[type] ?? COLORS.crate,
       1,
     ).setOrigin(0.5);
+    if (isSwinging && anchor) {
+      const rope = this.add
+        .line(0, 0, anchor.x, anchor.y, prop.x, prop.y - prop.displayHeight / 2, 0xd7c1a1, 0.78)
+        .setOrigin(0, 0)
+        .setDepth(2);
+      visuals.push(rope);
+    }
     prop.setData('propType', type);
     prop.setData('destructible', true);
     prop.setData('health', type === 'crate' || type === 'swingingCrate' ? 24 : 10);
@@ -1099,31 +1111,78 @@ class FightScene extends Phaser.Scene {
     prop.setData('levelGeometry', true);
     prop.setData('indestructible', false);
     prop.setData('visuals', visuals);
-    this.physics.add.existing(prop, true);
-    prop.body.setSize(width * 0.9, height * 0.9);
+    this.physics.add.existing(prop, !isSwinging);
+    prop.body.setSize(width * propScale, height * propScale);
+    if (isSwinging) {
+      prop.body.setAllowGravity(false);
+      prop.body.setImmovable(true);
+      prop.body.pushable = false;
+    }
     prop.body.updateFromGameObject();
-    this.levelProps.add(prop);
+    if (!isSwinging) {
+      this.levelProps.add(prop);
+    }
     this.platforms.push(prop);
 
     if (type === 'crate' || type === 'swingingCrate') {
       visuals.push(this.add.rectangle(prop.x, prop.y, prop.displayWidth - 7, prop.displayHeight - 7, 0x000000, 0).setStrokeStyle(2, 0x5e3f29, 0.95));
-      visuals.push(this.add.line(prop.x, prop.y, -prop.displayWidth * 0.35, -prop.displayHeight * 0.35, prop.displayWidth * 0.35, prop.displayHeight * 0.35, 0x5e3f29, 0.92));
-      visuals.push(this.add.line(prop.x, prop.y, prop.displayWidth * 0.35, -prop.displayHeight * 0.35, -prop.displayWidth * 0.35, prop.displayHeight * 0.35, 0x5e3f29, 0.92));
+      visuals.push(this.add.line(prop.x, prop.y, -prop.displayWidth * 0.28, -prop.displayHeight * 0.28, prop.displayWidth * 0.28, prop.displayHeight * 0.28, 0x5e3f29, 0.92));
+      visuals.push(this.add.line(prop.x, prop.y, prop.displayWidth * 0.28, -prop.displayHeight * 0.28, -prop.displayWidth * 0.28, prop.displayHeight * 0.28, 0x5e3f29, 0.92));
     } else if (type === 'barrel') {
       visuals.push(this.add.rectangle(prop.x, prop.y - prop.displayHeight * 0.24, prop.displayWidth, 3, 0xffd166, 0.95));
       visuals.push(this.add.rectangle(prop.x, prop.y + prop.displayHeight * 0.24, prop.displayWidth, 3, 0xffd166, 0.95));
     } else if (type === 'smallExplosive') {
-      visuals.push(this.add.rectangle(prop.x, prop.y, prop.displayWidth * 0.46, prop.displayHeight * 0.46, 0x332134, 1).setAngle(45));
+      visuals.push(this.add.rectangle(prop.x, prop.y, prop.displayWidth * 0.66, prop.displayHeight * 0.66, 0x332134, 1).setAngle(45));
+    }
+
+    if (isSwinging && anchor) {
+      const length = Math.max(height * 1.4, prop.y - anchor.y);
+      const angle = Math.asin(Phaser.Math.Clamp((prop.x - anchor.x) / length, -0.95, 0.95));
+      this.swingingCrates.push({
+        body: prop,
+        anchorX: anchor.x,
+        anchorY: anchor.y,
+        length,
+        angle,
+        angularVelocity: Phaser.Math.FloatBetween(-0.35, 0.35),
+        visuals,
+        lastX: prop.x,
+        lastY: prop.y,
+      });
     }
 
     return prop;
   }
 
-  createDoor(rect) {
-    const width = Math.max(rect.width, this.editorLevel?.tileSize ?? 24);
-    const height = Math.max(rect.height, (this.editorLevel?.tileSize ?? 24) * 2);
-    const x = rect.x + rect.width / 2;
-    const y = rect.y + rect.height / 2;
+  findSwingAnchor(tileX, tileY, fallbackX, fallbackY, tileSize) {
+    if (!this.editorLevel || !Number.isFinite(tileX) || !Number.isFinite(tileY)) {
+      return { x: fallbackX, y: fallbackY - tileSize * 2.5 };
+    }
+
+    const solidCeilingTiles = new Set([
+      TILE_INDEX.solid,
+      TILE_INDEX.slopeUp,
+      TILE_INDEX.slopeDown,
+      TILE_INDEX.ceilingSlopeUp,
+      TILE_INDEX.ceilingSlopeDown,
+    ]);
+    for (let y = tileY - 1; y >= 0; y -= 1) {
+      const tile = this.editorLevel.grid[y * this.editorLevel.width + tileX];
+      if (solidCeilingTiles.has(tile)) {
+        return {
+          x: fallbackX,
+          y: (y + 1) * this.editorLevel.tileSize,
+        };
+      }
+    }
+    return { x: fallbackX, y: fallbackY - tileSize * 2.5 };
+  }
+
+  createDoor(doorSpec, tileSize = this.editorLevel?.tileSize ?? 24) {
+    const width = tileSize;
+    const height = tileSize * 2;
+    const x = (doorSpec.x + 0.5) * tileSize;
+    const y = (doorSpec.y + 1) * tileSize;
     const frame = this.add.rectangle(x, y, width * 0.78, height * 0.92, COLORS.door, 0.85).setOrigin(0.5);
     const voidRect = this.add.rectangle(x, y + height * 0.08, width * 0.56, height * 0.72, 0x0b111c, 1).setOrigin(0.5);
     const exit = this.add.rectangle(x, y - height * 0.42, width * 0.62, 7, 0x8cffab, 0.95).setOrigin(0.5);
@@ -1137,6 +1196,10 @@ class FightScene extends Phaser.Scene {
       y,
       width,
       height,
+      key: doorSpec.key ?? getDoorKey(doorSpec.x, doorSpec.y),
+      tileX: doorSpec.x,
+      tileY: doorSpec.y,
+      exitDirection: this.resolveDoorExitDirection(doorSpec),
       bounds: new Phaser.Geom.Rectangle(x - width * 0.38, y - height * 0.42, width * 0.76, height * 0.84),
       visuals: [frame, voidRect, exit, label],
       target: null,
@@ -1145,7 +1208,71 @@ class FightScene extends Phaser.Scene {
     return door;
   }
 
-  pairDoors() {
+  resolveDoorExitDirection(doorSpec) {
+    if (doorSpec.exitDirection === -1 || doorSpec.exitDirection === 1) {
+      return doorSpec.exitDirection;
+    }
+    if (!this.editorLevel) {
+      return 1;
+    }
+
+    const sideScore = (direction) => {
+      let score = 0;
+      const sideX = doorSpec.x + direction;
+      if (sideX < 0 || sideX >= this.editorLevel.width) {
+        return -Infinity;
+      }
+      for (let y = doorSpec.y; y < doorSpec.y + 2; y += 1) {
+        const tile = this.getEditorTileAt(sideX, y);
+        score += this.isDoorExitBlockedTile(tile) ? -2 : 1;
+      }
+      return score;
+    };
+    const leftScore = sideScore(-1);
+    const rightScore = sideScore(1);
+    if (leftScore === rightScore) {
+      return 1;
+    }
+    return leftScore > rightScore ? -1 : 1;
+  }
+
+  isDoorExitBlockedTile(tile) {
+    return [
+      TILE_INDEX.solid,
+      TILE_INDEX.slopeUp,
+      TILE_INDEX.slopeDown,
+      TILE_INDEX.ceilingSlopeUp,
+      TILE_INDEX.ceilingSlopeDown,
+      TILE_INDEX.platform,
+      TILE_INDEX.movingPlatform,
+      TILE_INDEX.slopePlatformUp,
+      TILE_INDEX.slopePlatformDown,
+      TILE_INDEX.crate,
+      TILE_INDEX.barrel,
+      TILE_INDEX.smallExplosive,
+      TILE_INDEX.swingingCrate,
+      TILE_INDEX.glass,
+      TILE_INDEX.glassLeft,
+      TILE_INDEX.glassRight,
+    ].includes(tile);
+  }
+
+  pairDoors(level = null) {
+    const doorsByKey = new Map(this.doors.map((door) => [door.key, door]));
+    const links = Array.isArray(level?.doorLinks) ? level.doorLinks : [];
+    if (links.length) {
+      for (const link of links) {
+        const first = doorsByKey.get(getDoorKey(link.a.x, link.a.y));
+        const second = doorsByKey.get(getDoorKey(link.b.x, link.b.y));
+        if (!first || !second) {
+          continue;
+        }
+        first.target = second;
+        second.target = first;
+      }
+      return;
+    }
+
     const sorted = [...this.doors].sort((a, b) => a.x - b.x || a.y - b.y);
     for (let i = 0; i < sorted.length; i += 2) {
       const first = sorted[i];
@@ -1872,6 +1999,10 @@ class FightScene extends Phaser.Scene {
       dropThroughPlatform: null,
       dropThroughSlope: null,
       doorCooldownUntil: 0,
+      doorIgnoreKey: null,
+      doorExitUntil: 0,
+      doorExitDirection: 0,
+      doorExitTargetX: 0,
       currentPickup: null,
       weapon: null,
       grenadeAmmo: this.configData.grenades.startCount,
@@ -1928,7 +2059,7 @@ class FightScene extends Phaser.Scene {
     }
 
     this.physics.add.collider(this.p1.sprite, this.p2.sprite);
-    this.physics.add.collider(this.bullets, this.platforms, this.handleBulletWall, undefined, this);
+    this.physics.add.collider(this.bullets, this.platforms, this.handleBulletWall, this.bulletWallProcess, this);
     this.physics.add.collider(this.bullets, this.glassWindows, this.handleBulletWindow, undefined, this);
     this.physics.add.collider(this.grenades, this.platforms);
     this.physics.add.collider(this.grenades, this.glassWindows, this.handleGrenadeWindow, undefined, this);
@@ -2988,36 +3119,142 @@ class FightScene extends Phaser.Scene {
     }
   }
 
+  updateSwingingCrates(delta) {
+    if (!this.swingingCrates.length) {
+      return;
+    }
+
+    const dt = Math.min(0.033, Math.max(0.001, delta / 1000));
+    for (const crate of this.swingingCrates) {
+      const prop = crate.body;
+      if (!prop?.active) {
+        continue;
+      }
+
+      for (const player of this.players) {
+        if (!player.sprite?.active) {
+          continue;
+        }
+        if (!Phaser.Geom.Intersects.RectangleToRectangle(getBodyBounds(player.sprite), prop.getBounds())) {
+          continue;
+        }
+        const side = Math.sign(player.sprite.x - prop.x) || 1;
+        const velocityTorque = Phaser.Math.Clamp(player.sprite.body.velocity.x * 0.0009, -0.12, 0.12);
+        crate.angularVelocity += velocityTorque + side * 0.018;
+      }
+
+      crate.angularVelocity += -Math.sin(crate.angle) * 7.2 * dt;
+      crate.angularVelocity *= 0.988;
+      crate.angle = Phaser.Math.Clamp(crate.angle + crate.angularVelocity * dt, -1.12, 1.12);
+
+      const nextX = crate.anchorX + Math.sin(crate.angle) * crate.length;
+      const nextY = crate.anchorY + Math.cos(crate.angle) * crate.length;
+      const vx = (nextX - prop.x) / dt;
+      const vy = (nextY - prop.y) / dt;
+      prop.setPosition(nextX, nextY);
+      prop.body.setVelocity(vx, vy);
+      prop.body.updateFromGameObject();
+
+      for (const visual of crate.visuals) {
+        if (!visual?.active) {
+          continue;
+        }
+        if (visual.type === 'Line' && visual.x === 0 && visual.y === 0) {
+          visual.setTo(crate.anchorX, crate.anchorY, prop.x, prop.y - prop.displayHeight / 2);
+        } else {
+          visual.setPosition(prop.x, prop.y);
+        }
+      }
+    }
+  }
+
   updateDoorTeleports(time) {
     if (this.doors.length < 2) {
       return;
     }
     for (const player of this.players) {
-      if (time < player.doorCooldownUntil || !player.sprite.active) {
+      if (!player.sprite.active || time < player.doorExitUntil) {
         continue;
       }
       const playerBounds = getBodyBounds(player.sprite);
+      if (player.doorIgnoreKey) {
+        const ignoredDoor = this.doors.find((candidate) => candidate.key === player.doorIgnoreKey);
+        if (!ignoredDoor || !Phaser.Geom.Intersects.RectangleToRectangle(playerBounds, ignoredDoor.bounds)) {
+          player.doorIgnoreKey = null;
+        }
+      }
+      if (time < player.doorCooldownUntil) {
+        continue;
+      }
       const door = this.doors.find((candidate) => (
         candidate.target &&
+        candidate.key !== player.doorIgnoreKey &&
+        this.isPlayerEnteringDoor(player, candidate) &&
         Phaser.Geom.Intersects.RectangleToRectangle(playerBounds, candidate.bounds)
       ));
       if (!door?.target) {
         continue;
       }
       const target = door.target;
-      const exitDirection = Math.sign(door.x - target.x) || player.facing || 1;
-      player.sprite.setPosition(
-        target.x + exitDirection * Math.max(28, target.width * 0.58),
-        target.y + target.height * 0.42 - this.getStandingBodyBottomOffset(),
-      );
-      player.facing = exitDirection;
-      player.sprite.setFlipX(exitDirection < 0);
-      player.sprite.setVelocity(0, 0);
+      const exitDirection = target.exitDirection || Math.sign(door.x - target.x) || player.facing || 1;
+      this.placePlayerAtDoorExit(player, target);
+      this.startDoorExit(player, target, exitDirection, time);
       player.dropUntil = time + 120;
-      player.doorCooldownUntil = time + 1100;
+      player.doorCooldownUntil = time + DOOR_EXIT_MS + 140;
       this.spawnDoorFlash(door);
       this.spawnDoorFlash(target);
     }
+  }
+
+  isPlayerEnteringDoor(player, door) {
+    const exitDirection = door.exitDirection || 1;
+    const horizontal = (player.inputState.down.right ? 1 : 0) - (player.inputState.down.left ? 1 : 0);
+    const velocityDirection = Math.sign(player.sprite.body.velocity.x);
+    const approachDirection = horizontal || velocityDirection;
+    if (approachDirection !== -exitDirection) {
+      return false;
+    }
+
+    const side = Math.sign(player.sprite.x - door.x) || exitDirection;
+    return side === exitDirection || Math.abs(player.sprite.x - door.x) <= door.width * 0.35;
+  }
+
+  placePlayerAtDoorExit(player, door) {
+    player.crouching = false;
+    player.climbing = false;
+    this.applyBodyPose(player, true);
+    const footY = this.getDoorFootY(door);
+    const body = player.sprite.body;
+    this.snapPlayerBodyTo(player, door.x - body.width / 2, footY - body.height);
+    player.sprite.setVelocity(0, 0);
+  }
+
+  getDoorFootY(door) {
+    const tileSize = door.height / 2;
+    return (door.tileY + 2) * tileSize;
+  }
+
+  getDoorStandingY(door) {
+    return this.getDoorFootY(door) - this.getStandingBodyBottomOffset();
+  }
+
+  startDoorExit(player, door, direction, time) {
+    const exitDirection = direction < 0 ? -1 : 1;
+    const tileSize = door.height / 2;
+    player.aiming = false;
+    player.aimMode = null;
+    player.climbing = false;
+    player.crouching = false;
+    player.doorIgnoreKey = door.key;
+    player.doorExitDirection = exitDirection;
+    player.doorExitTargetX = door.x + exitDirection * tileSize;
+    player.doorExitUntil = time + DOOR_EXIT_MS;
+    player.facing = exitDirection;
+    player.sprite.setFlipX(exitDirection < 0);
+    player.sprite.setVelocity(exitDirection * Math.max(90, this.configData.movement.walkSpeed * 0.55), 0);
+    this.endShootStance(player);
+    this.setAimVisible(player, false);
+    this.applyBodyPose(player, true);
   }
 
   spawnDoorFlash(door) {
@@ -3454,6 +3691,11 @@ class FightScene extends Phaser.Scene {
       ? (input.down.aimDown ? 1 : 0) - (input.down.aimUp ? 1 : 0)
       : (downHeld ? 1 : 0) - (upHeld ? 1 : 0);
 
+    if (time < player.doorExitUntil) {
+      this.updateDoorExit(player, grounded, time);
+      return;
+    }
+
     if (input.pressed.jump) {
       player.jumpBufferUntil = time + JUMP_BUFFER_MS;
     }
@@ -3499,7 +3741,7 @@ class FightScene extends Phaser.Scene {
     }
 
     if (player.aiming) {
-      this.updateCrouchState(player, grounded, downHeld, time);
+      this.updateCrouchState(player, grounded, false, time);
       this.applyBodyPose(player, grounded);
       this.updateAim(player, horizontal, vertical, delta);
       this.updateJumpPhysics(player, grounded, input, time);
@@ -3573,6 +3815,38 @@ class FightScene extends Phaser.Scene {
     }
 
     this.updatePlayerAnimation(player, grounded || slopeLandingGrounded, horizontal, time);
+    this.updateAimVisuals(player);
+  }
+
+  updateDoorExit(player, grounded, time) {
+    const direction = player.doorExitDirection || player.facing || 1;
+    const reachedTarget = direction > 0
+      ? player.sprite.x >= player.doorExitTargetX
+      : player.sprite.x <= player.doorExitTargetX;
+
+    player.aiming = false;
+    player.aimMode = null;
+    player.climbing = false;
+    player.crouching = false;
+    player.facing = direction;
+    player.sprite.setFlipX(direction < 0);
+    player.sprite.body.setAllowGravity(true);
+    this.applyBodyPose(player, grounded);
+
+    if (reachedTarget || time >= player.doorExitUntil - 16) {
+      player.doorExitUntil = 0;
+      player.doorExitDirection = 0;
+      player.doorExitTargetX = 0;
+      if (grounded) {
+        player.sprite.setVelocityX(0);
+      }
+      this.updatePlayerAnimation(player, grounded, 0, time);
+      this.updateAimVisuals(player);
+      return;
+    }
+
+    player.sprite.setVelocityX(direction * Math.max(90, this.configData.movement.walkSpeed * 0.55));
+    this.updatePlayerAnimation(player, grounded, direction, time);
     this.updateAimVisuals(player);
   }
 
@@ -3972,10 +4246,7 @@ class FightScene extends Phaser.Scene {
   updateAim(player, horizontal, vertical, delta) {
     const rotateSpeed = Phaser.Math.DegToRad(this.configData.movement.aimRotateDegPerSecond);
     const aimFacing = player.aimFacing || (player.facing >= 0 ? 1 : -1);
-    const verticalAim = player.aimMode === 'gun' && player.crouching ? 0 : vertical;
-    const nextOffset = player.aimMode === 'gun' && player.crouching
-      ? 0
-      : (player.aimOffset ?? 0) + verticalAim * aimFacing * rotateSpeed * (delta / 1000);
+    const nextOffset = (player.aimOffset ?? 0) + vertical * aimFacing * rotateSpeed * (delta / 1000);
     player.aimFacing = aimFacing;
     player.aimOffset = Phaser.Math.Clamp(nextOffset, -AIM_HALF_ARC, AIM_HALF_ARC);
     player.aimAngle = this.getAimAngle(player.aimFacing, player.aimOffset);
@@ -4050,7 +4321,7 @@ class FightScene extends Phaser.Scene {
     player.weaponSprite.setRotation(visualAngle);
     player.weaponSprite.setFlipY(visualFacing < 0);
     player.weaponSprite.setVisible(heldGunVisible);
-    this.updateGunArmOverlay(player, armOverlayVisible, visualFacing);
+    this.updateGunArmOverlay(player, armOverlayVisible, visualFacing, visualAngle, aimVisualActive);
     player.crosshair.setPosition(reticle.x, reticle.y);
     player.crosshair.setVisible(aimVisualActive);
     player.aimGraphics.setVisible(aimVisualActive);
@@ -4095,7 +4366,7 @@ class FightScene extends Phaser.Scene {
     );
   }
 
-  updateGunArmOverlay(player, visible, facing) {
+  updateGunArmOverlay(player, visible, facing, angle = facing > 0 ? 0 : Math.PI, aimVisualActive = false) {
     if (!visible) {
       player.arm.setVisible(false);
       return;
@@ -4103,13 +4374,15 @@ class FightScene extends Phaser.Scene {
 
     const bodyFrame = getEmpressFrameNumber(player.sprite.texture.key);
     const armFrame = getGunArmOverlayFrame(bodyFrame);
+    const offset = this.getAimOffsetFromAngle(angle, facing);
+    const rotation = aimVisualActive ? (facing < 0 ? -offset : offset) : 0;
     player.arm.stop();
     player.arm
       .setTexture(this.getCharacterTextureKey(armFrame))
       .setPosition(player.sprite.x, player.sprite.y)
       .setScale(PLAYER_SCALE)
       .setFlipX(facing < 0)
-      .setRotation(0)
+      .setRotation(rotation)
       .setVisible(true);
   }
 
@@ -4161,9 +4434,18 @@ class FightScene extends Phaser.Scene {
     const handX = direction > 0
       ? hand.x
       : CHARACTER_SHEET.frameSize - hand.x;
+    const baseX = player.sprite.x + (handX - CHARACTER_SHEET.frameSize / 2) * PLAYER_SCALE;
+    const baseY = player.sprite.y + (hand.y - CHARACTER_SHEET.frameSize / 2) * PLAYER_SCALE;
+    const pivot = this.getAimPivot(player);
+    const baseAngle = direction >= 0 ? 0 : Math.PI;
+    const offset = Math.atan2(Math.sin(angle - baseAngle), Math.cos(angle - baseAngle));
+    const cos = Math.cos(offset);
+    const sin = Math.sin(offset);
+    const dx = baseX - pivot.x;
+    const dy = baseY - pivot.y;
     return {
-      x: player.sprite.x + (handX - CHARACTER_SHEET.frameSize / 2) * PLAYER_SCALE,
-      y: player.sprite.y + (hand.y - CHARACTER_SHEET.frameSize / 2) * PLAYER_SCALE,
+      x: pivot.x + dx * cos - dy * sin,
+      y: pivot.y + dx * sin + dy * cos,
     };
   }
 
@@ -4519,6 +4801,15 @@ class FightScene extends Phaser.Scene {
     return Boolean(bullet?.active && player && bullet.getData('owner') !== player.id);
   }
 
+  bulletWallProcess(objectA, objectB) {
+    const bullet = this.getCollisionObjectFromGroup(this.bullets, objectA, objectB, 'weaponId');
+    const wall = bullet === objectA ? objectB : objectA;
+    if (!bullet?.active || !wall?.active) {
+      return false;
+    }
+    return wall.getData?.('thin') !== true;
+  }
+
   grenadePlayerProcess(objectA, objectB) {
     const grenade = this.getCollisionObjectFromGroup(this.grenades, objectA, objectB, 'owner');
     const sprite = grenade === objectA ? objectB : objectA;
@@ -4705,6 +4996,10 @@ class FightScene extends Phaser.Scene {
     player.cpuState = createCpuState();
     player.onSlope = false;
     player.doorCooldownUntil = 0;
+    player.doorIgnoreKey = null;
+    player.doorExitUntil = 0;
+    player.doorExitDirection = 0;
+    player.doorExitTargetX = 0;
     player.shootStanceUntil = 0;
     player.slowedUntil = 0;
     player.shieldUntil = 0;
@@ -5243,7 +5538,7 @@ class FightScene extends Phaser.Scene {
 
   damagePropsInBox(centerX, centerY, width, height, damage, ownerId = null) {
     const hitbox = new Phaser.Geom.Rectangle(centerX - width / 2, centerY - height / 2, width, height);
-    for (const prop of this.levelProps?.getChildren?.() ?? []) {
+    for (const prop of this.getLevelProps()) {
       if (!prop.active || !prop.getData('destructible')) {
         continue;
       }
@@ -5254,7 +5549,7 @@ class FightScene extends Phaser.Scene {
   }
 
   damagePropsInRadius(x, y, radius, damage, ownerId = null) {
-    for (const prop of this.levelProps?.getChildren?.() ?? []) {
+    for (const prop of this.getLevelProps()) {
       if (!prop.active || !prop.getData('destructible')) {
         continue;
       }
@@ -5262,6 +5557,13 @@ class FightScene extends Phaser.Scene {
         this.damageLevelProp(prop, damage, ownerId, x, y);
       }
     }
+  }
+
+  getLevelProps() {
+    return [
+      ...(this.levelProps?.getChildren?.() ?? []),
+      ...this.swingingCrates.map((crate) => crate.body).filter(Boolean),
+    ];
   }
 
   damageLevelProp(prop, damage, ownerId = null, impactX = prop.x, impactY = prop.y) {
@@ -5299,6 +5601,7 @@ class FightScene extends Phaser.Scene {
     if (index >= 0) {
       this.platforms.splice(index, 1);
     }
+    this.swingingCrates = this.swingingCrates.filter((crate) => crate.body !== prop);
     for (const visual of prop.getData('visuals') ?? []) {
       visual.destroy();
     }

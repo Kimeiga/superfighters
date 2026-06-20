@@ -162,7 +162,12 @@
     },
     {
       "start": 1484,
-      "length": 2,
+      "length": 1,
+      "type": "door"
+    },
+    {
+      "start": 1485,
+      "length": 1,
       "type": "solid"
     },
     {
@@ -287,7 +292,12 @@
     },
     {
       "start": 1868,
-      "length": 2,
+      "length": 1,
+      "type": "door"
+    },
+    {
+      "start": 1869,
+      "length": 1,
       "type": "solid"
     },
     {
@@ -612,6 +622,18 @@
       "y": 26,
       "kind": "random",
       "id": "random"
+    }
+  ],
+  "doorLinks": [
+    {
+      "a": {
+        "x": 44,
+        "y": 15
+      },
+      "b": {
+        "x": 44,
+        "y": 19
+      }
     }
   ]
 }
