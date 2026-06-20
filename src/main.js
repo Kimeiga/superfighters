@@ -18,6 +18,8 @@ const UI_FONT = 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemF
 const PLAYER_MAX_HEALTH = 100;
 const DROP_DURATION = 310;
 const PLATFORM_STROKE_WIDTH = 4;
+const JUMP_BUFFER_MS = 140;
+const PLAYER_HEAD_SUPPORT_MS = 130;
 const AIM_HALF_ARC = Math.PI / 2;
 const INPUT_ACTIONS = ['left', 'right', 'jump', 'crouch', 'melee', 'pickup', 'shoot', 'grenade', 'powerup', 'aimUp', 'aimDown'];
 const GAME_DEFAULT_CAPTURE_CODES = new Set(['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'Slash', 'KeyE', 'Quote']);
@@ -1869,9 +1871,12 @@ class FightScene extends Phaser.Scene {
       shootStanceUntil: 0,
       jumpHeldUntil: 0,
       jumpReleased: true,
+      jumpBufferUntil: 0,
       jumpPrepUntil: 0,
       jumpLandUntil: 0,
       wasGrounded: true,
+      headSupportUntil: 0,
+      headSupportPlayerId: null,
       knockedUntil: 0,
       invulnerableUntil: 0,
       slowedUntil: 0,
@@ -3102,6 +3107,52 @@ class FightScene extends Phaser.Scene {
     return true;
   }
 
+  resolvePlayerHeadContact(player, time) {
+    const other = this.getOpponent(player);
+    const body = player?.sprite?.body;
+    const otherBody = other?.sprite?.body;
+    if (
+      !body ||
+      !otherBody ||
+      !player.sprite.active ||
+      !other.sprite.active ||
+      player.climbing ||
+      body.velocity.y < -20
+    ) {
+      return false;
+    }
+
+    const footY = body.y + body.height;
+    const headY = otherBody.y;
+    const overlapLeft = Math.max(body.x, otherBody.x);
+    const overlapRight = Math.min(body.x + body.width, otherBody.x + otherBody.width);
+    const overlapWidth = overlapRight - overlapLeft;
+    const minOverlap = Math.max(6, Math.min(body.width, otherBody.width) * 0.28);
+    const aboveOther = body.y + body.height * 0.65 <= otherBody.y + otherBody.height * 0.42;
+    const onHead = overlapWidth >= minOverlap && aboveOther && footY >= headY - 10 && footY <= headY + 18;
+
+    if (onHead) {
+      this.setPlayerBodyTop(player, headY - body.height);
+      if (body.velocity.y > 0) {
+        body.setVelocityY(0);
+      }
+      body.touching.down = true;
+      body.blocked.down = true;
+      player.onSlope = false;
+      player.currentSlope = null;
+      player.headSupportUntil = time + PLAYER_HEAD_SUPPORT_MS;
+      player.headSupportPlayerId = other.id;
+      return true;
+    }
+
+    return (
+      player.headSupportPlayerId === other.id &&
+      time < player.headSupportUntil &&
+      body.velocity.y >= -20 &&
+      overlapWidth >= minOverlap * 0.55
+    );
+  }
+
   resolveSlopeContact(player) {
     player.onSlope = false;
     player.currentSlope = null;
@@ -3132,7 +3183,7 @@ class FightScene extends Phaser.Scene {
           const surfaceY = slope.type === 'up'
             ? slope.y + slope.size - localX
             : slope.y + localX;
-          if (slope.thin && (this.time.now < player.dropUntil || body.velocity.y < -8)) {
+          if (body.velocity.y < -8 || (slope.thin && this.time.now < player.dropUntil)) {
             continue;
           }
           const tolerance = body.velocity.y >= -20 ? 18 : 4;
@@ -3318,7 +3369,18 @@ class FightScene extends Phaser.Scene {
     const slopeGrounded = this.resolveSlopeContact(player);
     const slopeBridgeGrounded = !slopeGrounded && this.resolveSlopeLandingBridge(player);
     const solidGrounded = !slopeGrounded && !slopeBridgeGrounded && this.resolveSolidFloorContact(player);
-    const grounded = body.blocked.down || body.touching.down || slopeGrounded || slopeBridgeGrounded || solidGrounded;
+    const headGrounded =
+      !slopeGrounded &&
+      !slopeBridgeGrounded &&
+      !solidGrounded &&
+      this.resolvePlayerHeadContact(player, time);
+    const grounded =
+      body.blocked.down ||
+      body.touching.down ||
+      slopeGrounded ||
+      slopeBridgeGrounded ||
+      solidGrounded ||
+      headGrounded;
     const justLanded = grounded && !player.wasGrounded;
     player.wasGrounded = grounded;
     const input = player.inputState;
@@ -3331,6 +3393,10 @@ class FightScene extends Phaser.Scene {
     const vertical = touchAimHeld
       ? (input.down.aimDown ? 1 : 0) - (input.down.aimUp ? 1 : 0)
       : (downHeld ? 1 : 0) - (upHeld ? 1 : 0);
+
+    if (input.pressed.jump) {
+      player.jumpBufferUntil = time + JUMP_BUFFER_MS;
+    }
 
     player.currentPickup = this.findNearbyPickup(player);
     if (!grounded) {
@@ -3436,10 +3502,11 @@ class FightScene extends Phaser.Scene {
     const slopeLandingGrounded = this.assistSlopeLanding(player, horizontal);
 
     if (
-      input.pressed.jump &&
+      time <= player.jumpBufferUntil &&
       grounded &&
       !player.crouching &&
-      time >= player.dropUntil
+      time >= player.dropUntil &&
+      body.velocity.y >= -20
     ) {
       this.startJump(player, time);
     }
@@ -3466,6 +3533,11 @@ class FightScene extends Phaser.Scene {
 
   startJump(player, time) {
     player.sprite.setVelocityY(-this.configData.movement.jumpSpeed);
+    player.sprite.body.touching.down = false;
+    player.sprite.body.blocked.down = false;
+    player.jumpBufferUntil = 0;
+    player.headSupportUntil = 0;
+    player.headSupportPlayerId = null;
     player.jumpHeldUntil = time + this.configData.movement.jumpHoldMs;
     player.jumpReleased = false;
     const animationName = player.weapon ? 'jumpPrepGun' : 'jumpPrep';
@@ -4416,6 +4488,9 @@ class FightScene extends Phaser.Scene {
     player.powerup = null;
     player.grenadeAmmo = this.configData.grenades.startCount;
     player.dropUntil = 0;
+    player.jumpBufferUntil = 0;
+    player.headSupportUntil = 0;
+    player.headSupportPlayerId = null;
     this.resetJumpState(player);
     player.jumpPrepUntil = 0;
     player.jumpLandUntil = 0;
