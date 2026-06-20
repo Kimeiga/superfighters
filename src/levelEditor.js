@@ -58,31 +58,83 @@ const PREFABS = {
     anchorX: 5,
     anchorY: 0,
   },
+  movingPlatform: {
+    label: 'Moving Platform',
+    rows: [
+      'MMMMMM',
+    ],
+    legend: { M: 'movingPlatform' },
+    anchorX: 3,
+    anchorY: 0,
+  },
   ladder: {
     label: 'Ladder Shaft',
     rows: [
-      ' L ',
-      ' L ',
-      ' L ',
-      ' L ',
-      ' L ',
-      ' L ',
+      'L R',
+      'L R',
+      'L R',
+      'L R',
+      'L R',
+      'L R',
     ],
-    legend: { L: 'ladder' },
+    legend: { L: 'ladderLeft', R: 'ladderRight' },
     anchorX: 1,
     anchorY: 5,
+  },
+  stairsUp: {
+    label: 'Stairs Up',
+    rows: [
+      '   U',
+      '  U ',
+      ' U  ',
+      'U   ',
+    ],
+    legend: { U: 'slopeUp' },
+    anchorX: 0,
+    anchorY: 3,
+  },
+  stairsDown: {
+    label: 'Stairs Down',
+    rows: [
+      'D   ',
+      ' D  ',
+      '  D ',
+      '   D',
+    ],
+    legend: { D: 'slopeDown' },
+    anchorX: 0,
+    anchorY: 3,
+  },
+  doorPair: {
+    label: 'Door Pair',
+    rows: [
+      'D      D',
+      'D      D',
+    ],
+    legend: { D: 'door' },
+    anchorX: 0,
+    anchorY: 1,
+  },
+  hazards: {
+    label: 'Hazards',
+    rows: [
+      'CBXSL',
+    ],
+    legend: { C: 'crate', B: 'barrel', X: 'smallExplosive', S: 'swingingCrate', L: 'light' },
+    anchorX: 0,
+    anchorY: 0,
   },
   windowWall: {
     label: 'Window Wall',
     rows: [
       'BBBBBBBB',
-      'BGGGBBBB',
-      'BGGGBBBB',
-      'BBBBBGGG',
-      'BBBBBGGG',
+      'BGBBBBBB',
+      'BGBBBBBB',
+      'BBBBBBGB',
+      'BBBBBBGB',
       'BBBBBBBB',
     ],
-    legend: { B: 'backdrop', G: 'glass' },
+    legend: { B: 'backdrop', G: 'glassLeft' },
     anchorX: 4,
     anchorY: 5,
   },
@@ -90,17 +142,17 @@ const PREFABS = {
     label: 'Building Chunk',
     rows: [
       'BBBBBBBBBBBB',
-      'BGGGBBBBGGGB',
-      'BGGGBBBBGGGB',
+      'BGBBBBBBBGGB',
+      'BGBBBBBBBGGB',
       'BBBBBBBBBBBB',
       'PBBBBBBBBBBP',
       'BBBBBBBBBBBB',
-      'BGGGBLLBGGGB',
-      'BGGGBLLBGGGB',
+      'BGBBBLRBBGGB',
+      'BGBBBLRBBGGB',
       'SSSSSSSSSSSS',
       'SSSSSSSSSSSS',
     ],
-    legend: { S: 'solid', P: 'platform', B: 'backdrop', G: 'glass', L: 'ladder' },
+    legend: { S: 'solid', P: 'platform', B: 'backdrop', G: 'glassLeft', L: 'ladderLeft', R: 'ladderRight' },
     anchorX: 6,
     anchorY: 9,
   },
@@ -994,14 +1046,13 @@ function drawTiles() {
       const def = TILE_DEFS[tile];
       const drawX = x * tileSize;
       const drawY = y * tileSize;
-      ctx.fillStyle = def.color;
-      ctx.globalAlpha = def.id === 'backdrop' ? 0.75 : def.id === 'void' ? 0.92 : 1;
-      ctx.fillRect(drawX, drawY, tileSize, tileSize);
-      ctx.globalAlpha = 1;
+      drawEditorTile(ctx, def, drawX, drawY, tileSize, x, y);
 
       if (def.marker) {
-        ctx.fillStyle = '#101622';
-        ctx.fillRect(drawX + 5, drawY + 5, tileSize - 10, tileSize - 10);
+        if (def.id !== 'door' && def.id !== 'light') {
+          ctx.fillStyle = '#101622';
+          ctx.fillRect(drawX + 5, drawY + 5, tileSize - 10, tileSize - 10);
+        }
         ctx.fillStyle = def.color;
         ctx.font = '10px FusionPixel12, monospace';
         ctx.textAlign = 'center';
@@ -1012,7 +1063,192 @@ function drawTiles() {
   }
 }
 
+function drawEditorTile(context, def, x, y, size) {
+  context.save();
+  context.globalAlpha = def.id === 'backdrop' ? 0.75 : def.id === 'void' ? 0.92 : 1;
+
+  switch (def.id) {
+    case 'solid':
+      context.fillStyle = def.color;
+      context.fillRect(x, y, size, size);
+      context.fillStyle = '#78c073';
+      context.fillRect(x, y, size, Math.max(2, size * 0.16));
+      context.fillStyle = 'rgba(0, 0, 0, 0.24)';
+      context.fillRect(x, y + size - 3, size, 3);
+      break;
+    case 'slopeUp':
+      context.fillStyle = def.color;
+      context.beginPath();
+      context.moveTo(x, y + size);
+      context.lineTo(x + size, y);
+      context.lineTo(x + size, y + size);
+      context.closePath();
+      context.fill();
+      context.strokeStyle = '#78c073';
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(x, y + size - 1);
+      context.lineTo(x + size, y + 1);
+      context.stroke();
+      break;
+    case 'slopeDown':
+      context.fillStyle = def.color;
+      context.beginPath();
+      context.moveTo(x, y);
+      context.lineTo(x, y + size);
+      context.lineTo(x + size, y + size);
+      context.closePath();
+      context.fill();
+      context.strokeStyle = '#78c073';
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(x, y + 1);
+      context.lineTo(x + size, y + size - 1);
+      context.stroke();
+      break;
+    case 'platform':
+      context.fillStyle = '#f6e39a';
+      context.fillRect(x, y, size, Math.max(3, size * 0.18));
+      context.fillStyle = '#7a6641';
+      context.fillRect(x, y + Math.max(4, size * 0.18), size, Math.max(2, size * 0.12));
+      break;
+    case 'movingPlatform':
+      context.fillStyle = '#d8f39a';
+      context.fillRect(x, y, size, Math.max(3, size * 0.2));
+      context.fillStyle = '#304d3b';
+      context.fillRect(x, y + Math.max(4, size * 0.2), size, Math.max(2, size * 0.13));
+      context.fillStyle = '#d8f39a';
+      context.fillRect(x + size * 0.45, y + size * 0.42, size * 0.1, size * 0.32);
+      break;
+    case 'crate':
+    case 'swingingCrate':
+      if (def.id === 'swingingCrate') {
+        context.strokeStyle = '#d7c1a1';
+        context.lineWidth = 2;
+        context.beginPath();
+        context.moveTo(x + size / 2, y);
+        context.lineTo(x + size / 2, y + size * 0.25);
+        context.stroke();
+      }
+      context.fillStyle = def.color;
+      context.fillRect(x + 2, y + size * 0.22, size - 4, size * 0.72);
+      context.strokeStyle = '#5e3f29';
+      context.lineWidth = 2;
+      context.strokeRect(x + 3, y + size * 0.25, size - 6, size * 0.66);
+      context.beginPath();
+      context.moveTo(x + 4, y + size * 0.27);
+      context.lineTo(x + size - 4, y + size * 0.9);
+      context.moveTo(x + size - 4, y + size * 0.27);
+      context.lineTo(x + 4, y + size * 0.9);
+      context.stroke();
+      break;
+    case 'barrel':
+      context.fillStyle = def.color;
+      context.fillRect(x + 4, y + 2, size - 8, size - 4);
+      context.fillStyle = '#ffe078';
+      context.fillRect(x + 4, y + size * 0.28, size - 8, 3);
+      context.fillRect(x + 4, y + size * 0.68, size - 8, 3);
+      context.fillStyle = '#5b1f22';
+      context.fillRect(x + size * 0.43, y + size * 0.42, size * 0.14, size * 0.18);
+      break;
+    case 'smallExplosive':
+      context.fillStyle = '#332134';
+      context.fillRect(x + 3, y + 3, size - 6, size - 6);
+      context.fillStyle = def.color;
+      context.beginPath();
+      context.moveTo(x + size / 2, y + 4);
+      context.lineTo(x + size - 4, y + size / 2);
+      context.lineTo(x + size / 2, y + size - 4);
+      context.lineTo(x + 4, y + size / 2);
+      context.closePath();
+      context.fill();
+      break;
+    case 'glass':
+    case 'glassLeft':
+    case 'glassRight': {
+      const lineX = def.id === 'glassLeft' ? x + 3 : def.id === 'glassRight' ? x + size - 3 : x + size / 2;
+      context.strokeStyle = def.color;
+      context.lineWidth = Math.max(2, size * 0.16);
+      context.beginPath();
+      context.moveTo(lineX, y + 2);
+      context.lineTo(lineX, y + size - 2);
+      context.stroke();
+      context.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(lineX + 2, y + 5);
+      context.lineTo(lineX + 2, y + size * 0.45);
+      context.stroke();
+      break;
+    }
+    case 'ladder':
+    case 'ladderLeft':
+    case 'ladderRight': {
+      const centerX = def.id === 'ladderLeft' ? x + 5 : def.id === 'ladderRight' ? x + size - 5 : x + size / 2;
+      context.strokeStyle = def.color;
+      context.lineWidth = 3;
+      context.beginPath();
+      context.moveTo(centerX - 4, y + 1);
+      context.lineTo(centerX - 4, y + size - 1);
+      context.moveTo(centerX + 4, y + 1);
+      context.lineTo(centerX + 4, y + size - 1);
+      context.stroke();
+      context.lineWidth = 2;
+      for (let rungY = y + 5; rungY < y + size; rungY += 8) {
+        context.beginPath();
+        context.moveTo(centerX - 5, rungY);
+        context.lineTo(centerX + 5, rungY);
+        context.stroke();
+      }
+      break;
+    }
+    case 'door':
+      context.fillStyle = '#111827';
+      context.fillRect(x + 4, y + 3, size - 8, size - 3);
+      context.strokeStyle = def.color;
+      context.lineWidth = 2;
+      context.strokeRect(x + 4, y + 3, size - 8, size - 3);
+      context.fillStyle = '#8cffab';
+      context.fillRect(x + 5, y + 1, size - 10, 4);
+      break;
+    case 'light':
+      context.strokeStyle = '#65758a';
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(x + size / 2, y);
+      context.lineTo(x + size / 2, y + size * 0.28);
+      context.stroke();
+      context.fillStyle = def.color;
+      context.fillRect(x + size * 0.3, y + size * 0.28, size * 0.4, size * 0.18);
+      context.fillStyle = 'rgba(255, 240, 166, 0.28)';
+      context.beginPath();
+      context.moveTo(x + size * 0.3, y + size * 0.46);
+      context.lineTo(x + size * 0.7, y + size * 0.46);
+      context.lineTo(x + size * 0.9, y + size);
+      context.lineTo(x + size * 0.1, y + size);
+      context.closePath();
+      context.fill();
+      break;
+    case 'pickup':
+      context.fillStyle = def.color;
+      context.fillRect(x + 2, y + 2, size - 4, size - 4);
+      break;
+    default:
+      context.fillStyle = def.color;
+      context.fillRect(x, y, size, size);
+      break;
+  }
+
+  context.restore();
+}
+
 function getMarkerLabel(def, x, y) {
+  if (def.id === 'door') {
+    return 'EXIT';
+  }
+  if (def.id === 'light') {
+    return '';
+  }
   if (def.id !== 'pickup') {
     return def.label;
   }
@@ -1032,8 +1268,9 @@ function getMarkerLabel(def, x, y) {
 function drawColliderPreview() {
   const rectSets = [
     { rects: mergeTilesToRects(level, ['solid']), color: '#35f2ff' },
-    { rects: mergeTilesToRects(level, ['platform']), color: '#ffd166' },
-    { rects: mergeTilesToRects(level, ['glass']), color: '#ffffff' },
+    { rects: mergeTilesToRects(level, ['platform', 'movingPlatform']), color: '#ffd166' },
+    { rects: mergeTilesToRects(level, ['glass', 'glassLeft', 'glassRight']), color: '#ffffff' },
+    { rects: mergeTilesToRects(level, ['crate', 'barrel', 'smallExplosive', 'swingingCrate']), color: '#ff9f43' },
   ];
   ctx.save();
   ctx.globalAlpha = 0.86;
@@ -1043,6 +1280,22 @@ function drawColliderPreview() {
     for (const rect of set.rects) {
       ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
     }
+  }
+  for (const slope of findTiles('slopeUp').concat(findTiles('slopeDown'))) {
+    const tile = level.grid[slope.y * level.width + slope.x];
+    const def = TILE_DEFS[tile];
+    const x = slope.x * level.tileSize;
+    const y = slope.y * level.tileSize;
+    ctx.strokeStyle = '#78c073';
+    ctx.beginPath();
+    if (def.id === 'slopeUp') {
+      ctx.moveTo(x, y + level.tileSize);
+      ctx.lineTo(x + level.tileSize, y);
+    } else {
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + level.tileSize, y + level.tileSize);
+    }
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -1146,11 +1399,12 @@ function strokeTileRect(rect, color, width) {
 }
 
 function updateUi(message = null) {
-  const mergedSolid = mergeTilesToRects(level, ['solid', 'glass']).length;
-  const mergedPlatforms = mergeTilesToRects(level, ['platform']).length;
+  const mergedSolid = mergeTilesToRects(level, ['solid', 'glass', 'glassLeft', 'glassRight', 'crate', 'barrel', 'smallExplosive', 'swingingCrate']).length;
+  const mergedPlatforms = mergeTilesToRects(level, ['platform', 'movingPlatform']).length;
+  const slopeCount = findTiles('slopeUp').length + findTiles('slopeDown').length;
   statsText.textContent =
     `${level.width}x${level.height} tiles, ${countNonEmptyTiles(level)} filled, ` +
-    `${mergedSolid + mergedPlatforms} merged colliders`;
+    `${mergedSolid + mergedPlatforms + slopeCount} collider pieces`;
   selectionText.textContent = selectionRect
     ? `Selection ${selectionRect.width}x${selectionRect.height}`
     : `${TILE_DEFS[TILE_INDEX[selectedTile]].label} / ${toolMode}`;
@@ -1202,7 +1456,7 @@ function validateLevel() {
   }
   for (const [label, points] of [['P1', p1], ['P2', p2]]) {
     if (points[0] && !hasFloorBelow(points[0].x, points[0].y, 8)) {
-      warnings.push(`${label} spawn has no solid/platform within 8 tiles below.`);
+      warnings.push(`${label} spawn has no wall/platform/slope within 8 tiles below.`);
     }
   }
 
@@ -1215,7 +1469,8 @@ function validateLevel() {
   }
 
   const ladders = findTiles('ladder');
-  if (ladders.length && !ladders.some((tile) => touchesSolidOrPlatform(tile.x, tile.y))) {
+  const sideLadders = ladders.concat(findTiles('ladderLeft'), findTiles('ladderRight'));
+  if (sideLadders.length && !sideLadders.some((tile) => touchesFloorTile(tile.x, tile.y))) {
     warnings.push('Ladders do not touch any solid/platform tile.');
   }
 
@@ -1229,7 +1484,12 @@ function validateLevel() {
     }
   }
 
-  const colliderCount = mergeTilesToRects(level, ['solid']).length + mergeTilesToRects(level, ['platform']).length;
+  const colliderCount =
+    mergeTilesToRects(level, ['solid']).length +
+    mergeTilesToRects(level, ['platform', 'movingPlatform']).length +
+    mergeTilesToRects(level, ['crate', 'barrel', 'smallExplosive', 'swingingCrate']).length +
+    findTiles('slopeUp').length +
+    findTiles('slopeDown').length;
   if (colliderCount > 250) {
     warnings.push(`High collider count (${colliderCount}); use larger rectangles where possible.`);
   }
@@ -1253,14 +1513,14 @@ function findTiles(tileId) {
 function hasFloorBelow(x, y, maxDistance) {
   for (let yy = y + 1; yy <= Math.min(level.height - 1, y + maxDistance); yy += 1) {
     const tile = level.grid[yy * level.width + x];
-    if (tile === TILE_INDEX.solid || tile === TILE_INDEX.platform) {
+    if (isFloorTile(tile)) {
       return true;
     }
   }
   return false;
 }
 
-function touchesSolidOrPlatform(x, y) {
+function touchesFloorTile(x, y) {
   return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => {
     const xx = x + dx;
     const yy = y + dy;
@@ -1268,8 +1528,22 @@ function touchesSolidOrPlatform(x, y) {
       return false;
     }
     const tile = level.grid[yy * level.width + xx];
-    return tile === TILE_INDEX.solid || tile === TILE_INDEX.platform;
+    return isFloorTile(tile);
   });
+}
+
+function isFloorTile(tile) {
+  return [
+    TILE_INDEX.solid,
+    TILE_INDEX.platform,
+    TILE_INDEX.movingPlatform,
+    TILE_INDEX.slopeUp,
+    TILE_INDEX.slopeDown,
+    TILE_INDEX.crate,
+    TILE_INDEX.barrel,
+    TILE_INDEX.smallExplosive,
+    TILE_INDEX.swingingCrate,
+  ].includes(tile);
 }
 
 function describePickupSpec(spec) {

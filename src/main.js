@@ -114,6 +114,11 @@ const COLORS = {
   grenade: 0x89e072,
   explosion: 0xffb84d,
   panel: 0x101622,
+  crate: 0xa8794a,
+  barrel: 0xcc6547,
+  smallExplosive: 0xff9f43,
+  door: 0x4a78d8,
+  light: 0xfff0a6,
 };
 
 class FightScene extends Phaser.Scene {
@@ -123,6 +128,10 @@ class FightScene extends Phaser.Scene {
     this.playerBySprite = new Map();
     this.platforms = [];
     this.ladders = [];
+    this.doors = [];
+    this.slopeTiles = [];
+    this.slopeTileMap = new Map();
+    this.movingPlatforms = [];
     this.clouds = [];
   }
 
@@ -136,6 +145,10 @@ class FightScene extends Phaser.Scene {
     this.playerBySprite.clear();
     this.platforms = [];
     this.ladders = [];
+    this.doors = [];
+    this.slopeTiles = [];
+    this.slopeTileMap = new Map();
+    this.movingPlatforms = [];
     this.clouds = [];
     this.levelSpawns = null;
     this.editorLevel = pendingBootOptions?.editorLevel ? getSavedLevel() : null;
@@ -388,10 +401,13 @@ class FightScene extends Phaser.Scene {
       return;
     }
 
+    this.updateMovingPlatforms(time);
+
     for (const player of this.players) {
       this.updatePlayer(player, time, delta);
     }
 
+    this.updateDoorTeleports(time);
     this.updateDashAttacks(time);
     this.updatePickups(time);
     this.checkKillZones();
@@ -641,6 +657,11 @@ class FightScene extends Phaser.Scene {
 
   createLevel() {
     this.glassWindows = this.physics.add.staticGroup();
+    this.levelProps = this.physics.add.staticGroup();
+    this.doors = [];
+    this.slopeTiles = [];
+    this.slopeTileMap = new Map();
+    this.movingPlatforms = [];
     this.levelSpawns = null;
 
     if (this.editorLevel) {
@@ -705,13 +726,38 @@ class FightScene extends Phaser.Scene {
       this.createTileCollider(rect, true);
     }
 
+    for (const rect of mergeTilesToRects(level, ['movingPlatform'])) {
+      this.createMovingPlatform(rect);
+    }
+
     for (const rect of mergeTilesToRects(level, ['glass'])) {
       this.createWindow(rect.x + rect.width / 2, rect.y + rect.height / 2, rect.width, rect.height);
+    }
+
+    for (const rect of mergeTilesToRects(level, ['glassLeft'])) {
+      this.createWindow(rect.x + 3, rect.y + rect.height / 2, 4, rect.height);
+    }
+
+    for (const rect of mergeTilesToRects(level, ['glassRight'])) {
+      this.createWindow(rect.x + rect.width - 3, rect.y + rect.height / 2, 4, rect.height);
     }
 
     for (const rect of mergeTilesToRects(level, ['ladder'])) {
       this.createLadder(rect.x + rect.width / 2, rect.y + rect.height / 2, rect.height);
     }
+
+    for (const rect of mergeTilesToRects(level, ['ladderLeft'])) {
+      this.createLadder(rect.x + 6, rect.y + rect.height / 2, rect.height);
+    }
+
+    for (const rect of mergeTilesToRects(level, ['ladderRight'])) {
+      this.createLadder(rect.x + rect.width - 6, rect.y + rect.height / 2, rect.height);
+    }
+
+    for (const rect of mergeTilesToRects(level, ['door'])) {
+      this.createDoor(rect);
+    }
+    this.pairDoors();
 
     for (let y = 0; y < level.height; y += 1) {
       for (let x = 0; x < level.width; x += 1) {
@@ -719,7 +765,27 @@ class FightScene extends Phaser.Scene {
         const worldX = x * level.tileSize + level.tileSize / 2;
         const worldY = y * level.tileSize + level.tileSize / 2;
 
-        if (tile === TILE_INDEX.pickup) {
+        if (tile === TILE_INDEX.slopeUp || tile === TILE_INDEX.slopeDown) {
+          const slope = {
+            x: x * level.tileSize,
+            y: y * level.tileSize,
+            tileX: x,
+            tileY: y,
+            size: level.tileSize,
+            type: tile === TILE_INDEX.slopeUp ? 'up' : 'down',
+          };
+          this.slopeTiles.push(slope);
+          this.slopeTileMap.set(`${x},${y}`, slope);
+        } else if (
+          tile === TILE_INDEX.crate ||
+          tile === TILE_INDEX.barrel ||
+          tile === TILE_INDEX.smallExplosive ||
+          tile === TILE_INDEX.swingingCrate
+        ) {
+          this.createLevelProp(worldX, worldY, level.tileSize, level.tileSize, TILE_DEFS[tile].id);
+        } else if (tile === TILE_INDEX.light) {
+          this.createLightFixture(worldX, worldY, level.tileSize);
+        } else if (tile === TILE_INDEX.pickup) {
           this.pickupSpawnPoints.push({
             x: worldX,
             y: worldY,
@@ -749,7 +815,17 @@ class FightScene extends Phaser.Scene {
     const tileSize = level.tileSize;
     const centerColumn = Math.floor(worldX / tileSize);
     const startRow = Math.floor(worldY / tileSize);
-    const solidTiles = new Set([TILE_INDEX.solid, TILE_INDEX.platform]);
+    const solidTiles = new Set([
+      TILE_INDEX.solid,
+      TILE_INDEX.platform,
+      TILE_INDEX.movingPlatform,
+      TILE_INDEX.slopeUp,
+      TILE_INDEX.slopeDown,
+      TILE_INDEX.crate,
+      TILE_INDEX.barrel,
+      TILE_INDEX.smallExplosive,
+      TILE_INDEX.swingingCrate,
+    ]);
 
     for (let y = startRow; y < level.height; y += 1) {
       for (let dx = -1; dx <= 1; dx += 1) {
@@ -787,7 +863,18 @@ class FightScene extends Phaser.Scene {
           tile === TILE_INDEX.p1 ||
           tile === TILE_INDEX.p2 ||
           tile === TILE_INDEX.glass ||
-          tile === TILE_INDEX.ladder
+          tile === TILE_INDEX.glassLeft ||
+          tile === TILE_INDEX.glassRight ||
+          tile === TILE_INDEX.ladder ||
+          tile === TILE_INDEX.ladderLeft ||
+          tile === TILE_INDEX.ladderRight ||
+          tile === TILE_INDEX.door ||
+          tile === TILE_INDEX.light ||
+          tile === TILE_INDEX.crate ||
+          tile === TILE_INDEX.barrel ||
+          tile === TILE_INDEX.smallExplosive ||
+          tile === TILE_INDEX.swingingCrate ||
+          tile === TILE_INDEX.movingPlatform
         ) {
           continue;
         }
@@ -797,8 +884,30 @@ class FightScene extends Phaser.Scene {
         const drawY = y * tileSize;
         const color = parseHexColor(def.color, 0x30283b);
         const alpha = def.id === 'backdrop' ? 0.78 : def.id === 'void' ? 0.96 : 1;
-        graphics.fillStyle(color, alpha);
-        graphics.fillRect(drawX, drawY, tileSize, tileSize);
+        if (def.id === 'slopeUp') {
+          graphics.fillStyle(color, alpha);
+          graphics.beginPath();
+          graphics.moveTo(drawX, drawY + tileSize);
+          graphics.lineTo(drawX + tileSize, drawY);
+          graphics.lineTo(drawX + tileSize, drawY + tileSize);
+          graphics.closePath();
+          graphics.fillPath();
+          graphics.lineStyle(2, COLORS.platformTop, 0.9);
+          graphics.lineBetween(drawX, drawY + tileSize - 1, drawX + tileSize, drawY + 1);
+        } else if (def.id === 'slopeDown') {
+          graphics.fillStyle(color, alpha);
+          graphics.beginPath();
+          graphics.moveTo(drawX, drawY);
+          graphics.lineTo(drawX, drawY + tileSize);
+          graphics.lineTo(drawX + tileSize, drawY + tileSize);
+          graphics.closePath();
+          graphics.fillPath();
+          graphics.lineStyle(2, COLORS.platformTop, 0.9);
+          graphics.lineBetween(drawX, drawY + 1, drawX + tileSize, drawY + tileSize - 1);
+        } else {
+          graphics.fillStyle(color, alpha);
+          graphics.fillRect(drawX, drawY, tileSize, tileSize);
+        }
 
         if (def.id === 'solid') {
           const tileAbove = y > 0 ? level.grid[(y - 1) * level.width + x] : TILE_INDEX.empty;
@@ -830,6 +939,123 @@ class FightScene extends Phaser.Scene {
     collider.body.updateFromGameObject();
     this.platforms.push(collider);
     return collider;
+  }
+
+  createMovingPlatform(rect) {
+    const platform = this.add
+      .rectangle(rect.x + rect.width / 2, rect.y + rect.height / 2, rect.width, Math.max(8, rect.height * 0.42), 0xb9dc7a, 1)
+      .setOrigin(0.5);
+    const top = this.add.rectangle(platform.x, platform.y - platform.displayHeight / 2 - 2, rect.width + 8, 4, 0xf6e39a, 1).setOrigin(0.5);
+    platform.setData('thin', true);
+    platform.setData('levelGeometry', true);
+    platform.setData('indestructible', true);
+    platform.setData('visuals', [top]);
+    this.physics.add.existing(platform, true);
+    platform.body.setSize(rect.width, Math.max(8, rect.height * 0.42));
+    platform.body.updateFromGameObject();
+    this.platforms.push(platform);
+    this.movingPlatforms.push({
+      body: platform,
+      visuals: [top],
+      baseY: platform.y,
+      range: Math.max(rect.height * 1.8, (this.editorLevel?.tileSize ?? 24) * 2),
+      phase: rect.x * 0.017,
+      speed: 0.00135,
+    });
+    return platform;
+  }
+
+  createLevelProp(x, y, width, height, type) {
+    const colorByType = {
+      crate: COLORS.crate,
+      barrel: COLORS.barrel,
+      smallExplosive: COLORS.smallExplosive,
+      swingingCrate: 0xbf8f55,
+    };
+    const visuals = [];
+    if (type === 'swingingCrate') {
+      visuals.push(this.add.line(x, y - height * 0.7, 0, 0, 0, height * 0.62, 0xd7c1a1, 0.72).setOrigin(0.5, 0));
+    }
+
+    const prop = this.add.rectangle(
+      x,
+      type === 'swingingCrate' ? y + height * 0.12 : y,
+      width * 0.9,
+      height * 0.9,
+      colorByType[type] ?? COLORS.crate,
+      1,
+    ).setOrigin(0.5);
+    prop.setData('propType', type);
+    prop.setData('destructible', true);
+    prop.setData('health', type === 'crate' || type === 'swingingCrate' ? 24 : 10);
+    prop.setData('explosiveRadius', type === 'barrel' ? 98 : type === 'smallExplosive' ? 62 : 0);
+    prop.setData('explosiveDamage', type === 'barrel' ? 44 : type === 'smallExplosive' ? 26 : 0);
+    prop.setData('levelGeometry', true);
+    prop.setData('indestructible', false);
+    prop.setData('visuals', visuals);
+    this.physics.add.existing(prop, true);
+    prop.body.setSize(width * 0.9, height * 0.9);
+    prop.body.updateFromGameObject();
+    this.levelProps.add(prop);
+    this.platforms.push(prop);
+
+    if (type === 'crate' || type === 'swingingCrate') {
+      visuals.push(this.add.rectangle(prop.x, prop.y, prop.displayWidth - 7, prop.displayHeight - 7, 0x000000, 0).setStrokeStyle(2, 0x5e3f29, 0.95));
+      visuals.push(this.add.line(prop.x, prop.y, -prop.displayWidth * 0.35, -prop.displayHeight * 0.35, prop.displayWidth * 0.35, prop.displayHeight * 0.35, 0x5e3f29, 0.92));
+      visuals.push(this.add.line(prop.x, prop.y, prop.displayWidth * 0.35, -prop.displayHeight * 0.35, -prop.displayWidth * 0.35, prop.displayHeight * 0.35, 0x5e3f29, 0.92));
+    } else if (type === 'barrel') {
+      visuals.push(this.add.rectangle(prop.x, prop.y - prop.displayHeight * 0.24, prop.displayWidth, 3, 0xffd166, 0.95));
+      visuals.push(this.add.rectangle(prop.x, prop.y + prop.displayHeight * 0.24, prop.displayWidth, 3, 0xffd166, 0.95));
+    } else if (type === 'smallExplosive') {
+      visuals.push(this.add.rectangle(prop.x, prop.y, prop.displayWidth * 0.46, prop.displayHeight * 0.46, 0x332134, 1).setAngle(45));
+    }
+
+    return prop;
+  }
+
+  createDoor(rect) {
+    const width = Math.max(rect.width, this.editorLevel?.tileSize ?? 24);
+    const height = Math.max(rect.height, (this.editorLevel?.tileSize ?? 24) * 2);
+    const x = rect.x + rect.width / 2;
+    const y = rect.y + rect.height / 2;
+    const frame = this.add.rectangle(x, y, width * 0.78, height * 0.92, COLORS.door, 0.85).setOrigin(0.5);
+    const voidRect = this.add.rectangle(x, y + height * 0.08, width * 0.56, height * 0.72, 0x0b111c, 1).setOrigin(0.5);
+    const exit = this.add.rectangle(x, y - height * 0.42, width * 0.62, 7, 0x8cffab, 0.95).setOrigin(0.5);
+    const label = this.add.text(x, y - height * 0.49, 'EXIT', {
+      fontFamily: UI_FONT,
+      fontSize: '8px',
+      color: '#0b111c',
+    }).setOrigin(0.5, 0);
+    const door = {
+      x,
+      y,
+      width,
+      height,
+      bounds: new Phaser.Geom.Rectangle(x - width * 0.38, y - height * 0.42, width * 0.76, height * 0.84),
+      visuals: [frame, voidRect, exit, label],
+      target: null,
+    };
+    this.doors.push(door);
+    return door;
+  }
+
+  pairDoors() {
+    const sorted = [...this.doors].sort((a, b) => a.x - b.x || a.y - b.y);
+    for (let i = 0; i < sorted.length; i += 2) {
+      const first = sorted[i];
+      const second = sorted[i + 1];
+      if (!first || !second) {
+        continue;
+      }
+      first.target = second;
+      second.target = first;
+    }
+  }
+
+  createLightFixture(x, y, size) {
+    this.add.line(x, y - size * 0.24, 0, 0, 0, size * 0.34, 0x65758a, 0.9).setOrigin(0.5, 0);
+    this.add.rectangle(x, y, size * 0.48, size * 0.18, COLORS.light, 1).setOrigin(0.5);
+    this.add.triangle(x, y + size * 0.38, 0, 0, size * 0.96, 0, size * 0.72, size * 0.72, COLORS.light, 0.18).setOrigin(0.5, 0.05);
   }
 
   createBuilding({ x, width, floorY, floors, ladders, windows }) {
@@ -1527,7 +1753,9 @@ class FightScene extends Phaser.Scene {
       crouching: false,
       climbing: false,
       onThinPlatform: false,
+      onSlope: false,
       dropUntil: 0,
+      doorCooldownUntil: 0,
       currentPickup: null,
       weapon: null,
       grenadeAmmo: this.configData.grenades.startCount,
@@ -2614,9 +2842,118 @@ class FightScene extends Phaser.Scene {
     return null;
   }
 
+  updateMovingPlatforms(time) {
+    for (const platform of this.movingPlatforms) {
+      const y = platform.baseY + Math.sin(time * platform.speed + platform.phase) * platform.range;
+      const dy = y - platform.body.y;
+      platform.body.y = y;
+      platform.body.body.updateFromGameObject();
+      for (const visual of platform.visuals) {
+        visual.y += dy;
+      }
+    }
+  }
+
+  updateDoorTeleports(time) {
+    if (this.doors.length < 2) {
+      return;
+    }
+    for (const player of this.players) {
+      if (time < player.doorCooldownUntil || !player.sprite.active) {
+        continue;
+      }
+      const playerBounds = getBodyBounds(player.sprite);
+      const door = this.doors.find((candidate) => (
+        candidate.target &&
+        Phaser.Geom.Intersects.RectangleToRectangle(playerBounds, candidate.bounds)
+      ));
+      if (!door?.target) {
+        continue;
+      }
+      const target = door.target;
+      const exitDirection = Math.sign(door.x - target.x) || player.facing || 1;
+      player.sprite.setPosition(
+        target.x + exitDirection * Math.max(28, target.width * 0.58),
+        target.y + target.height * 0.42 - this.getStandingBodyBottomOffset(),
+      );
+      player.facing = exitDirection;
+      player.sprite.setFlipX(exitDirection < 0);
+      player.sprite.setVelocity(0, 0);
+      player.dropUntil = time + 120;
+      player.doorCooldownUntil = time + 1100;
+      this.spawnDoorFlash(door);
+      this.spawnDoorFlash(target);
+    }
+  }
+
+  spawnDoorFlash(door) {
+    const flash = this.add.rectangle(door.x, door.y, door.width * 0.82, door.height * 0.9, 0x8cffab, 0.28).setOrigin(0.5).setDepth(12);
+    this.tweens.add({
+      targets: flash,
+      alpha: 0,
+      scaleX: 1.18,
+      scaleY: 1.08,
+      duration: 220,
+      ease: 'Cubic.easeOut',
+      onComplete: () => flash.destroy(),
+    });
+  }
+
+  resolveSlopeContact(player) {
+    player.onSlope = false;
+    if (!this.slopeTiles.length || player.climbing) {
+      return false;
+    }
+
+    const body = player.sprite.body;
+    const footX = body.x + body.width / 2;
+    const footY = body.y + body.height;
+    const tileSize = this.editorLevel?.tileSize ?? 24;
+    const tileX = Math.floor(footX / tileSize);
+    const tileY = Math.floor((footY + 3) / tileSize);
+    let bestSurface = Infinity;
+    let bestSlope = null;
+
+    for (let y = tileY - 1; y <= tileY + 1; y += 1) {
+      for (let x = tileX - 1; x <= tileX + 1; x += 1) {
+        const slope = this.slopeTileMap.get(`${x},${y}`);
+        if (!slope) {
+          continue;
+        }
+        if (footX < slope.x - 2 || footX > slope.x + slope.size + 2) {
+          continue;
+        }
+        const localX = Phaser.Math.Clamp(footX - slope.x, 0, slope.size);
+        const surfaceY = slope.type === 'up'
+          ? slope.y + slope.size - localX
+          : slope.y + localX;
+        const tolerance = body.velocity.y >= -20 ? 18 : 4;
+        if (footY >= surfaceY - tolerance && footY <= surfaceY + 26 && surfaceY < bestSurface) {
+          bestSurface = surfaceY;
+          bestSlope = slope;
+        }
+      }
+    }
+
+    if (!bestSlope) {
+      return false;
+    }
+
+    body.y = bestSurface - body.height;
+    player.sprite.y = body.y + body.height / 2;
+    if (body.velocity.y > 0) {
+      body.setVelocityY(0);
+    }
+    body.touching.down = true;
+    body.blocked.down = true;
+    player.onSlope = true;
+    return true;
+  }
+
   updatePlayer(player, time, delta) {
     const body = player.sprite.body;
-    const grounded = body.blocked.down || body.touching.down;
+    const slopeGrounded = this.resolveSlopeContact(player);
+    const grounded = body.blocked.down || body.touching.down || slopeGrounded;
     const justLanded = grounded && !player.wasGrounded;
     player.wasGrounded = grounded;
     const input = player.inputState;
@@ -3405,6 +3742,7 @@ class FightScene extends Phaser.Scene {
     const centerY = pivot.y;
     this.flashHitbox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, player.facing, 0xffffff, 0.28);
     this.breakWindowsInBox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, hit.damage);
+    this.damagePropsInBox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, hit.damage, player.id);
 
     const opponent = this.getOpponent(player);
     if (this.time.now < opponent.knockedUntil) {
@@ -3471,6 +3809,7 @@ class FightScene extends Phaser.Scene {
       const centerX = pivot.x + player.dashDirection * 40;
       const centerY = pivot.y;
       this.breakWindowsInBox(centerX, centerY, 70, 48, this.configData.melee.dashDamage);
+      this.damagePropsInBox(centerX, centerY, 70, 48, this.configData.melee.dashDamage, player.id);
 
       const opponent = this.getOpponent(player);
       if (!player.dashHitTargets.has(opponent.id) && time >= opponent.knockedUntil && this.isTargetInBox(opponent.sprite, centerX, centerY, 70, 48)) {
@@ -3577,11 +3916,15 @@ class FightScene extends Phaser.Scene {
 
   handleBulletWall(objectA, objectB) {
     const bullet = this.getCollisionObjectFromGroup(this.bullets, objectA, objectB, 'weaponId');
+    const wall = bullet === objectA ? objectB : objectA;
     if (!bullet?.active) {
       return;
     }
 
     this.spawnHitEffect(bullet.x, bullet.y, bullet.getData('hitColor') ?? 0xfff3a3);
+    if (wall?.getData?.('destructible')) {
+      this.damageLevelProp(wall, bullet.getData('damage') ?? 8, bullet.getData('owner'), bullet.x, bullet.y);
+    }
     const explosiveRadius = bullet.getData('explosiveRadius') ?? 0;
     if (explosiveRadius > 0) {
       this.explodeAt(
@@ -3640,6 +3983,7 @@ class FightScene extends Phaser.Scene {
 
     // Level platforms are intentionally indestructible. Explosions can break glass and hurt players only.
     this.breakWindowsInRadius(x, y, radius);
+    this.damagePropsInRadius(x, y, radius, damage, ownerId);
 
     for (const player of this.players) {
       const distance = Phaser.Math.Distance.Between(x, y, player.sprite.x, player.sprite.y);
@@ -3724,6 +4068,8 @@ class FightScene extends Phaser.Scene {
     player.currentPickup = null;
     player.cpuInputDown = createInputDown();
     player.cpuState = createCpuState();
+    player.onSlope = false;
+    player.doorCooldownUntil = 0;
     player.shootStanceUntil = 0;
     player.slowedUntil = 0;
     player.shieldUntil = 0;
@@ -4181,6 +4527,91 @@ class FightScene extends Phaser.Scene {
       if (this.circleOverlapsObject(x, y, radius, windowPane)) {
         this.breakWindow(windowPane, x, y);
       }
+    }
+  }
+
+  damagePropsInBox(centerX, centerY, width, height, damage, ownerId = null) {
+    const hitbox = new Phaser.Geom.Rectangle(centerX - width / 2, centerY - height / 2, width, height);
+    for (const prop of this.levelProps?.getChildren?.() ?? []) {
+      if (!prop.active || !prop.getData('destructible')) {
+        continue;
+      }
+      if (Phaser.Geom.Intersects.RectangleToRectangle(hitbox, prop.getBounds())) {
+        this.damageLevelProp(prop, damage, ownerId, centerX, centerY);
+      }
+    }
+  }
+
+  damagePropsInRadius(x, y, radius, damage, ownerId = null) {
+    for (const prop of this.levelProps?.getChildren?.() ?? []) {
+      if (!prop.active || !prop.getData('destructible')) {
+        continue;
+      }
+      if (this.circleOverlapsObject(x, y, radius, prop)) {
+        this.damageLevelProp(prop, damage, ownerId, x, y);
+      }
+    }
+  }
+
+  damageLevelProp(prop, damage, ownerId = null, impactX = prop.x, impactY = prop.y) {
+    if (!prop.active || !prop.getData('destructible')) {
+      return;
+    }
+
+    const health = (prop.getData('health') ?? 1) - damage;
+    prop.setData('health', health);
+    this.spawnHitEffect(prop.x, prop.y, prop.getData('explosiveRadius') ? COLORS.explosion : COLORS.crate);
+    if (health > 0) {
+      return;
+    }
+
+    const radius = prop.getData('explosiveRadius') ?? 0;
+    const explosiveDamage = prop.getData('explosiveDamage') ?? damage;
+    const explosionX = prop.x;
+    const explosionY = prop.y;
+    this.breakLevelProp(prop, impactX, impactY);
+    if (radius > 0) {
+      this.explodeAt(explosionX, explosionY, radius, explosiveDamage, ownerId, true);
+    }
+  }
+
+  breakLevelProp(prop, impactX, impactY) {
+    if (!prop.active) {
+      return;
+    }
+    const x = prop.x;
+    const y = prop.y;
+    const width = prop.displayWidth;
+    const height = prop.displayHeight;
+    const color = prop.fillColor ?? COLORS.crate;
+    const index = this.platforms.indexOf(prop);
+    if (index >= 0) {
+      this.platforms.splice(index, 1);
+    }
+    for (const visual of prop.getData('visuals') ?? []) {
+      visual.destroy();
+    }
+    prop.destroy();
+
+    for (let i = 0; i < 8; i += 1) {
+      const chunk = this.add.rectangle(
+        x + Phaser.Math.Between(-width / 2, width / 2),
+        y + Phaser.Math.Between(-height / 2, height / 2),
+        Phaser.Math.Between(3, 7),
+        Phaser.Math.Between(3, 7),
+        color,
+        0.86,
+      ).setDepth(13);
+      this.tweens.add({
+        targets: chunk,
+        x: chunk.x + Phaser.Math.Between(-34, 34) + Math.sign(chunk.x - impactX) * 18,
+        y: chunk.y + Phaser.Math.Between(14, 56) + Math.sign(chunk.y - impactY) * 12,
+        alpha: 0,
+        angle: Phaser.Math.Between(-140, 140),
+        duration: 360,
+        ease: 'Cubic.easeOut',
+        onComplete: () => chunk.destroy(),
+      });
     }
   }
 
