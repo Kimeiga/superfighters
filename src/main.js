@@ -448,7 +448,8 @@ class FightScene extends Phaser.Scene {
       const wasGrounded = player.wasGrounded;
       this.resolveCeilingSlopeContact(player);
       const slopeGrounded = this.resolveSlopeContact(player);
-      if (!slopeGrounded) {
+      const solidGrounded = !slopeGrounded && this.resolveSolidFloorContact(player);
+      if (!slopeGrounded && !solidGrounded) {
         continue;
       }
 
@@ -1837,12 +1838,9 @@ class FightScene extends Phaser.Scene {
       onThinPlatform: false,
       onSlope: false,
       currentSlope: null,
-      currentThinPlatform: null,
       lastFloorSlope: null,
       lastSlopeGroundedAt: -Infinity,
       dropUntil: 0,
-      dropPlatform: null,
-      dropSlopeKey: null,
       doorCooldownUntil: 0,
       currentPickup: null,
       weapon: null,
@@ -2982,9 +2980,6 @@ class FightScene extends Phaser.Scene {
       player.sprite.setFlipX(exitDirection < 0);
       player.sprite.setVelocity(0, 0);
       player.dropUntil = time + 120;
-      player.dropPlatform = null;
-      player.dropSlopeKey = null;
-      player.currentThinPlatform = null;
       player.doorCooldownUntil = time + 1100;
       this.spawnDoorFlash(door);
       this.spawnDoorFlash(target);
@@ -3013,6 +3008,9 @@ class FightScene extends Phaser.Scene {
     }
     sprite.y = topY + sprite.displayOriginY * sprite.scaleY - body.offset.y;
     body.y = topY;
+    body.prev.y = topY;
+    body.prevFrame.y = topY;
+    body.autoFrame.y = topY;
     body.updateCenter();
   }
 
@@ -3041,76 +3039,67 @@ class FightScene extends Phaser.Scene {
     return tile === TILE_INDEX.solid || tile === TILE_INDEX.platform || tile === TILE_INDEX.movingPlatform;
   }
 
-  isDropLandingTile(tile) {
+  isSolidFloorTile(tile) {
     return (
       tile === TILE_INDEX.solid ||
-      tile === TILE_INDEX.platform ||
-      tile === TILE_INDEX.movingPlatform ||
-      tile === TILE_INDEX.slopeUp ||
-      tile === TILE_INDEX.slopeDown ||
-      tile === TILE_INDEX.slopePlatformUp ||
-      tile === TILE_INDEX.slopePlatformDown ||
       tile === TILE_INDEX.crate ||
       tile === TILE_INDEX.barrel ||
-      tile === TILE_INDEX.smallExplosive
+      tile === TILE_INDEX.smallExplosive ||
+      tile === TILE_INDEX.swingingCrate
     );
   }
 
-  canDropThroughThinSupport(player) {
+  getBodyFootSampleXs(body) {
+    return [
+      body.x + Math.max(2, body.width * 0.08),
+      body.x + body.width * 0.25,
+      body.x + body.width * 0.5,
+      body.x + body.width * 0.75,
+      body.x + body.width - Math.max(2, body.width * 0.08),
+    ];
+  }
+
+  resolveSolidFloorContact(player) {
     const level = this.editorLevel;
     const body = player?.sprite?.body;
-    if (!level || !body) {
-      return true;
+    if (!level || !body || player.climbing || body.velocity.y < -20) {
+      return false;
     }
 
     const tileSize = level.tileSize ?? 24;
     const footY = body.y + body.height;
-    const startY = Math.floor((footY + 1) / tileSize) + 1;
-    const sampleXs = [
-      body.x + body.width * 0.28,
-      body.x + body.width * 0.5,
-      body.x + body.width * 0.72,
-    ];
+    const sampleXs = this.getBodyFootSampleXs(body);
+    const baseTileY = Math.floor((footY + 2) / tileSize);
+    let bestTop = Infinity;
 
-    for (let tileY = startY; tileY < level.height; tileY += 1) {
+    for (let y = Math.max(0, baseTileY - 1); y <= Math.min(level.height - 1, baseTileY + 1); y += 1) {
+      const topY = y * tileSize;
+      if (footY < topY - 1 || footY > topY + Math.max(18, tileSize * 1.35)) {
+        continue;
+      }
+
       for (const sampleX of sampleXs) {
         const tileX = Math.floor(sampleX / tileSize);
         if (tileX < 0 || tileX >= level.width) {
           continue;
         }
-        if (this.isDropLandingTile(this.getEditorTileAt(tileX, tileY))) {
-          return true;
+        if (this.isSolidFloorTile(this.getEditorTileAt(tileX, y)) && topY < bestTop) {
+          bestTop = topY;
         }
       }
     }
 
-    return false;
-  }
-
-  getSlopeKey(slope) {
-    return slope ? `${slope.tileX},${slope.tileY}` : null;
-  }
-
-  setDropThroughSource(player, time) {
-    player.dropUntil = time + DROP_DURATION;
-    player.dropPlatform = player.currentThinPlatform ?? null;
-    player.dropSlopeKey = player.currentSlope?.thin ? this.getSlopeKey(player.currentSlope) : null;
-  }
-
-  shouldIgnoreDroppedPlatform(player, platform) {
-    return this.time.now < player.dropUntil && player.dropPlatform === platform;
-  }
-
-  shouldIgnoreDroppedSlope(player, slope) {
-    return this.time.now < player.dropUntil && player.dropSlopeKey === this.getSlopeKey(slope);
-  }
-
-  clearExpiredDropSource(player) {
-    if (this.time.now < player.dropUntil) {
-      return;
+    if (!Number.isFinite(bestTop)) {
+      return false;
     }
-    player.dropPlatform = null;
-    player.dropSlopeKey = null;
+
+    this.setPlayerBodyTop(player, bestTop - body.height);
+    body.setVelocityY(0);
+    body.touching.down = true;
+    body.blocked.down = true;
+    player.onSlope = false;
+    player.currentSlope = null;
+    return true;
   }
 
   resolveSlopeContact(player) {
@@ -3121,35 +3110,37 @@ class FightScene extends Phaser.Scene {
     }
 
     const body = player.sprite.body;
-    const footX = body.x + body.width / 2;
     const footY = body.y + body.height;
     const tileSize = this.editorLevel?.tileSize ?? 24;
-    const tileX = Math.floor(footX / tileSize);
     const tileY = Math.floor((footY + 3) / tileSize);
+    const sampleXs = this.getBodyFootSampleXs(body);
     let bestSurface = Infinity;
     let bestSlope = null;
 
-    for (let y = tileY - 1; y <= tileY + 1; y += 1) {
-      for (let x = tileX - 1; x <= tileX + 1; x += 1) {
-        const slope = this.slopeTileMap.get(`${x},${y}`);
-        if (!slope || slope.side !== 'floor') {
-          continue;
-        }
-        if (footX < slope.x - 2 || footX > slope.x + slope.size + 2) {
-          continue;
-        }
-        const localX = Phaser.Math.Clamp(footX - slope.x, 0, slope.size);
-        const surfaceY = slope.type === 'up'
-          ? slope.y + slope.size - localX
-          : slope.y + localX;
-        if (slope.thin && (this.shouldIgnoreDroppedSlope(player, slope) || body.velocity.y < -8)) {
-          continue;
-        }
-        const tolerance = body.velocity.y >= -20 ? 18 : 4;
-        const belowTolerance = slope.thin ? 10 : 26;
-        if (footY >= surfaceY - tolerance && footY <= surfaceY + belowTolerance && surfaceY < bestSurface) {
-          bestSurface = surfaceY;
-          bestSlope = slope;
+    for (const sampleX of sampleXs) {
+      const tileX = Math.floor(sampleX / tileSize);
+      for (let y = tileY - 1; y <= tileY + 1; y += 1) {
+        for (let x = tileX - 1; x <= tileX + 1; x += 1) {
+          const slope = this.slopeTileMap.get(`${x},${y}`);
+          if (!slope || slope.side !== 'floor') {
+            continue;
+          }
+          if (sampleX < slope.x - 2 || sampleX > slope.x + slope.size + 2) {
+            continue;
+          }
+          const localX = Phaser.Math.Clamp(sampleX - slope.x, 0, slope.size);
+          const surfaceY = slope.type === 'up'
+            ? slope.y + slope.size - localX
+            : slope.y + localX;
+          if (slope.thin && (this.time.now < player.dropUntil || body.velocity.y < -8)) {
+            continue;
+          }
+          const tolerance = body.velocity.y >= -20 ? 18 : 4;
+          const belowTolerance = slope.thin ? 12 : Math.max(34, slope.size * 1.5);
+          if (footY >= surfaceY - tolerance && footY <= surfaceY + belowTolerance && surfaceY < bestSurface) {
+            bestSurface = surfaceY;
+            bestSlope = slope;
+          }
         }
       }
     }
@@ -3170,7 +3161,6 @@ class FightScene extends Phaser.Scene {
     player.lastSlopeGroundedAt = this.time.now;
     if (bestSlope.thin) {
       player.onThinPlatform = true;
-      player.currentThinPlatform = null;
     }
     return true;
   }
@@ -3185,7 +3175,7 @@ class FightScene extends Phaser.Scene {
     if (!body || body.velocity.y < -20) {
       return false;
     }
-    if (slope.thin && this.shouldIgnoreDroppedSlope(player, slope)) {
+    if (slope.thin && this.time.now < player.dropUntil) {
       return false;
     }
 
@@ -3233,7 +3223,7 @@ class FightScene extends Phaser.Scene {
     if (body.velocity.y < -20) {
       return false;
     }
-    if (slope.thin && this.shouldIgnoreDroppedSlope(player, slope)) {
+    if (slope.thin && this.time.now < player.dropUntil) {
       return false;
     }
 
@@ -3324,11 +3314,11 @@ class FightScene extends Phaser.Scene {
 
   updatePlayer(player, time, delta) {
     const body = player.sprite.body;
-    this.clearExpiredDropSource(player);
     this.resolveCeilingSlopeContact(player);
     const slopeGrounded = this.resolveSlopeContact(player);
     const slopeBridgeGrounded = !slopeGrounded && this.resolveSlopeLandingBridge(player);
-    const grounded = body.blocked.down || body.touching.down || slopeGrounded || slopeBridgeGrounded;
+    const solidGrounded = !slopeGrounded && !slopeBridgeGrounded && this.resolveSolidFloorContact(player);
+    const grounded = body.blocked.down || body.touching.down || slopeGrounded || slopeBridgeGrounded || solidGrounded;
     const justLanded = grounded && !player.wasGrounded;
     player.wasGrounded = grounded;
     const input = player.inputState;
@@ -3345,7 +3335,6 @@ class FightScene extends Phaser.Scene {
     player.currentPickup = this.findNearbyPickup(player);
     if (!grounded) {
       player.onThinPlatform = false;
-      player.currentThinPlatform = null;
     }
     if (justLanded) {
       this.startJumpLand(player, time);
@@ -3409,15 +3398,14 @@ class FightScene extends Phaser.Scene {
     }
 
     if (
-      input.pressed.crouch &&
+      downHeld &&
       grounded &&
       player.onThinPlatform &&
-      this.canDropThroughThinSupport(player)
+      time >= player.dropUntil
     ) {
-      this.setDropThroughSource(player, time);
+      player.dropUntil = time + DROP_DURATION;
       player.sprite.setVelocityY(110);
       player.onThinPlatform = false;
-      player.currentThinPlatform = null;
     }
 
     const ladder = this.getIntersectingLadder(player);
@@ -4428,9 +4416,6 @@ class FightScene extends Phaser.Scene {
     player.powerup = null;
     player.grenadeAmmo = this.configData.grenades.startCount;
     player.dropUntil = 0;
-    player.dropPlatform = null;
-    player.dropSlopeKey = null;
-    player.currentThinPlatform = null;
     this.resetJumpState(player);
     player.jumpPrepUntil = 0;
     player.jumpLandUntil = 0;
@@ -4868,7 +4853,7 @@ class FightScene extends Phaser.Scene {
       return true;
     }
 
-    if (this.shouldIgnoreDroppedPlatform(player, platform) || player.climbing) {
+    if (this.time.now < player.dropUntil || player.climbing) {
       return false;
     }
 
@@ -4890,22 +4875,23 @@ class FightScene extends Phaser.Scene {
     }
 
     const highDir = slope.type === 'up' ? 1 : -1;
-    const movingTowardLanding = highDir > 0
-      ? body.velocity.x > 1 || player.inputState?.down?.right
-      : body.velocity.x < -1 || player.inputState?.down?.left;
-    if (!movingTowardLanding) {
-      return false;
-    }
-
     const highEdgeX = highDir > 0 ? slope.x + slope.size : slope.x;
+    const lowEdgeX = highDir > 0 ? slope.x : slope.x + slope.size;
     const platformSideX = highDir > 0 ? platformBody.x : platformBody.x + platformBody.width;
-    if (Math.abs(platformSideX - highEdgeX) > 2 || Math.abs(platformBody.y - slope.y) > 2) {
+    const lowDir = -highDir;
+    const lowPlatformSideX = lowDir > 0 ? platformBody.x : platformBody.x + platformBody.width;
+    const platformSpansY = (targetY) => platformBody.y <= targetY + 2 && platformBody.y + platformBody.height >= targetY - 2;
+    const adjacentHighEdge = Math.abs(platformSideX - highEdgeX) <= 2 && platformSpansY(slope.y);
+    const adjacentLowEdge =
+      Math.abs(lowPlatformSideX - lowEdgeX) <= 2 &&
+      platformSpansY(slope.y + slope.size);
+    if (!adjacentHighEdge && !adjacentLowEdge) {
       return false;
     }
 
     const footX = body.x + body.width / 2;
-    const distanceToEdge = highDir > 0 ? highEdgeX - footX : footX - highEdgeX;
-    if (distanceToEdge < -body.width * 0.65 || distanceToEdge > body.width * 0.9) {
+    const edgeX = adjacentHighEdge ? highEdgeX : lowEdgeX;
+    if (Math.abs(footX - edgeX) > body.width * 0.95) {
       return false;
     }
 
@@ -4914,14 +4900,14 @@ class FightScene extends Phaser.Scene {
     const surfaceY = slope.type === 'up'
       ? slope.y + slope.size - localX
       : slope.y + localX;
-    return footY >= surfaceY - 5 && footY <= slope.y + slope.size + 6;
+    const belowTolerance = slope.thin ? 12 : 34;
+    return footY >= surfaceY - 7 && footY <= surfaceY + belowTolerance;
   }
 
   handlePlatformContact(sprite, platform) {
     const player = this.playerBySprite.get(sprite);
     if (player && platform.getData('thin')) {
       player.onThinPlatform = true;
-      player.currentThinPlatform = platform;
     }
   }
 
