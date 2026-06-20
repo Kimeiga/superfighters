@@ -2925,6 +2925,17 @@ class FightScene extends Phaser.Scene {
     });
   }
 
+  setPlayerBodyTop(player, topY) {
+    const { sprite } = player;
+    const body = sprite.body;
+    const deltaY = topY - body.y;
+    if (Math.abs(deltaY) < 0.001) {
+      return;
+    }
+    sprite.y = topY + sprite.displayOriginY * sprite.scaleY - body.offset.y;
+    body.y = topY;
+  }
+
   resolveSlopeContact(player) {
     player.onSlope = false;
     if (!this.slopeTiles.length || player.climbing) {
@@ -2965,8 +2976,7 @@ class FightScene extends Phaser.Scene {
       return false;
     }
 
-    body.y = bestSurface - body.height;
-    player.sprite.y = body.y + body.height / 2;
+    this.setPlayerBodyTop(player, bestSurface - body.height);
     if (body.velocity.y > 0) {
       body.setVelocityY(0);
     }
@@ -3017,8 +3027,7 @@ class FightScene extends Phaser.Scene {
       return false;
     }
 
-    body.y = bestSurface;
-    player.sprite.y = body.y + body.height / 2;
+    this.setPlayerBodyTop(player, bestSurface);
     if (body.velocity.y < 0) {
       body.setVelocityY(0);
     }
