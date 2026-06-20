@@ -9,6 +9,8 @@ export const TILE_DEFS = [
   { id: 'solid', label: 'Wall', color: '#30283b', collides: true },
   { id: 'slopeUp', label: 'Slope Up', color: '#3f354d', collides: true, slope: 'up' },
   { id: 'slopeDown', label: 'Slope Down', color: '#3f354d', collides: true, slope: 'down' },
+  { id: 'ceilingSlopeUp', label: 'Ceiling Slope Up', color: '#493d58', collides: true, slope: 'ceilingUp' },
+  { id: 'ceilingSlopeDown', label: 'Ceiling Slope Down', color: '#493d58', collides: true, slope: 'ceilingDown' },
   { id: 'platform', label: 'Drop Platform', color: '#d8bd72', oneWay: true },
   { id: 'movingPlatform', label: 'Moving Platform', color: '#b9dc7a', oneWay: true, moving: true },
   { id: 'crate', label: 'Crate', color: '#a8794a', collides: true, breakable: true },

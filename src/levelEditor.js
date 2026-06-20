@@ -50,7 +50,7 @@ const ctx = canvas.getContext('2d');
 const HISTORY_LIMIT = 80;
 const AUTOSAVE_DELAY_MS = 450;
 const TILE_CATEGORIES = [
-  { label: 'Terrain', tiles: ['empty', 'solid', 'slopeUp', 'slopeDown', 'backdrop', 'void'] },
+  { label: 'Terrain', tiles: ['empty', 'solid', 'slopeUp', 'slopeDown', 'ceilingSlopeUp', 'ceilingSlopeDown', 'backdrop', 'void'] },
   { label: 'Platforms', tiles: ['platform', 'movingPlatform'] },
   { label: 'Breakables', tiles: ['crate', 'barrel', 'smallExplosive', 'swingingCrate'] },
   { label: 'Glass', tiles: ['glassLeft', 'glassRight', 'glass'] },
@@ -114,6 +114,30 @@ const PREFABS = {
     legend: { D: 'slopeDown' },
     anchorX: 0,
     anchorY: 3,
+  },
+  ceilingStairsUp: {
+    label: 'Ceiling Stairs Up',
+    rows: [
+      'U   ',
+      ' U  ',
+      '  U ',
+      '   U',
+    ],
+    legend: { U: 'ceilingSlopeUp' },
+    anchorX: 0,
+    anchorY: 0,
+  },
+  ceilingStairsDown: {
+    label: 'Ceiling Stairs Down',
+    rows: [
+      '   D',
+      '  D ',
+      ' D  ',
+      'D   ',
+    ],
+    legend: { D: 'ceilingSlopeDown' },
+    anchorX: 0,
+    anchorY: 0,
   },
   doorPair: {
     label: 'Door Pair',
@@ -1159,6 +1183,36 @@ function drawEditorTile(context, def, x, y, size) {
       context.lineTo(x + size, y + size - 1);
       context.stroke();
       break;
+    case 'ceilingSlopeUp':
+      context.fillStyle = def.color;
+      context.beginPath();
+      context.moveTo(x, y);
+      context.lineTo(x + size, y);
+      context.lineTo(x, y + size);
+      context.closePath();
+      context.fill();
+      context.strokeStyle = '#78c073';
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(x, y + size - 1);
+      context.lineTo(x + size, y + 1);
+      context.stroke();
+      break;
+    case 'ceilingSlopeDown':
+      context.fillStyle = def.color;
+      context.beginPath();
+      context.moveTo(x, y);
+      context.lineTo(x + size, y);
+      context.lineTo(x + size, y + size);
+      context.closePath();
+      context.fill();
+      context.strokeStyle = '#78c073';
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(x, y + 1);
+      context.lineTo(x + size, y + size - 1);
+      context.stroke();
+      break;
     case 'platform':
       context.fillStyle = '#f6e39a';
       context.fillRect(x, y, size, Math.max(3, size * 0.18));
@@ -1334,14 +1388,15 @@ function drawColliderPreview() {
       ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
     }
   }
-  for (const slope of findTiles('slopeUp').concat(findTiles('slopeDown'))) {
+  for (const slope of findTiles('slopeUp')
+    .concat(findTiles('slopeDown'), findTiles('ceilingSlopeUp'), findTiles('ceilingSlopeDown'))) {
     const tile = level.grid[slope.y * level.width + slope.x];
     const def = TILE_DEFS[tile];
     const x = slope.x * level.tileSize;
     const y = slope.y * level.tileSize;
     ctx.strokeStyle = '#78c073';
     ctx.beginPath();
-    if (def.id === 'slopeUp') {
+    if (def.id === 'slopeUp' || def.id === 'ceilingSlopeUp') {
       ctx.moveTo(x, y + level.tileSize);
       ctx.lineTo(x + level.tileSize, y);
     } else {
@@ -1454,7 +1509,11 @@ function strokeTileRect(rect, color, width) {
 function updateUi(message = null) {
   const mergedSolid = mergeTilesToRects(level, ['solid', 'glass', 'glassLeft', 'glassRight', 'crate', 'barrel', 'smallExplosive', 'swingingCrate']).length;
   const mergedPlatforms = mergeTilesToRects(level, ['platform', 'movingPlatform']).length;
-  const slopeCount = findTiles('slopeUp').length + findTiles('slopeDown').length;
+  const slopeCount =
+    findTiles('slopeUp').length +
+    findTiles('slopeDown').length +
+    findTiles('ceilingSlopeUp').length +
+    findTiles('ceilingSlopeDown').length;
   statsText.textContent =
     `${level.width}x${level.height} tiles, ${countNonEmptyTiles(level)} filled, ` +
     `${mergedSolid + mergedPlatforms + slopeCount} collider pieces`;
@@ -1565,7 +1624,9 @@ function validateLevel() {
     mergeTilesToRects(level, ['platform', 'movingPlatform']).length +
     mergeTilesToRects(level, ['crate', 'barrel', 'smallExplosive', 'swingingCrate']).length +
     findTiles('slopeUp').length +
-    findTiles('slopeDown').length;
+    findTiles('slopeDown').length +
+    findTiles('ceilingSlopeUp').length +
+    findTiles('ceilingSlopeDown').length;
   if (colliderCount > 250) {
     warnings.push(`High collider count (${colliderCount}); use larger rectangles where possible.`);
   }

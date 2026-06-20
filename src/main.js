@@ -765,14 +765,20 @@ class FightScene extends Phaser.Scene {
         const worldX = x * level.tileSize + level.tileSize / 2;
         const worldY = y * level.tileSize + level.tileSize / 2;
 
-        if (tile === TILE_INDEX.slopeUp || tile === TILE_INDEX.slopeDown) {
+        if (
+          tile === TILE_INDEX.slopeUp ||
+          tile === TILE_INDEX.slopeDown ||
+          tile === TILE_INDEX.ceilingSlopeUp ||
+          tile === TILE_INDEX.ceilingSlopeDown
+        ) {
           const slope = {
             x: x * level.tileSize,
             y: y * level.tileSize,
             tileX: x,
             tileY: y,
             size: level.tileSize,
-            type: tile === TILE_INDEX.slopeUp ? 'up' : 'down',
+            type: tile === TILE_INDEX.slopeUp || tile === TILE_INDEX.ceilingSlopeUp ? 'up' : 'down',
+            side: tile === TILE_INDEX.ceilingSlopeUp || tile === TILE_INDEX.ceilingSlopeDown ? 'ceiling' : 'floor',
           };
           this.slopeTiles.push(slope);
           this.slopeTileMap.set(`${x},${y}`, slope);
@@ -899,6 +905,26 @@ class FightScene extends Phaser.Scene {
           graphics.beginPath();
           graphics.moveTo(drawX, drawY);
           graphics.lineTo(drawX, drawY + tileSize);
+          graphics.lineTo(drawX + tileSize, drawY + tileSize);
+          graphics.closePath();
+          graphics.fillPath();
+          graphics.lineStyle(2, COLORS.platformTop, 0.9);
+          graphics.lineBetween(drawX, drawY + 1, drawX + tileSize, drawY + tileSize - 1);
+        } else if (def.id === 'ceilingSlopeUp') {
+          graphics.fillStyle(color, alpha);
+          graphics.beginPath();
+          graphics.moveTo(drawX, drawY);
+          graphics.lineTo(drawX + tileSize, drawY);
+          graphics.lineTo(drawX, drawY + tileSize);
+          graphics.closePath();
+          graphics.fillPath();
+          graphics.lineStyle(2, COLORS.platformTop, 0.9);
+          graphics.lineBetween(drawX, drawY + tileSize - 1, drawX + tileSize, drawY + 1);
+        } else if (def.id === 'ceilingSlopeDown') {
+          graphics.fillStyle(color, alpha);
+          graphics.beginPath();
+          graphics.moveTo(drawX, drawY);
+          graphics.lineTo(drawX + tileSize, drawY);
           graphics.lineTo(drawX + tileSize, drawY + tileSize);
           graphics.closePath();
           graphics.fillPath();
@@ -2917,7 +2943,7 @@ class FightScene extends Phaser.Scene {
     for (let y = tileY - 1; y <= tileY + 1; y += 1) {
       for (let x = tileX - 1; x <= tileX + 1; x += 1) {
         const slope = this.slopeTileMap.get(`${x},${y}`);
-        if (!slope) {
+        if (!slope || slope.side !== 'floor') {
           continue;
         }
         if (footX < slope.x - 2 || footX > slope.x + slope.size + 2) {
@@ -2950,8 +2976,60 @@ class FightScene extends Phaser.Scene {
     return true;
   }
 
+  resolveCeilingSlopeContact(player) {
+    if (!this.slopeTiles.length || player.climbing) {
+      return false;
+    }
+
+    const body = player.sprite.body;
+    const headX = body.x + body.width / 2;
+    const headY = body.y;
+    const tileSize = this.editorLevel?.tileSize ?? 24;
+    const tileX = Math.floor(headX / tileSize);
+    const tileY = Math.floor((headY - 3) / tileSize);
+    let bestSurface = -Infinity;
+    let hitCeiling = false;
+
+    for (let y = tileY - 1; y <= tileY + 1; y += 1) {
+      for (let x = tileX - 1; x <= tileX + 1; x += 1) {
+        const slope = this.slopeTileMap.get(`${x},${y}`);
+        if (!slope || slope.side !== 'ceiling') {
+          continue;
+        }
+        if (headX < slope.x - 2 || headX > slope.x + slope.size + 2) {
+          continue;
+        }
+
+        const localX = Phaser.Math.Clamp(headX - slope.x, 0, slope.size);
+        const surfaceY = slope.type === 'up'
+          ? slope.y + slope.size - localX
+          : slope.y + localX;
+        const tolerance = body.velocity.y <= 20 ? 16 : 5;
+        const bodyOverlapsTile = body.y + body.height > slope.y && body.y < slope.y + slope.size;
+        if (bodyOverlapsTile && headY <= surfaceY + tolerance && surfaceY > bestSurface) {
+          bestSurface = surfaceY;
+          hitCeiling = true;
+        }
+      }
+    }
+
+    if (!hitCeiling) {
+      return false;
+    }
+
+    body.y = bestSurface;
+    player.sprite.y = body.y + body.height / 2;
+    if (body.velocity.y < 0) {
+      body.setVelocityY(0);
+    }
+    body.touching.up = true;
+    body.blocked.up = true;
+    return true;
+  }
+
   updatePlayer(player, time, delta) {
     const body = player.sprite.body;
+    this.resolveCeilingSlopeContact(player);
     const slopeGrounded = this.resolveSlopeContact(player);
     const grounded = body.blocked.down || body.touching.down || slopeGrounded;
     const justLanded = grounded && !player.wasGrounded;
