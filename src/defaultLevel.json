@@ -36,6 +36,21 @@
       "type": "solid"
     },
     {
+      "start": 1070,
+      "length": 1,
+      "type": "light"
+    },
+    {
+      "start": 1075,
+      "length": 1,
+      "type": "light"
+    },
+    {
+      "start": 1080,
+      "length": 1,
+      "type": "light"
+    },
+    {
       "start": 1088,
       "length": 1,
       "type": "solid"
@@ -74,6 +89,21 @@
       "start": 1258,
       "length": 1,
       "type": "crate"
+    },
+    {
+      "start": 1259,
+      "length": 1,
+      "type": "barrel"
+    },
+    {
+      "start": 1260,
+      "length": 1,
+      "type": "pickup"
+    },
+    {
+      "start": 1275,
+      "length": 1,
+      "type": "swingingCrate"
     },
     {
       "start": 1280,
@@ -121,6 +151,11 @@
       "type": "ladder"
     },
     {
+      "start": 1455,
+      "length": 1,
+      "type": "swingingCrate"
+    },
+    {
       "start": 1472,
       "length": 1,
       "type": "glassLeft"
@@ -141,6 +176,11 @@
       "type": "ladder"
     },
     {
+      "start": 1553,
+      "length": 1,
+      "type": "swingingCrate"
+    },
+    {
       "start": 1557,
       "length": 1,
       "type": "crate"
@@ -151,8 +191,28 @@
       "type": "glassLeft"
     },
     {
-      "start": 1580,
+      "start": 1570,
+      "length": 1,
+      "type": "pickup"
+    },
+    {
+      "start": 1571,
+      "length": 1,
+      "type": "crate"
+    },
+    {
+      "start": 1574,
       "length": 2,
+      "type": "crate"
+    },
+    {
+      "start": 1580,
+      "length": 1,
+      "type": "door"
+    },
+    {
+      "start": 1581,
+      "length": 1,
       "type": "solid"
     },
     {
@@ -166,8 +226,8 @@
       "type": "ladder"
     },
     {
-      "start": 1652,
-      "length": 5,
+      "start": 1651,
+      "length": 6,
       "type": "platform"
     },
     {
@@ -184,6 +244,16 @@
       "start": 1735,
       "length": 1,
       "type": "ladder"
+    },
+    {
+      "start": 1747,
+      "length": 1,
+      "type": "pickup"
+    },
+    {
+      "start": 1748,
+      "length": 1,
+      "type": "smallExplosive"
     },
     {
       "start": 1772,
@@ -206,8 +276,8 @@
       "type": "p1"
     },
     {
-      "start": 1842,
-      "length": 3,
+      "start": 1841,
+      "length": 4,
       "type": "platform"
     },
     {
@@ -231,8 +301,18 @@
       "type": "ladder"
     },
     {
+      "start": 1933,
+      "length": 1,
+      "type": "barrel"
+    },
+    {
       "start": 1964,
-      "length": 2,
+      "length": 1,
+      "type": "door"
+    },
+    {
+      "start": 1965,
+      "length": 1,
       "type": "solid"
     },
     {
@@ -271,9 +351,24 @@
       "type": "slopePlatformDown"
     },
     {
+      "start": 2133,
+      "length": 1,
+      "type": "barrel"
+    },
+    {
+      "start": 2138,
+      "length": 1,
+      "type": "barrel"
+    },
+    {
       "start": 2148,
       "length": 1,
       "type": "crate"
+    },
+    {
+      "start": 2153,
+      "length": 1,
+      "type": "barrel"
     },
     {
       "start": 2156,
@@ -316,6 +411,21 @@
       "type": "solid"
     },
     {
+      "start": 2327,
+      "length": 1,
+      "type": "barrel"
+    },
+    {
+      "start": 2328,
+      "length": 1,
+      "type": "pickup"
+    },
+    {
+      "start": 2342,
+      "length": 1,
+      "type": "smallExplosive"
+    },
+    {
       "start": 2348,
       "length": 2,
       "type": "solid"
@@ -356,9 +466,34 @@
       "type": "solid"
     },
     {
+      "start": 2508,
+      "length": 1,
+      "type": "pickup"
+    },
+    {
+      "start": 2514,
+      "length": 1,
+      "type": "crate"
+    },
+    {
       "start": 2517,
       "length": 1,
       "type": "crate"
+    },
+    {
+      "start": 2522,
+      "length": 1,
+      "type": "barrel"
+    },
+    {
+      "start": 2530,
+      "length": 1,
+      "type": "barrel"
+    },
+    {
+      "start": 2535,
+      "length": 1,
+      "type": "pickup"
     },
     {
       "start": 2537,
@@ -411,6 +546,11 @@
       "type": "slopeDown"
     },
     {
+      "start": 2709,
+      "length": 1,
+      "type": "barrel"
+    },
+    {
       "start": 2718,
       "length": 1,
       "type": "slopeUp"
@@ -436,5 +576,42 @@
       "type": "ceilingSlopeUp"
     }
   ],
-  "pickupSpecs": []
+  "pickupSpecs": [
+    {
+      "x": 34,
+      "y": 16,
+      "kind": "random",
+      "id": "random"
+    },
+    {
+      "x": 24,
+      "y": 24,
+      "kind": "random",
+      "id": "random"
+    },
+    {
+      "x": 19,
+      "y": 18,
+      "kind": "random",
+      "id": "random"
+    },
+    {
+      "x": 12,
+      "y": 26,
+      "kind": "random",
+      "id": "random"
+    },
+    {
+      "x": 12,
+      "y": 13,
+      "kind": "random",
+      "id": "random"
+    },
+    {
+      "x": 39,
+      "y": 26,
+      "kind": "random",
+      "id": "random"
+    }
+  ]
 }
