@@ -11,8 +11,8 @@ export const TILE_DEFS = [
   { id: 'slopeDown', label: 'Slope Down', color: '#3f354d', collides: true, slope: 'down' },
   { id: 'ceilingSlopeUp', label: 'Ceiling Slope Up', color: '#493d58', collides: true, slope: 'ceilingUp' },
   { id: 'ceilingSlopeDown', label: 'Ceiling Slope Down', color: '#493d58', collides: true, slope: 'ceilingDown' },
-  { id: 'platform', label: 'Drop Platform', color: '#d8bd72', oneWay: true },
-  { id: 'movingPlatform', label: 'Moving Platform', color: '#b9dc7a', oneWay: true, moving: true },
+  { id: 'platform', label: 'Drop Platform', color: '#8b929c', oneWay: true },
+  { id: 'movingPlatform', label: 'Moving Platform', color: '#8b929c', oneWay: true, moving: true },
   { id: 'crate', label: 'Crate', color: '#a8794a', collides: true, breakable: true },
   { id: 'barrel', label: 'Exploding Barrel', color: '#cc6547', collides: true, explosive: true },
   { id: 'smallExplosive', label: 'Small Explosive', color: '#ff9f43', collides: true, explosive: true },
@@ -30,6 +30,8 @@ export const TILE_DEFS = [
   { id: 'pickup', label: 'Item Pickup', color: '#89e072', marker: true },
   { id: 'p1', label: 'P1', color: '#55a7ff', marker: true },
   { id: 'p2', label: 'P2', color: '#ff6f91', marker: true },
+  { id: 'slopePlatformUp', label: 'Platform Up', color: '#8b929c', oneWay: true, slope: 'platformUp' },
+  { id: 'slopePlatformDown', label: 'Platform Down', color: '#8b929c', oneWay: true, slope: 'platformDown' },
 ];
 
 export const TILE_INDEX = Object.fromEntries(TILE_DEFS.map((tile, index) => [tile.id, index]));

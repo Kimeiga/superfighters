@@ -49,9 +49,10 @@ const ctx = canvas.getContext('2d');
 
 const HISTORY_LIMIT = 80;
 const AUTOSAVE_DELAY_MS = 450;
+const PLATFORM_STROKE_WIDTH = 4;
 const TILE_CATEGORIES = [
   { label: 'Terrain', tiles: ['empty', 'solid', 'slopeUp', 'slopeDown', 'ceilingSlopeUp', 'ceilingSlopeDown', 'backdrop', 'void'] },
-  { label: 'Platforms', tiles: ['platform', 'movingPlatform'] },
+  { label: 'Platforms', tiles: ['platform', 'slopePlatformUp', 'slopePlatformDown', 'movingPlatform'] },
   { label: 'Breakables', tiles: ['crate', 'barrel', 'smallExplosive', 'swingingCrate'] },
   { label: 'Glass', tiles: ['glassLeft', 'glassRight', 'glass'] },
   { label: 'Ladders', tiles: ['ladderLeft', 'ladderRight', 'ladder'] },
@@ -76,6 +77,30 @@ const PREFABS = {
     legend: { M: 'movingPlatform' },
     anchorX: 3,
     anchorY: 0,
+  },
+  rampPlatformUp: {
+    label: 'Platform Ramp Up',
+    rows: [
+      '   U',
+      '  U ',
+      ' U  ',
+      'U   ',
+    ],
+    legend: { U: 'slopePlatformUp' },
+    anchorX: 0,
+    anchorY: 3,
+  },
+  rampPlatformDown: {
+    label: 'Platform Ramp Down',
+    rows: [
+      'D   ',
+      ' D  ',
+      '  D ',
+      '   D',
+    ],
+    legend: { D: 'slopePlatformDown' },
+    anchorX: 0,
+    anchorY: 3,
   },
   ladder: {
     label: 'Ladder Shaft',
@@ -1214,18 +1239,28 @@ function drawEditorTile(context, def, x, y, size) {
       context.stroke();
       break;
     case 'platform':
-      context.fillStyle = '#f6e39a';
-      context.fillRect(x, y, size, Math.max(3, size * 0.18));
-      context.fillStyle = '#7a6641';
-      context.fillRect(x, y + Math.max(4, size * 0.18), size, Math.max(2, size * 0.12));
+      context.fillStyle = def.color;
+      context.fillRect(x, y, size, Math.min(PLATFORM_STROKE_WIDTH, size));
+      break;
+    case 'slopePlatformUp':
+      context.strokeStyle = def.color;
+      context.lineWidth = PLATFORM_STROKE_WIDTH;
+      context.beginPath();
+      context.moveTo(x, y + size - 2);
+      context.lineTo(x + size, y + 2);
+      context.stroke();
+      break;
+    case 'slopePlatformDown':
+      context.strokeStyle = def.color;
+      context.lineWidth = PLATFORM_STROKE_WIDTH;
+      context.beginPath();
+      context.moveTo(x, y + 2);
+      context.lineTo(x + size, y + size - 2);
+      context.stroke();
       break;
     case 'movingPlatform':
-      context.fillStyle = '#d8f39a';
-      context.fillRect(x, y, size, Math.max(3, size * 0.2));
-      context.fillStyle = '#304d3b';
-      context.fillRect(x, y + Math.max(4, size * 0.2), size, Math.max(2, size * 0.13));
-      context.fillStyle = '#d8f39a';
-      context.fillRect(x + size * 0.45, y + size * 0.42, size * 0.1, size * 0.32);
+      context.fillStyle = def.color;
+      context.fillRect(x, y, size, Math.min(PLATFORM_STROKE_WIDTH, size));
       break;
     case 'crate':
     case 'swingingCrate':
@@ -1375,7 +1410,6 @@ function getMarkerLabel(def, x, y) {
 function drawColliderPreview() {
   const rectSets = [
     { rects: mergeTilesToRects(level, ['solid']), color: '#35f2ff' },
-    { rects: mergeTilesToRects(level, ['platform', 'movingPlatform']), color: '#ffd166' },
     { rects: mergeTilesToRects(level, ['glass', 'glassLeft', 'glassRight']), color: '#ffffff' },
     { rects: mergeTilesToRects(level, ['crate', 'barrel', 'smallExplosive', 'swingingCrate']), color: '#ff9f43' },
   ];
@@ -1388,15 +1422,30 @@ function drawColliderPreview() {
       ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
     }
   }
+  const platformRects = mergeTilesToRects(level, ['platform', 'movingPlatform']);
+  ctx.strokeStyle = '#ffd166';
+  ctx.lineWidth = PLATFORM_STROKE_WIDTH / camera.zoom;
+  for (const rect of platformRects) {
+    ctx.beginPath();
+    ctx.moveTo(rect.x, rect.y);
+    ctx.lineTo(rect.x + rect.width, rect.y);
+    ctx.stroke();
+  }
   for (const slope of findTiles('slopeUp')
-    .concat(findTiles('slopeDown'), findTiles('ceilingSlopeUp'), findTiles('ceilingSlopeDown'))) {
+    .concat(
+      findTiles('slopeDown'),
+      findTiles('ceilingSlopeUp'),
+      findTiles('ceilingSlopeDown'),
+      findTiles('slopePlatformUp'),
+      findTiles('slopePlatformDown'),
+    )) {
     const tile = level.grid[slope.y * level.width + slope.x];
     const def = TILE_DEFS[tile];
     const x = slope.x * level.tileSize;
     const y = slope.y * level.tileSize;
     ctx.strokeStyle = '#78c073';
     ctx.beginPath();
-    if (def.id === 'slopeUp' || def.id === 'ceilingSlopeUp') {
+    if (def.id === 'slopeUp' || def.id === 'ceilingSlopeUp' || def.id === 'slopePlatformUp') {
       ctx.moveTo(x, y + level.tileSize);
       ctx.lineTo(x + level.tileSize, y);
     } else {
@@ -1513,7 +1562,9 @@ function updateUi(message = null) {
     findTiles('slopeUp').length +
     findTiles('slopeDown').length +
     findTiles('ceilingSlopeUp').length +
-    findTiles('ceilingSlopeDown').length;
+    findTiles('ceilingSlopeDown').length +
+    findTiles('slopePlatformUp').length +
+    findTiles('slopePlatformDown').length;
   statsText.textContent =
     `${level.width}x${level.height} tiles, ${countNonEmptyTiles(level)} filled, ` +
     `${mergedSolid + mergedPlatforms + slopeCount} collider pieces`;
@@ -1611,7 +1662,11 @@ function validateLevel() {
 
   for (let y = Math.max(0, level.height - 2); y < level.height; y += 1) {
     for (let x = 0; x < level.width; x += 1) {
-      if (level.grid[y * level.width + x] === TILE_INDEX.platform) {
+      if (
+        level.grid[y * level.width + x] === TILE_INDEX.platform ||
+        level.grid[y * level.width + x] === TILE_INDEX.slopePlatformUp ||
+        level.grid[y * level.width + x] === TILE_INDEX.slopePlatformDown
+      ) {
         warnings.push('One-way platform exists on the bottom rows; use Solid for bottom floors.');
         y = level.height;
         break;
@@ -1626,7 +1681,9 @@ function validateLevel() {
     findTiles('slopeUp').length +
     findTiles('slopeDown').length +
     findTiles('ceilingSlopeUp').length +
-    findTiles('ceilingSlopeDown').length;
+    findTiles('ceilingSlopeDown').length +
+    findTiles('slopePlatformUp').length +
+    findTiles('slopePlatformDown').length;
   if (colliderCount > 250) {
     warnings.push(`High collider count (${colliderCount}); use larger rectangles where possible.`);
   }
@@ -1676,6 +1733,8 @@ function isFloorTile(tile) {
     TILE_INDEX.movingPlatform,
     TILE_INDEX.slopeUp,
     TILE_INDEX.slopeDown,
+    TILE_INDEX.slopePlatformUp,
+    TILE_INDEX.slopePlatformDown,
     TILE_INDEX.crate,
     TILE_INDEX.barrel,
     TILE_INDEX.smallExplosive,

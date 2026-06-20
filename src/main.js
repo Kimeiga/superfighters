@@ -17,6 +17,7 @@ const PLAYER_SCALE = 1;
 const UI_FONT = 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 const PLAYER_MAX_HEALTH = 100;
 const DROP_DURATION = 310;
+const PLATFORM_STROKE_WIDTH = 4;
 const AIM_HALF_ARC = Math.PI / 2;
 const INPUT_ACTIONS = ['left', 'right', 'jump', 'crouch', 'melee', 'pickup', 'shoot', 'grenade', 'powerup', 'aimUp', 'aimDown'];
 const GAME_DEFAULT_CAPTURE_CODES = new Set(['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'Slash', 'KeyE', 'Quote']);
@@ -107,7 +108,7 @@ const COLORS = {
   platformTop: 0x78c073,
   platformFace: 0x57495f,
   platformTrim: 0x30283b,
-  thinPlatform: 0xd8bd72,
+  thinPlatform: 0x8b929c,
   glass: 0xbfeaff,
   ladder: 0xb88751,
   grenade: 0x89e072,
@@ -810,16 +811,24 @@ class FightScene extends Phaser.Scene {
           tile === TILE_INDEX.slopeUp ||
           tile === TILE_INDEX.slopeDown ||
           tile === TILE_INDEX.ceilingSlopeUp ||
-          tile === TILE_INDEX.ceilingSlopeDown
+          tile === TILE_INDEX.ceilingSlopeDown ||
+          tile === TILE_INDEX.slopePlatformUp ||
+          tile === TILE_INDEX.slopePlatformDown
         ) {
+          const isUpSlope =
+            tile === TILE_INDEX.slopeUp ||
+            tile === TILE_INDEX.ceilingSlopeUp ||
+            tile === TILE_INDEX.slopePlatformUp;
+          const isCeilingSlope = tile === TILE_INDEX.ceilingSlopeUp || tile === TILE_INDEX.ceilingSlopeDown;
           const slope = {
             x: x * level.tileSize,
             y: y * level.tileSize,
             tileX: x,
             tileY: y,
             size: level.tileSize,
-            type: tile === TILE_INDEX.slopeUp || tile === TILE_INDEX.ceilingSlopeUp ? 'up' : 'down',
-            side: tile === TILE_INDEX.ceilingSlopeUp || tile === TILE_INDEX.ceilingSlopeDown ? 'ceiling' : 'floor',
+            type: isUpSlope ? 'up' : 'down',
+            side: isCeilingSlope ? 'ceiling' : 'floor',
+            thin: tile === TILE_INDEX.slopePlatformUp || tile === TILE_INDEX.slopePlatformDown,
           };
           this.slopeTiles.push(slope);
           this.slopeTileMap.set(`${x},${y}`, slope);
@@ -868,6 +877,8 @@ class FightScene extends Phaser.Scene {
       TILE_INDEX.movingPlatform,
       TILE_INDEX.slopeUp,
       TILE_INDEX.slopeDown,
+      TILE_INDEX.slopePlatformUp,
+      TILE_INDEX.slopePlatformDown,
       TILE_INDEX.crate,
       TILE_INDEX.barrel,
       TILE_INDEX.smallExplosive,
@@ -971,6 +982,15 @@ class FightScene extends Phaser.Scene {
           graphics.fillPath();
           graphics.lineStyle(2, COLORS.platformTop, 0.9);
           graphics.lineBetween(drawX, drawY + 1, drawX + tileSize, drawY + tileSize - 1);
+        } else if (def.id === 'platform') {
+          graphics.fillStyle(COLORS.thinPlatform, 1);
+          graphics.fillRect(drawX, drawY, tileSize, Math.min(PLATFORM_STROKE_WIDTH, tileSize));
+        } else if (def.id === 'slopePlatformUp') {
+          graphics.lineStyle(PLATFORM_STROKE_WIDTH, COLORS.thinPlatform, 1);
+          graphics.lineBetween(drawX, drawY + tileSize - 2, drawX + tileSize, drawY + 2);
+        } else if (def.id === 'slopePlatformDown') {
+          graphics.lineStyle(PLATFORM_STROKE_WIDTH, COLORS.thinPlatform, 1);
+          graphics.lineBetween(drawX, drawY + 2, drawX + tileSize, drawY + tileSize - 2);
         } else {
           graphics.fillStyle(color, alpha);
           graphics.fillRect(drawX, drawY, tileSize, tileSize);
@@ -984,11 +1004,6 @@ class FightScene extends Phaser.Scene {
           }
           graphics.fillStyle(0x000000, 0.18);
           graphics.fillRect(drawX, drawY + tileSize - 3, tileSize, 3);
-        } else if (def.id === 'platform') {
-          graphics.fillStyle(0xf6e39a, 1);
-          graphics.fillRect(drawX, drawY, tileSize, 4);
-          graphics.fillStyle(0x7a6641, 1);
-          graphics.fillRect(drawX, drawY + tileSize - 4, tileSize, 4);
         }
       }
     }
@@ -1010,20 +1025,22 @@ class FightScene extends Phaser.Scene {
 
   createMovingPlatform(rect) {
     const platform = this.add
-      .rectangle(rect.x + rect.width / 2, rect.y + rect.height / 2, rect.width, Math.max(8, rect.height * 0.42), 0xb9dc7a, 1)
+      .rectangle(rect.x + rect.width / 2, rect.y + rect.height / 2, rect.width, rect.height, COLORS.thinPlatform, 0)
       .setOrigin(0.5);
-    const top = this.add.rectangle(platform.x, platform.y - platform.displayHeight / 2 - 2, rect.width + 8, 4, 0xf6e39a, 1).setOrigin(0.5);
+    const visualHeight = Math.min(PLATFORM_STROKE_WIDTH, rect.height);
+    const visual = this.add
+      .rectangle(platform.x, rect.y + visualHeight / 2, rect.width, visualHeight, COLORS.thinPlatform, 1)
+      .setOrigin(0.5);
     platform.setData('thin', true);
     platform.setData('levelGeometry', true);
     platform.setData('indestructible', true);
-    platform.setData('visuals', [top]);
     this.physics.add.existing(platform, true);
-    platform.body.setSize(rect.width, Math.max(8, rect.height * 0.42));
+    platform.body.setSize(rect.width, rect.height);
     platform.body.updateFromGameObject();
     this.platforms.push(platform);
     this.movingPlatforms.push({
       body: platform,
-      visuals: [top],
+      visuals: [visual],
       baseY: platform.y,
       range: Math.max(rect.height * 1.8, (this.editorLevel?.tileSize ?? 24) * 2),
       phase: rect.x * 0.017,
@@ -1170,7 +1187,7 @@ class FightScene extends Phaser.Scene {
 
   createPlatform(x, y, width, height, thin, overrideColor = null) {
     const color = overrideColor ?? (thin ? COLORS.thinPlatform : COLORS.platformFace);
-    const platform = this.add.rectangle(x, y, width, height, color).setOrigin(0.5);
+    const platform = this.add.rectangle(x, y, width, height, color, thin ? 0 : 1).setOrigin(0.5);
     platform.setData('thin', thin);
     platform.setData('levelGeometry', true);
     platform.setData('indestructible', true);
@@ -1178,13 +1195,11 @@ class FightScene extends Phaser.Scene {
     platform.body.setSize(width, height);
     platform.body.updateFromGameObject();
 
-    if (!thin && overrideColor === null) {
-      this.add.rectangle(x, y - height / 2 - 3, width + 14, 8, COLORS.platformTop).setOrigin(0.5);
-    }
-
     if (thin) {
-      this.add.rectangle(x, y - height / 2 - 2, width + 10, 5, 0xf6e39a).setOrigin(0.5);
-      this.add.rectangle(x, y + height / 2 + 2, width + 6, 4, 0x7a6641).setOrigin(0.5);
+      const visualHeight = Math.min(PLATFORM_STROKE_WIDTH, height);
+      this.add.rectangle(x, y - height / 2 + visualHeight / 2, width, visualHeight, COLORS.thinPlatform).setOrigin(0.5);
+    } else if (overrideColor === null) {
+      this.add.rectangle(x, y - height / 2 - 3, width + 14, 8, COLORS.platformTop).setOrigin(0.5);
     }
 
     this.platforms.push(platform);
@@ -1822,9 +1837,12 @@ class FightScene extends Phaser.Scene {
       onThinPlatform: false,
       onSlope: false,
       currentSlope: null,
+      currentThinPlatform: null,
       lastFloorSlope: null,
       lastSlopeGroundedAt: -Infinity,
       dropUntil: 0,
+      dropPlatform: null,
+      dropSlopeKey: null,
       doorCooldownUntil: 0,
       currentPickup: null,
       weapon: null,
@@ -1923,6 +1941,17 @@ class FightScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(51);
 
+    this.coordText = this.add
+      .text(14, 28, '', {
+        fontFamily: UI_FONT,
+        fontSize: '12px',
+        color: '#eaf5ff',
+        stroke: '#172033',
+        strokeThickness: 1,
+      })
+      .setScrollFactor(0)
+      .setDepth(51);
+
     this.p2StatusText = this.add
       .text(0, 47, '', {
         fontFamily: UI_FONT,
@@ -1953,6 +1982,7 @@ class FightScene extends Phaser.Scene {
       this.hintText,
       this.timerText,
       this.p1StatusText,
+      this.coordText,
       this.p2StatusText,
       this.messageText,
     ]);
@@ -1960,13 +1990,15 @@ class FightScene extends Phaser.Scene {
   }
 
   positionHudObjects() {
-    if (!this.timerText || !this.messageText || !this.p2StatusText || !this.hintText) {
+    if (!this.timerText || !this.messageText || !this.p2StatusText || !this.hintText || !this.coordText) {
       return;
     }
 
     const width = this.getViewportWidth();
     const compact = width < 620 || isMobileLike();
     this.hintText.setVisible(!compact);
+    this.coordText.setPosition(compact ? 10 : 14, compact ? 8 : 28);
+    this.coordText.setFontSize(compact ? 11 : 12);
     this.timerText.setPosition(width / 2, compact ? 86 : 17);
     this.timerText.setFontSize(compact ? 20 : 24);
     this.p2StatusText.setPosition(width - (compact ? 18 : 24), compact ? 50 : 47);
@@ -2950,6 +2982,9 @@ class FightScene extends Phaser.Scene {
       player.sprite.setFlipX(exitDirection < 0);
       player.sprite.setVelocity(0, 0);
       player.dropUntil = time + 120;
+      player.dropPlatform = null;
+      player.dropSlopeKey = null;
+      player.currentThinPlatform = null;
       player.doorCooldownUntil = time + 1100;
       this.spawnDoorFlash(door);
       this.spawnDoorFlash(target);
@@ -3006,6 +3041,78 @@ class FightScene extends Phaser.Scene {
     return tile === TILE_INDEX.solid || tile === TILE_INDEX.platform || tile === TILE_INDEX.movingPlatform;
   }
 
+  isDropLandingTile(tile) {
+    return (
+      tile === TILE_INDEX.solid ||
+      tile === TILE_INDEX.platform ||
+      tile === TILE_INDEX.movingPlatform ||
+      tile === TILE_INDEX.slopeUp ||
+      tile === TILE_INDEX.slopeDown ||
+      tile === TILE_INDEX.slopePlatformUp ||
+      tile === TILE_INDEX.slopePlatformDown ||
+      tile === TILE_INDEX.crate ||
+      tile === TILE_INDEX.barrel ||
+      tile === TILE_INDEX.smallExplosive
+    );
+  }
+
+  canDropThroughThinSupport(player) {
+    const level = this.editorLevel;
+    const body = player?.sprite?.body;
+    if (!level || !body) {
+      return true;
+    }
+
+    const tileSize = level.tileSize ?? 24;
+    const footY = body.y + body.height;
+    const startY = Math.floor((footY + 1) / tileSize) + 1;
+    const sampleXs = [
+      body.x + body.width * 0.28,
+      body.x + body.width * 0.5,
+      body.x + body.width * 0.72,
+    ];
+
+    for (let tileY = startY; tileY < level.height; tileY += 1) {
+      for (const sampleX of sampleXs) {
+        const tileX = Math.floor(sampleX / tileSize);
+        if (tileX < 0 || tileX >= level.width) {
+          continue;
+        }
+        if (this.isDropLandingTile(this.getEditorTileAt(tileX, tileY))) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  getSlopeKey(slope) {
+    return slope ? `${slope.tileX},${slope.tileY}` : null;
+  }
+
+  setDropThroughSource(player, time) {
+    player.dropUntil = time + DROP_DURATION;
+    player.dropPlatform = player.currentThinPlatform ?? null;
+    player.dropSlopeKey = player.currentSlope?.thin ? this.getSlopeKey(player.currentSlope) : null;
+  }
+
+  shouldIgnoreDroppedPlatform(player, platform) {
+    return this.time.now < player.dropUntil && player.dropPlatform === platform;
+  }
+
+  shouldIgnoreDroppedSlope(player, slope) {
+    return this.time.now < player.dropUntil && player.dropSlopeKey === this.getSlopeKey(slope);
+  }
+
+  clearExpiredDropSource(player) {
+    if (this.time.now < player.dropUntil) {
+      return;
+    }
+    player.dropPlatform = null;
+    player.dropSlopeKey = null;
+  }
+
   resolveSlopeContact(player) {
     player.onSlope = false;
     player.currentSlope = null;
@@ -3035,8 +3142,12 @@ class FightScene extends Phaser.Scene {
         const surfaceY = slope.type === 'up'
           ? slope.y + slope.size - localX
           : slope.y + localX;
+        if (slope.thin && (this.shouldIgnoreDroppedSlope(player, slope) || body.velocity.y < -8)) {
+          continue;
+        }
         const tolerance = body.velocity.y >= -20 ? 18 : 4;
-        if (footY >= surfaceY - tolerance && footY <= surfaceY + 26 && surfaceY < bestSurface) {
+        const belowTolerance = slope.thin ? 10 : 26;
+        if (footY >= surfaceY - tolerance && footY <= surfaceY + belowTolerance && surfaceY < bestSurface) {
           bestSurface = surfaceY;
           bestSlope = slope;
         }
@@ -3057,6 +3168,10 @@ class FightScene extends Phaser.Scene {
     player.currentSlope = bestSlope;
     player.lastFloorSlope = bestSlope;
     player.lastSlopeGroundedAt = this.time.now;
+    if (bestSlope.thin) {
+      player.onThinPlatform = true;
+      player.currentThinPlatform = null;
+    }
     return true;
   }
 
@@ -3068,6 +3183,9 @@ class FightScene extends Phaser.Scene {
 
     const body = player.sprite.body;
     if (!body || body.velocity.y < -20) {
+      return false;
+    }
+    if (slope.thin && this.shouldIgnoreDroppedSlope(player, slope)) {
       return false;
     }
 
@@ -3113,6 +3231,9 @@ class FightScene extends Phaser.Scene {
 
     const body = player.sprite.body;
     if (body.velocity.y < -20) {
+      return false;
+    }
+    if (slope.thin && this.shouldIgnoreDroppedSlope(player, slope)) {
       return false;
     }
 
@@ -3203,6 +3324,7 @@ class FightScene extends Phaser.Scene {
 
   updatePlayer(player, time, delta) {
     const body = player.sprite.body;
+    this.clearExpiredDropSource(player);
     this.resolveCeilingSlopeContact(player);
     const slopeGrounded = this.resolveSlopeContact(player);
     const slopeBridgeGrounded = !slopeGrounded && this.resolveSlopeLandingBridge(player);
@@ -3223,6 +3345,7 @@ class FightScene extends Phaser.Scene {
     player.currentPickup = this.findNearbyPickup(player);
     if (!grounded) {
       player.onThinPlatform = false;
+      player.currentThinPlatform = null;
     }
     if (justLanded) {
       this.startJumpLand(player, time);
@@ -3288,11 +3411,13 @@ class FightScene extends Phaser.Scene {
     if (
       input.pressed.crouch &&
       grounded &&
-      player.onThinPlatform
+      player.onThinPlatform &&
+      this.canDropThroughThinSupport(player)
     ) {
-      player.dropUntil = time + DROP_DURATION;
+      this.setDropThroughSource(player, time);
       player.sprite.setVelocityY(110);
       player.onThinPlatform = false;
+      player.currentThinPlatform = null;
     }
 
     const ladder = this.getIntersectingLadder(player);
@@ -4303,6 +4428,9 @@ class FightScene extends Phaser.Scene {
     player.powerup = null;
     player.grenadeAmmo = this.configData.grenades.startCount;
     player.dropUntil = 0;
+    player.dropPlatform = null;
+    player.dropSlopeKey = null;
+    player.currentThinPlatform = null;
     this.resetJumpState(player);
     player.jumpPrepUntil = 0;
     player.jumpLandUntil = 0;
@@ -4732,11 +4860,15 @@ class FightScene extends Phaser.Scene {
       return true;
     }
 
-    if (!platform.getData('thin')) {
-      return !this.shouldIgnoreSlopeLandingSide(player, platform);
+    if (this.shouldIgnoreSlopeLandingSide(player, platform)) {
+      return false;
     }
 
-    if (this.time.now < player.dropUntil || player.climbing) {
+    if (!platform.getData('thin')) {
+      return true;
+    }
+
+    if (this.shouldIgnoreDroppedPlatform(player, platform) || player.climbing) {
       return false;
     }
 
@@ -4789,6 +4921,7 @@ class FightScene extends Phaser.Scene {
     const player = this.playerBySprite.get(sprite);
     if (player && platform.getData('thin')) {
       player.onThinPlatform = true;
+      player.currentThinPlatform = platform;
     }
   }
 
@@ -4971,8 +5104,21 @@ class FightScene extends Phaser.Scene {
     const seconds = String(secondsLeft % 60).padStart(2, '0');
     this.timerText.setText(`${minutes}:${seconds}`);
 
+    this.coordText?.setText(this.formatCoordinateLine());
     this.p1StatusText.setText(this.statusLine(this.p1));
     this.p2StatusText.setText(this.statusLine(this.p2));
+  }
+
+  formatCoordinateLine() {
+    const player = this.p1;
+    const body = player?.sprite?.body;
+    if (!player || !body) {
+      return '';
+    }
+    const tileSize = this.editorLevel?.tileSize ?? 24;
+    const footX = body.x + body.width / 2;
+    const footY = body.y + body.height;
+    return `P1 x:${Math.round(footX)} y:${Math.round(footY)} tile:${Math.floor(footX / tileSize)},${Math.floor(footY / tileSize)}`;
   }
 
   drawPlayerHud(x, y, width, player, alignRight, time) {
