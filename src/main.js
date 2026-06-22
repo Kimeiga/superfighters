@@ -441,6 +441,7 @@ class FightScene extends Phaser.Scene {
     this.updateMovingPlatforms(time);
     this.updateDynamicProps();
     this.updateSwingingCrates(delta);
+    this.updateBullets();
 
     for (const player of this.players) {
       this.updatePlayer(player, time, delta);
@@ -4946,13 +4947,27 @@ class FightScene extends Phaser.Scene {
     bullet.setData('explosiveRadius', weapon.explosiveRadius ?? 0);
     bullet.setData('explosiveDamage', weapon.explosiveDamage ?? weapon.damage);
 
-    this.time.delayedCall(weapon.bulletLifeMs, () => {
-      if (bullet.active) {
+    return bullet;
+  }
+
+  updateBullets() {
+    if (!this.bullets) {
+      return;
+    }
+
+    const margin = 240;
+    const minX = -margin;
+    const minY = -margin;
+    const maxX = this.worldWidth + margin;
+    const maxY = this.worldHeight + margin;
+    for (const bullet of this.bullets.getChildren()) {
+      if (!bullet?.active) {
+        continue;
+      }
+      if (bullet.x < minX || bullet.x > maxX || bullet.y < minY || bullet.y > maxY) {
         bullet.destroy();
       }
-    });
-
-    return bullet;
+    }
   }
 
   throwAimedGrenade(player, time) {
