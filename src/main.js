@@ -731,6 +731,9 @@ class FightScene extends Phaser.Scene {
         continue;
       }
       const setting = config[name];
+      if (this.anims.exists(animationKeys[name])) {
+        this.anims.remove(animationKeys[name]);
+      }
       this.anims.create({
         key: animationKeys[name],
         frames: makeFrameList1Based(setting, frameCount).map((frame) => ({
@@ -1148,7 +1151,7 @@ class FightScene extends Phaser.Scene {
     prop.setData('health', type === 'crate' || type === 'swingingCrate' ? 24 : 10);
     prop.setData('explosiveRadius', type === 'barrel' ? 98 : type === 'smallExplosive' ? 62 : 0);
     prop.setData('explosiveDamage', type === 'barrel' ? 44 : type === 'smallExplosive' ? 26 : 0);
-    prop.setData('levelGeometry', true);
+    prop.setData('levelGeometry', false);
     prop.setData('indestructible', false);
     prop.setData('visuals', visuals);
     this.physics.add.existing(prop, !(isSwinging || isPushableProp));
@@ -2586,7 +2589,11 @@ class FightScene extends Phaser.Scene {
       this.showMessage('Rematch requested', 700);
       return;
     }
-    window.location.reload();
+    pendingBootOptions = {
+      mode: this.cpuMode ? 'cpu' : 'local',
+      editorLevel: Boolean(this.editorLevel),
+    };
+    this.scene.restart();
   }
 
   createOnlineOverlay() {
@@ -4006,6 +4013,7 @@ class FightScene extends Phaser.Scene {
     }
 
     player.currentPickup = this.findNearbyPickup(player);
+    this.tryAutoPickup(player, time);
     if (!grounded) {
       player.onThinPlatform = false;
       player.currentThinPlatform = null;
@@ -5904,6 +5912,24 @@ class FightScene extends Phaser.Scene {
     }
 
     return closest;
+  }
+
+  tryAutoPickup(player, time = this.time.now) {
+    if (
+      this.isRemoteOnlineClient() ||
+      time < player.meleeAnimationUntil ||
+      time < player.pickupAnimationUntil
+    ) {
+      return false;
+    }
+
+    const pickup = player.currentPickup ?? this.findNearbyPickup(player);
+    if (!pickup?.active || !this.canTakePickup(player, pickup)) {
+      return false;
+    }
+
+    this.takePickup(player, pickup, null);
+    return true;
   }
 
   canTakePickup(player, pickup) {

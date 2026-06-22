@@ -184,8 +184,8 @@ window.__superfightersMechanicsSmoke = (async () => {
   p1.weapon = null;
   pickup = scene.createPickup(p1.sprite.x, p1.sprite.y, 'weapon', 'rifle');
   p1.currentPickup = pickup;
-  scene.handleMeleePressed(p1, scene.time.now + 10);
-  check('crouch melee picks up weapon', p1.weapon?.id === 'rifle' && !pickup.active, { weapon: p1.weapon?.id });
+  scene.handlePickupPressed(p1, scene.time.now + 10);
+  check('pickup button takes weapon while crouched', p1.weapon?.id === 'rifle' && !pickup.active, { weapon: p1.weapon?.id });
 
   p1.pickupAnimationUntil = 0;
   p1.meleeAnimationUntil = 0;
@@ -193,9 +193,9 @@ window.__superfightersMechanicsSmoke = (async () => {
   p1.weapon = scene.makeWeaponState('pistol');
   pickup = scene.createPickup(p1.sprite.x + 5, p1.sprite.y, 'weapon', 'sniper');
   p1.currentPickup = pickup;
-  scene.handleMeleePressed(p1, scene.time.now + 30);
+  scene.handlePickupPressed(p1, scene.time.now + 30);
   const droppedPistol = active(scene.pickups).some((item) => item.getData('kind') === 'weapon' && item.getData('id') === 'pistol');
-  check('crouch melee swaps weapon', p1.weapon?.id === 'sniper' && droppedPistol, { weapon: p1.weapon?.id, droppedPistol });
+  check('pickup button swaps weapon', p1.weapon?.id === 'sniper' && droppedPistol, { weapon: p1.weapon?.id, droppedPistol });
   clearGroup(scene.pickups);
 
   const aimCheck = (name, facing, vertical, shouldBeAbove) => {
@@ -247,9 +247,15 @@ window.__superfightersMechanicsSmoke = (async () => {
     const ammoBefore = p1.weapon.ammo;
     const originalSpawnBullet = scene.spawnBullet.bind(scene);
     const spawnedBullets = [];
+    const spawnedBulletStates = [];
     scene.spawnBullet = (...args) => {
       const spawnedBullet = originalSpawnBullet(...args);
       spawnedBullets.push(spawnedBullet);
+      spawnedBulletStates.push({
+        allowGravity: spawnedBullet?.body?.allowGravity,
+        velocityX: spawnedBullet?.body?.velocity?.x ?? 0,
+        velocityY: spawnedBullet?.body?.velocity?.y ?? 0,
+      });
       return spawnedBullet;
     };
     try {
@@ -270,8 +276,8 @@ window.__superfightersMechanicsSmoke = (async () => {
       ammoBefore,
       ammoAfter: p1.weapon?.ammo,
     });
-    check(`projectiles fly straight for ${id}`, spawnedBullets.every((bullet) => bullet?.body && !bullet.body.allowGravity && bullet.body.velocity.x > 0), {
-      velocities: spawnedBullets.map((bullet) => bullet?.body ? { x: Math.round(bullet.body.velocity.x), y: Math.round(bullet.body.velocity.y) } : null),
+    check(`projectiles fly straight for ${id}`, spawnedBulletStates.every((bullet) => !bullet.allowGravity && bullet.velocityX > 0), {
+      velocities: spawnedBulletStates.map((bullet) => ({ x: Math.round(bullet.velocityX), y: Math.round(bullet.velocityY) })),
     });
   }
   clearGroup(scene.bullets);
@@ -297,7 +303,7 @@ window.__superfightersMechanicsSmoke = (async () => {
   clearGroup(scene.bullets);
 
   const targetPlatform = scene.platforms.find((platform) => platform.active && platform.getData('levelGeometry'));
-  const taggedPlatforms = snapshotPlatforms();
+  const taggedPlatforms = snapshotPlatforms().filter((platform) => platform.levelGeometry);
   check('platform geometry is tagged indestructible', taggedPlatforms.length > 0 && taggedPlatforms.every((platform) => platform.levelGeometry && platform.indestructible), {
     platformCount: taggedPlatforms.length,
     taggedPlatforms,
@@ -339,17 +345,23 @@ window.__superfightersMechanicsSmoke = (async () => {
 
   resetPlayer(p1, 700, 484, 1);
   resetPlayer(p2, 1040, 484, -1);
+  p1.sprite.body.blocked.down = true;
+  p1.sprite.body.touching.down = true;
   const meleePivot = scene.getAimPivot(p1);
   const meleeWindow = scene.createWindow(meleePivot.x + p1.facing * 34, meleePivot.y, 30, 34);
   scene.performMeleeCombo(p1, scene.time.now + 1450);
+  scene.resolveMeleeActiveFrame(p1, p1.meleeAttackState.id);
   check('single melee hit breaks glass window', !meleeWindow.active, {
     windowActive: meleeWindow.active,
   });
 
   resetPlayer(p1, 700, 484, 1);
   resetPlayer(p2, 735, 484, -1);
+  p1.sprite.body.blocked.down = true;
+  p1.sprite.body.touching.down = true;
   p2.invulnerableUntil = 0;
   scene.performMeleeCombo(p1, scene.time.now + 1500);
+  scene.resolveMeleeActiveFrame(p1, p1.meleeAttackState.id);
   check('melee combo damages opponent', p2.health < 100, { p2Health: p2.health });
   check('normal melee does not knock down', p2.knockedUntil <= scene.time.now, {
     knockedUntil: p2.knockedUntil,
@@ -528,7 +540,7 @@ window.__superfightersMechanicsSmoke = (async () => {
   const deathDropY = p2.sprite.y - 18;
   scene.damagePlayer(p2, 999, 1, 250, 250, { source: 'test lethal' });
   const deathDrops = active(scene.pickups)
-    .filter((item) => Math.abs(item.y - deathDropY) < 1)
+    .filter((item) => Math.abs((item.getData('logicalY') ?? item.y) - deathDropY) < 1)
     .map((item) => `${item.getData('kind')}:${item.getData('id')}`);
   check('lethal damage respawns player with clean action state', (
     p1.kills === 1 &&
