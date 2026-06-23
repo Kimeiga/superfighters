@@ -10,6 +10,8 @@ const assetUrl = (path) => `${BASE_URL}${String(path).replace(/^\/+/, '')}`;
 const GAME_WIDTH = Math.floor(window.innerWidth);
 const GAME_HEIGHT = Math.floor(window.innerHeight);
 const RENDER_RESOLUTION = Math.min(3, Math.max(2, window.devicePixelRatio || 1));
+const CAMERA_ZOOM_SETTLE_EPSILON = 0.0015;
+const CAMERA_SCROLL_SETTLE_EPSILON = 0.08;
 const WORLD_WIDTH = Math.max(1900, GAME_WIDTH);
 const WORLD_HEIGHT = Math.max(720, GAME_HEIGHT);
 const FRAME_SIZE = 64;
@@ -559,6 +561,7 @@ class FightScene extends Phaser.Scene {
           fixedCanvas: true,
         }),
       );
+      this.setPixelTextureFilter(key);
     }
   }
 
@@ -588,6 +591,7 @@ class FightScene extends Phaser.Scene {
     graphics.lineBetween(0, 10, 5, 10);
     graphics.lineBetween(15, 10, 20, 10);
     graphics.generateTexture('crosshair-pixel', 20, 20);
+    this.setPixelTextureFilter('crosshair-pixel');
     graphics.destroy();
   }
 
@@ -614,6 +618,7 @@ class FightScene extends Phaser.Scene {
     graphics.fillRect(8, 5, 2, 7);
     graphics.fillRect(12, 6, 1, 5);
     graphics.generateTexture('grenade-pixel', 16, 16);
+    this.setPixelTextureFilter('grenade-pixel');
     graphics.destroy();
   }
 
@@ -635,6 +640,7 @@ class FightScene extends Phaser.Scene {
       graphics.fillRect(10, 4, 4, 16);
       graphics.fillRect(4, 10, 16, 4);
       graphics.generateTexture(`powerup-${id}`, 24, 24);
+      this.setPixelTextureFilter(`powerup-${id}`);
       graphics.destroy();
     }
   }
@@ -662,7 +668,14 @@ class FightScene extends Phaser.Scene {
           fixedCanvas: false,
         }),
       );
+      this.setPixelTextureFilter(textureKey);
     }
+  }
+
+  setPixelTextureFilter(textureKey) {
+    const texture = this.textures.get(textureKey);
+    const nearest = Phaser.Textures?.FilterMode?.NEAREST ?? 1;
+    texture?.setFilter?.(nearest);
   }
 
   drawBackground() {
@@ -1506,13 +1519,22 @@ class FightScene extends Phaser.Scene {
     const centerY = trackedPlayers.reduce((sum, player) => sum + player.sprite.y, 0) / trackedPlayers.length;
     const originOffsetX = viewportWidth * this.cameras.main.originX * (1 - 1 / targetZoom);
     const originOffsetY = viewportHeight * this.cameras.main.originY * (1 - 1 / targetZoom);
-    const targetScrollX = Math.round(centerX - viewWidth / 2 - originOffsetX);
-    const targetScrollY = Math.round(centerY - viewHeight / 2 - originOffsetY);
+    const targetScrollX = centerX - viewWidth / 2 - originOffsetX;
+    const targetScrollY = centerY - viewHeight / 2 - originOffsetY;
     const lerp = Math.min(1, delta / 140);
 
-    this.cameras.main.setZoom(Phaser.Math.Linear(this.cameras.main.zoom, targetZoom, lerp));
-    this.cameras.main.scrollX = Math.round(Phaser.Math.Linear(this.cameras.main.scrollX, targetScrollX, lerp));
-    this.cameras.main.scrollY = Math.round(Phaser.Math.Linear(this.cameras.main.scrollY, targetScrollY, lerp));
+    const nextZoom = Phaser.Math.Linear(this.cameras.main.zoom, targetZoom, lerp);
+    const nextScrollX = Phaser.Math.Linear(this.cameras.main.scrollX, targetScrollX, lerp);
+    const nextScrollY = Phaser.Math.Linear(this.cameras.main.scrollY, targetScrollY, lerp);
+    this.cameras.main.setZoom(
+      Math.abs(nextZoom - targetZoom) <= CAMERA_ZOOM_SETTLE_EPSILON ? targetZoom : nextZoom,
+    );
+    this.cameras.main.scrollX = Math.abs(nextScrollX - targetScrollX) <= CAMERA_SCROLL_SETTLE_EPSILON
+      ? targetScrollX
+      : nextScrollX;
+    this.cameras.main.scrollY = Math.abs(nextScrollY - targetScrollY) <= CAMERA_SCROLL_SETTLE_EPSILON
+      ? targetScrollY
+      : nextScrollY;
   }
 
   screenX(x) {

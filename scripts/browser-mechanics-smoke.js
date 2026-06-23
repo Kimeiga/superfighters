@@ -135,6 +135,38 @@ window.__superfightersMechanicsSmoke = (async () => {
     weaponIds.every((id) => scene.textures.exists(`weapon-${id}`)),
     { weaponIds },
   );
+  const nearestFilter = Phaser.Textures.FilterMode.NEAREST;
+  check(
+    'pixel-art textures use nearest filtering without canvas pixelation',
+    scene.textures.get(scene.getCharacterTextureKey(23))?.source?.[0]?.scaleMode === nearestFilter &&
+      scene.textures.get('weapon-pistol')?.source?.[0]?.scaleMode === nearestFilter &&
+      scene.textures.get('grenade-pixel')?.source?.[0]?.scaleMode === nearestFilter,
+    {
+      character: scene.textures.get(scene.getCharacterTextureKey(23))?.source?.[0]?.scaleMode,
+      weapon: scene.textures.get('weapon-pistol')?.source?.[0]?.scaleMode,
+      grenade: scene.textures.get('grenade-pixel')?.source?.[0]?.scaleMode,
+      nearestFilter,
+    },
+  );
+  await wait(1800);
+  const cameraBefore = {
+    zoom: scene.cameras.main.zoom,
+    scrollX: scene.cameras.main.scrollX,
+    scrollY: scene.cameras.main.scrollY,
+  };
+  await wait(350);
+  const cameraAfter = {
+    zoom: scene.cameras.main.zoom,
+    scrollX: scene.cameras.main.scrollX,
+    scrollY: scene.cameras.main.scrollY,
+  };
+  check(
+    'camera settles without idle micro-jitter',
+    Math.abs(cameraAfter.zoom - cameraBefore.zoom) < 0.0001 &&
+      Math.abs(cameraAfter.scrollX - cameraBefore.scrollX) < 0.0001 &&
+      Math.abs(cameraAfter.scrollY - cameraBefore.scrollY) < 0.0001,
+    { cameraBefore, cameraAfter },
+  );
 
   const originalRandom = Math.random;
   const deterministicRolls = [0.05, 0.35, 0.58, 0.72, 0.9, 0.99];
