@@ -5150,25 +5150,35 @@ class FightScene extends Phaser.Scene {
   }
 
   resolveBulletSegmentCollision(bullet) {
-    const points = this.getBulletSegmentPoints(bullet);
-    if (points.length <= 1) {
+    const hits = this.collectBulletSegmentHits(bullet);
+    if (!hits.length) {
       return false;
     }
 
-    for (const point of points) {
-      this.breakBulletWindowsAtPoint(bullet, point);
+    for (const hit of hits) {
+      if (hit.kind === 'window') {
+        if (hit.object?.active) {
+          this.breakWindow(hit.object, hit.x, hit.y);
+          this.spawnHitEffect(hit.x, hit.y, bullet.getData('hitColor') ?? 0xfff3a3);
+        }
+        continue;
+      }
 
-      const player = this.findBulletSegmentPlayerAtPoint(bullet, point);
-      if (player) {
-        bullet.setPosition(point.x, point.y);
-        this.handleBulletHit(bullet, player.sprite);
+      if (hit.kind === 'player') {
+        if (!hit.object?.sprite?.active) {
+          continue;
+        }
+        bullet.setPosition(hit.x, hit.y);
+        this.handleBulletHit(bullet, hit.object.sprite);
         return true;
       }
 
-      const wall = this.findBulletSegmentWallAtPoint(point);
-      if (wall) {
-        bullet.setPosition(point.x, point.y);
-        this.handleBulletWall(bullet, wall);
+      if (hit.kind === 'wall') {
+        if (!hit.object?.active) {
+          continue;
+        }
+        bullet.setPosition(hit.x, hit.y);
+        this.handleBulletWall(bullet, hit.object);
         return true;
       }
     }
@@ -5176,70 +5186,103 @@ class FightScene extends Phaser.Scene {
     return false;
   }
 
-  getBulletSegmentPoints(bullet) {
-    const previousX = bullet.getData('previousX');
-    const previousY = bullet.getData('previousY');
-    if (!Number.isFinite(previousX) || !Number.isFinite(previousY)) {
+  collectBulletSegmentHits(bullet) {
+    const segment = this.getBulletSegmentInfo(bullet);
+    if (!segment) {
       return [];
     }
 
-    const distance = Phaser.Math.Distance.Between(previousX, previousY, bullet.x, bullet.y);
-    if (distance <= 0) {
-      return [{ x: bullet.x, y: bullet.y }];
-    }
-
-    const stepSize = 4;
-    const steps = Math.max(1, Math.ceil(distance / stepSize));
-    const points = [];
-    for (let step = 0; step <= steps; step += 1) {
-      const t = step / steps;
-      points.push({
-        x: Phaser.Math.Linear(previousX, bullet.x, t),
-        y: Phaser.Math.Linear(previousY, bullet.y, t),
-      });
-    }
-    return points;
-  }
-
-  breakBulletWindowsAtPoint(bullet, point) {
-    if (!this.glassWindows) {
-      return;
-    }
-    for (const windowPane of this.glassWindows.getChildren()) {
+    const hits = [];
+    for (const windowPane of this.glassWindows?.getChildren?.() ?? []) {
       if (!windowPane?.active || !windowPane.getData?.('breakable') || !windowPane.body) {
         continue;
       }
-      if (!getBodyBounds(windowPane).contains(point.x, point.y)) {
-        continue;
+      const hit = this.getSegmentRectEntry(segment, getBodyBounds(windowPane));
+      if (hit) {
+        hits.push({ ...hit, kind: 'window', object: windowPane, priority: 0 });
       }
-      this.breakWindow(windowPane, point.x, point.y);
-      this.spawnHitEffect(point.x, point.y, bullet.getData('hitColor') ?? 0xfff3a3);
     }
-  }
 
-  findBulletSegmentPlayerAtPoint(bullet, point) {
     const ownerId = bullet.getData('owner');
-    return this.players.find((player) => {
+    for (const player of this.players) {
       if (!player?.sprite?.active || player.id === ownerId || this.time.now < player.rollUntil) {
-        return false;
+        continue;
       }
       const bounds = getBodyBounds(player.sprite);
       const inflatedBounds = new Phaser.Geom.Rectangle(bounds.x - 6, bounds.y - 6, bounds.width + 12, bounds.height + 12);
-      return inflatedBounds.contains(point.x, point.y);
-    }) ?? null;
+      const hit = this.getSegmentRectEntry(segment, inflatedBounds);
+      if (hit) {
+        hits.push({ ...hit, kind: 'player', object: player, priority: 1 });
+      }
+    }
+
+    for (const platform of this.platforms) {
+      if (!platform?.active || platform.getData?.('thin') || !platform.body) {
+        continue;
+      }
+      const hit = this.getSegmentRectEntry(segment, getBodyBounds(platform));
+      if (hit) {
+        hits.push({ ...hit, kind: 'wall', object: platform, priority: 2 });
+      }
+    }
+
+    hits.sort((a, b) => a.t - b.t || a.priority - b.priority);
+    return hits;
   }
 
-  findBulletSegmentWallAtPoint(point) {
-    return this.platforms.find((platform) => {
-      if (!platform?.active || platform.getData?.('thin')) {
-        return false;
+  getBulletSegmentInfo(bullet) {
+    const previousX = bullet.getData('previousX');
+    const previousY = bullet.getData('previousY');
+    if (!Number.isFinite(previousX) || !Number.isFinite(previousY)) {
+      return null;
+    }
+
+    return {
+      startX: previousX,
+      startY: previousY,
+      endX: bullet.x,
+      endY: bullet.y,
+      deltaX: bullet.x - previousX,
+      deltaY: bullet.y - previousY,
+    };
+  }
+
+  getSegmentRectEntry(segment, rect) {
+    const containsStart = rect.contains(segment.startX, segment.startY);
+    if (containsStart) {
+      return { t: 0, x: segment.startX, y: segment.startY };
+    }
+
+    let entry = 0;
+    let exit = 1;
+    const applyAxis = (start, delta, min, max) => {
+      if (Math.abs(delta) < 0.0001) {
+        return start >= min && start <= max;
       }
-      const body = platform.body;
-      if (!body) {
-        return false;
+      const inverse = 1 / delta;
+      let near = (min - start) * inverse;
+      let far = (max - start) * inverse;
+      if (near > far) {
+        [near, far] = [far, near];
       }
-      return point.x >= body.x && point.x <= body.x + body.width && point.y >= body.y && point.y <= body.y + body.height;
-    }) ?? null;
+      entry = Math.max(entry, near);
+      exit = Math.min(exit, far);
+      return entry <= exit;
+    };
+
+    const intersects =
+      applyAxis(segment.startX, segment.deltaX, rect.x, rect.right) &&
+      applyAxis(segment.startY, segment.deltaY, rect.y, rect.bottom);
+
+    if (!intersects || entry < 0 || entry > 1) {
+      return null;
+    }
+
+    return {
+      t: entry,
+      x: segment.startX + segment.deltaX * entry,
+      y: segment.startY + segment.deltaY * entry,
+    };
   }
 
   findBulletSegmentWallHit(bullet) {
