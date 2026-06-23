@@ -22,6 +22,7 @@ const PLATFORM_STROKE_WIDTH = 4;
 const JUMP_BUFFER_MS = 140;
 const PLAYER_HEAD_SUPPORT_MS = 130;
 const DOOR_EXIT_MS = 520;
+const LADDER_END_VISUAL_DROP = 38;
 const AIM_HALF_ARC = Math.PI / 2;
 const INPUT_ACTIONS = ['left', 'right', 'jump', 'crouch', 'melee', 'pickup', 'shoot', 'grenade', 'powerup', 'aimUp', 'aimDown'];
 const GAME_DEFAULT_CAPTURE_CODES = new Set(['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'Slash', 'KeyE', 'Quote']);
@@ -4076,6 +4077,7 @@ class FightScene extends Phaser.Scene {
           this.releaseAim(player, time);
         }
         this.updatePlayerAnimation(player, true, 0, time);
+        this.updateAimVisuals(player);
         return;
       }
       this.updateCrouchState(player, grounded, false, time);
@@ -4103,6 +4105,7 @@ class FightScene extends Phaser.Scene {
       this.resetJumpState(player);
       this.updateClimbing(player, ladder, vertical, horizontal, time, input);
       this.updatePlayerAnimation(player, true, horizontal, time);
+      this.updateAimVisuals(player);
       return;
     }
 
@@ -4709,7 +4712,7 @@ class FightScene extends Phaser.Scene {
     const heldGunVisible = Boolean(player.weapon) && (aimVisualActive || this.isGunCarryAnimation(player));
     const visualFacing = aimVisualActive ? player.aimFacing : player.facing;
     const visualAngle = aimVisualActive ? player.aimAngle : visualFacing > 0 ? 0 : Math.PI;
-    const carryAnchor = this.getAimAnchor(player, visualAngle);
+    const carryAnchor = this.getAimAnchor(player, visualAngle, visualFacing);
     const direction = new Phaser.Math.Vector2(Math.cos(visualAngle), Math.sin(visualAngle));
     const reticle = this.getAimReticlePosition(player, visualAngle);
     const armOverlayVisible = heldGunVisible && this.shouldShowGunArmOverlay(player, aimVisualActive);
@@ -4777,11 +4780,23 @@ class FightScene extends Phaser.Scene {
     const bodyFrame = getEmpressFrameNumber(player.sprite.texture.key);
     const armFrame = getGunArmOverlayFrame(bodyFrame);
     const offset = this.getAimOffsetFromAngle(angle, facing);
-    const rotation = aimVisualActive ? (facing < 0 ? -offset : offset) : 0;
+    const rotation = aimVisualActive ? offset : 0;
+    const pivot = this.getAimPivot(player);
+    const textureSize = CHARACTER_SHEET.frameSize + getCharacterCanvasPadding() * 2;
+    const relativePivotX = (pivot.x - player.sprite.x) / PLAYER_SCALE;
+    const relativePivotY = (pivot.y - player.sprite.y) / PLAYER_SCALE;
+    const originX = Phaser.Math.Clamp(
+      (textureSize / 2 + (facing < 0 ? -relativePivotX : relativePivotX)) / textureSize,
+      0,
+      1,
+    );
+    const originY = Phaser.Math.Clamp((textureSize / 2 + relativePivotY) / textureSize, 0, 1);
+
     player.arm.stop();
     player.arm
       .setTexture(this.getCharacterTextureKey(armFrame))
-      .setPosition(player.sprite.x, player.sprite.y)
+      .setOrigin(originX, originY)
+      .setPosition(pivot.x, pivot.y)
       .setScale(PLAYER_SCALE)
       .setFlipX(facing < 0)
       .setRotation(rotation)
@@ -4831,8 +4846,8 @@ class FightScene extends Phaser.Scene {
     };
   }
 
-  getAimAnchor(player, angle = player.aimAngle) {
-    const direction = Math.cos(angle) >= 0 ? 1 : -1;
+  getAimAnchor(player, angle = player.aimAngle, facing = player.aimFacing || player.facing || (Math.cos(angle) >= 0 ? 1 : -1)) {
+    const direction = facing >= 0 ? 1 : -1;
     const hand = this.getCharacterHandPoint(player, direction);
     const handX = direction > 0
       ? hand.x
@@ -4920,11 +4935,11 @@ class FightScene extends Phaser.Scene {
   }
 
   getBulletOrigin(player) {
-    return this.getMuzzleOrigin(player, player.aimAngle);
+    return this.getMuzzleOrigin(player, player.aimAngle, player.aimFacing || player.facing);
   }
 
-  getMuzzleOrigin(player, angle = player.aimAngle) {
-    const anchor = this.getAimAnchor(player, angle);
+  getMuzzleOrigin(player, angle = player.aimAngle, facing = player.aimFacing || player.facing) {
+    const anchor = this.getAimAnchor(player, angle, facing);
     const offset = this.configData.visuals.gunMuzzleOffset ?? 28;
     return {
       x: anchor.x + Math.cos(angle) * offset,
@@ -5006,7 +5021,7 @@ class FightScene extends Phaser.Scene {
   }
 
   getGrenadeOrigin(player) {
-    return this.getAimAnchor(player, player.aimAngle);
+    return this.getAimAnchor(player, player.aimAngle, player.aimFacing || player.facing);
   }
 
   handleMeleePressed(player, time) {
@@ -5230,17 +5245,23 @@ class FightScene extends Phaser.Scene {
     } else {
       player.climbIntroUntil = 0;
     }
+    this.updateAimVisuals(player);
   }
 
   startLadderEnd(player, ladder, time) {
     const bounds = ladder?.getData('bounds');
+    const body = player.sprite.body;
+    const targetFootY = bounds ? bounds.y + 2 : body.y + body.height;
     player.currentLadder = ladder;
     player.climbIntroUntil = 0;
     player.climbEndUntil = time + this.getAnimationDurationMs('climbLadderEnd');
-    player.ladderEndFootY = bounds ? bounds.y + 2 : player.sprite.body.y + player.sprite.body.height;
+    player.ladderEndFootY = targetFootY;
     player.sprite.setVelocity(0, 0);
-    player.sprite.body.setAllowGravity(false);
+    body.setAllowGravity(false);
+    this.applyBodyPose(player, true);
+    this.snapPlayerBodyTo(player, body.x, targetFootY + LADDER_END_VISUAL_DROP - body.height);
     player.sprite.play(this.getPlayerAnimationKey('climbLadderEnd'));
+    this.updateAimVisuals(player);
   }
 
   finishLadderEnd(player) {

@@ -47,6 +47,7 @@ window.__superfightersMechanicsSmoke = (async () => {
     player.aimMode = null;
     player.crouching = false;
     player.climbing = false;
+    player.currentLadder = null;
     for (const inputPart of Object.values(player.inputState)) {
       for (const action of Object.keys(inputPart)) {
         inputPart[action] = false;
@@ -70,6 +71,10 @@ window.__superfightersMechanicsSmoke = (async () => {
     player.crouchTransitionGun = false;
     player.standTransitionUntil = 0;
     player.standTransitionGun = false;
+    player.climbIntroUntil = 0;
+    player.climbEndUntil = 0;
+    player.ladderGunDrawUntil = 0;
+    player.ladderEndFootY = 0;
     player.dashAttackUntil = 0;
     player.dashHitTargets.clear();
     scene.applyBodyPose(player);
@@ -205,6 +210,9 @@ window.__superfightersMechanicsSmoke = (async () => {
     scene.updateAim(p1, 0, vertical, 500);
     const pivot = scene.getAimPivot(p1);
     const reticle = scene.getAimReticlePosition(p1, p1.aimAngle);
+    const anchor = scene.getAimAnchor(p1, p1.aimAngle, p1.aimFacing);
+    const weaponDistance = Phaser.Math.Distance.Between(p1.weaponSprite.x, p1.weaponSprite.y, anchor.x, anchor.y);
+    const expectedArmSign = shouldBeAbove ? (facing > 0 ? -1 : 1) : (facing > 0 ? 1 : -1);
     check(name, shouldBeAbove ? reticle.y < pivot.y : reticle.y > pivot.y, {
       facing,
       vertical,
@@ -212,11 +220,75 @@ window.__superfightersMechanicsSmoke = (async () => {
       reticleY: Math.round(reticle.y),
       angle: Number(p1.aimAngle.toFixed(3)),
     });
+    check(`${name} rotates arm and keeps weapon on hand`, p1.arm.visible && weaponDistance <= 1 && Math.sign(p1.arm.rotation) === expectedArmSign, {
+      facing,
+      vertical,
+      armRotation: Number(p1.arm.rotation.toFixed(3)),
+      weaponDistance: Number(weaponDistance.toFixed(2)),
+      armVisible: p1.arm.visible,
+    });
   };
   aimCheck('aim up while facing right', 1, -1, true);
   aimCheck('aim down while facing right', 1, 1, false);
   aimCheck('aim up while facing left', -1, -1, true);
   aimCheck('aim down while facing left', -1, 1, false);
+
+  const empressFrameOf = (sprite) => Number((sprite?.texture?.key ?? '').match(/empress-frame-(\d+)$/)?.[1] ?? NaN);
+  const gunLayerCheck = (name, animationKey, bodyFrame, expectedArmFrame) => {
+    resetPlayer(p1, 700, 484, 1);
+    p1.weapon = scene.makeWeaponState('pistol');
+    p1.sprite.play(animationKey, true);
+    p1.sprite.setTexture(scene.getCharacterTextureKey(bodyFrame));
+    scene.updateAimVisuals(p1);
+    check(name, empressFrameOf(p1.sprite) === bodyFrame && empressFrameOf(p1.arm) === expectedArmFrame && p1.weaponSprite.visible && p1.arm.visible && p1.sprite.depth < p1.weaponSprite.depth && p1.weaponSprite.depth < p1.arm.depth, {
+      bodyFrame: empressFrameOf(p1.sprite),
+      armFrame: empressFrameOf(p1.arm),
+      weaponVisible: p1.weaponSprite.visible,
+      armVisible: p1.arm.visible,
+      depths: {
+        body: p1.sprite.depth,
+        weapon: p1.weaponSprite.depth,
+        arm: p1.arm.depth,
+      },
+    });
+  };
+  gunLayerCheck('idle gun keeps full body plus arm overlay', 'girl-idle-gun', 29, 37);
+  gunLayerCheck('run gun keeps full body plus arm overlay', 'girl-run-gun', 106, 114);
+  gunLayerCheck('crouch gun keeps full body plus arm overlay', 'girl-crouch', 61, 73);
+  gunLayerCheck('jump gun keeps full body plus arm overlay', 'girl-jump-up-gun', 134, 145);
+
+  const ladderBounds = new Phaser.Geom.Rectangle(700, 392, 30, 190);
+  const fakeLadder = { active: true, getData: (key) => (key === 'bounds' ? ladderBounds : null) };
+  resetPlayer(p1, 700, 484, 1);
+  p1.weapon = scene.makeWeaponState('pistol');
+  p1.sprite.play('girl-jump-up-gun', true);
+  p1.sprite.setTexture(scene.getCharacterTextureKey(134));
+  scene.updateAimVisuals(p1);
+  const ladderBefore = { armVisible: p1.arm.visible, weaponVisible: p1.weaponSprite.visible };
+  scene.startLadderClimb(p1, fakeLadder, -1, scene.time.now + 55);
+  scene.updatePlayerAnimation(p1, true, 0, scene.time.now + 55);
+  scene.updateAimVisuals(p1);
+  check('entering ladder clears stale gun animation layers', ladderBefore.armVisible && ladderBefore.weaponVisible && p1.climbing && p1.sprite.anims.currentAnim?.key === 'girl-climb-ladder' && !p1.arm.visible && !p1.weaponSprite.visible, {
+    before: ladderBefore,
+    animation: p1.sprite.anims.currentAnim?.key,
+    climbing: p1.climbing,
+    armVisible: p1.arm.visible,
+    weaponVisible: p1.weaponSprite.visible,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
+  p1.weapon = scene.makeWeaponState('pistol');
+  scene.startLadderEnd(p1, fakeLadder, scene.time.now + 60);
+  const ladderEndBody = p1.sprite.body;
+  const targetFootY = ladderBounds.y + 2;
+  const visualFootY = Math.round(ladderEndBody.y + ladderEndBody.height);
+  scene.finishLadderEnd(p1);
+  const finalFootY = Math.round(p1.sprite.body.y + p1.sprite.body.height);
+  check('ladder end animation is visually lowered then snaps to the platform top', visualFootY === Math.round(targetFootY + 38) && finalFootY === Math.round(targetFootY), {
+    visualFootY,
+    finalFootY,
+    targetFootY,
+  });
 
   resetPlayer(p1, 700, 484, 1);
   p1.weapon = scene.makeWeaponState('pistol');
