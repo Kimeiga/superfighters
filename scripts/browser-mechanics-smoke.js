@@ -418,6 +418,41 @@ window.__superfightersMechanicsSmoke = (async () => {
     traceBullet.destroy();
   }
 
+  resetPlayer(p1, 700, 484, 1);
+  resetPlayer(p2, 860, 484, -1);
+  p1.weapon = scene.makeWeaponState('sniper');
+  p2.invulnerableUntil = 0;
+  p2.rollUntil = 0;
+  const targetBody = p2.sprite.body;
+  const playerTraceY = targetBody.y + targetBody.height / 2;
+  const playerTraceBullet = scene.spawnBullet(p1, scene.configData.weapons.sniper, 0, targetBody.x - 140, playerTraceY);
+  playerTraceBullet.setData('previousX', targetBody.x - 140);
+  playerTraceBullet.setData('previousY', playerTraceY);
+  playerTraceBullet.setPosition(targetBody.x + targetBody.width + 140, playerTraceY);
+  const playerHealthBeforeTrace = p2.health;
+  const playerTraceResolved = scene.resolveBulletSegmentCollision(playerTraceBullet);
+  check('bullet segment tracing catches player tunneling', playerTraceResolved && p2.health < playerHealthBeforeTrace && !playerTraceBullet.active, {
+    playerHealthBeforeTrace,
+    playerHealthAfterTrace: p2.health,
+    bulletActive: playerTraceBullet.active,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
+  resetPlayer(p2, 1180, 484, -1);
+  p1.weapon = scene.makeWeaponState('pistol');
+  const traceWindow = scene.createWindow(905, 325, 30, 34);
+  const glassTraceBullet = scene.spawnBullet(p1, scene.configData.weapons.pistol, 0, traceWindow.x - 120, traceWindow.y);
+  glassTraceBullet.setData('previousX', traceWindow.x - 120);
+  glassTraceBullet.setData('previousY', traceWindow.y);
+  glassTraceBullet.setPosition(traceWindow.x + 40, traceWindow.y);
+  const glassTraceResolved = scene.resolveBulletSegmentCollision(glassTraceBullet);
+  check('bullet segment tracing breaks glass tunneling without consuming bullet', !glassTraceResolved && !traceWindow.active && glassTraceBullet.active, {
+    resolved: glassTraceResolved,
+    windowActive: traceWindow.active,
+    bulletActive: glassTraceBullet.active,
+  });
+  glassTraceBullet.destroy();
+
   for (const id of weaponIds) {
     clearGroup(scene.bullets);
     resetPlayer(p1, 700, 220, 1);

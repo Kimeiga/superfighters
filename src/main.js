@@ -5137,9 +5137,7 @@ class FightScene extends Phaser.Scene {
       if (!bullet?.active) {
         continue;
       }
-      const wall = this.findBulletSegmentWallHit(bullet);
-      if (wall) {
-        this.handleBulletWall(bullet, wall);
+      if (this.resolveBulletSegmentCollision(bullet)) {
         continue;
       }
       if (bullet.x < minX || bullet.x > maxX || bullet.y < minY || bullet.y > maxY) {
@@ -5149,6 +5147,99 @@ class FightScene extends Phaser.Scene {
       bullet.setData('previousX', bullet.x);
       bullet.setData('previousY', bullet.y);
     }
+  }
+
+  resolveBulletSegmentCollision(bullet) {
+    const points = this.getBulletSegmentPoints(bullet);
+    if (points.length <= 1) {
+      return false;
+    }
+
+    for (const point of points) {
+      this.breakBulletWindowsAtPoint(bullet, point);
+
+      const player = this.findBulletSegmentPlayerAtPoint(bullet, point);
+      if (player) {
+        bullet.setPosition(point.x, point.y);
+        this.handleBulletHit(bullet, player.sprite);
+        return true;
+      }
+
+      const wall = this.findBulletSegmentWallAtPoint(point);
+      if (wall) {
+        bullet.setPosition(point.x, point.y);
+        this.handleBulletWall(bullet, wall);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  getBulletSegmentPoints(bullet) {
+    const previousX = bullet.getData('previousX');
+    const previousY = bullet.getData('previousY');
+    if (!Number.isFinite(previousX) || !Number.isFinite(previousY)) {
+      return [];
+    }
+
+    const distance = Phaser.Math.Distance.Between(previousX, previousY, bullet.x, bullet.y);
+    if (distance <= 0) {
+      return [{ x: bullet.x, y: bullet.y }];
+    }
+
+    const stepSize = 4;
+    const steps = Math.max(1, Math.ceil(distance / stepSize));
+    const points = [];
+    for (let step = 0; step <= steps; step += 1) {
+      const t = step / steps;
+      points.push({
+        x: Phaser.Math.Linear(previousX, bullet.x, t),
+        y: Phaser.Math.Linear(previousY, bullet.y, t),
+      });
+    }
+    return points;
+  }
+
+  breakBulletWindowsAtPoint(bullet, point) {
+    if (!this.glassWindows) {
+      return;
+    }
+    for (const windowPane of this.glassWindows.getChildren()) {
+      if (!windowPane?.active || !windowPane.getData?.('breakable') || !windowPane.body) {
+        continue;
+      }
+      if (!getBodyBounds(windowPane).contains(point.x, point.y)) {
+        continue;
+      }
+      this.breakWindow(windowPane, point.x, point.y);
+      this.spawnHitEffect(point.x, point.y, bullet.getData('hitColor') ?? 0xfff3a3);
+    }
+  }
+
+  findBulletSegmentPlayerAtPoint(bullet, point) {
+    const ownerId = bullet.getData('owner');
+    return this.players.find((player) => {
+      if (!player?.sprite?.active || player.id === ownerId || this.time.now < player.rollUntil) {
+        return false;
+      }
+      const bounds = getBodyBounds(player.sprite);
+      const inflatedBounds = new Phaser.Geom.Rectangle(bounds.x - 6, bounds.y - 6, bounds.width + 12, bounds.height + 12);
+      return inflatedBounds.contains(point.x, point.y);
+    }) ?? null;
+  }
+
+  findBulletSegmentWallAtPoint(point) {
+    return this.platforms.find((platform) => {
+      if (!platform?.active || platform.getData?.('thin')) {
+        return false;
+      }
+      const body = platform.body;
+      if (!body) {
+        return false;
+      }
+      return point.x >= body.x && point.x <= body.x + body.width && point.y >= body.y && point.y <= body.y + body.height;
+    }) ?? null;
   }
 
   findBulletSegmentWallHit(bullet) {
