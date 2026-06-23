@@ -36,6 +36,32 @@ const CHARACTER_SOURCE_KEY = 'empress-source';
 const CHARACTER_TEXTURE_PREFIX = 'empress-frame';
 const HANDGUN_SOURCE_KEY = 'handgun-source';
 const PROJECTILE_TEXTURE_KEY = 'projectile-glow';
+const GRENADE_TIMER_FONT = '14px';
+const ROLL_SPEED = 330;
+const ROLL_INVULNERABLE_MS = 520;
+const FIRE_TICK_MS = 360;
+const FIRE_DAMAGE = 4;
+const FIRE_DURATION_MS = 3600;
+const BARREL_BURN_MS = 950;
+const BARREL_FLAME_RADIUS = 46;
+const BARREL_EXPLOSION_RADIUS = 128;
+const MELEE_COMBO_ANIMATIONS = {
+  melee: [
+    { key: 'girl-melee-1', frames: [45, 46, 47, 48], fps: 18, activeDelayMs: 82 },
+    { key: 'girl-melee-2', frames: [49, 50, 51], fps: 18, activeDelayMs: 54 },
+    { key: 'girl-melee-3', frames: [52, 53, 54], fps: 18, activeDelayMs: 54 },
+  ],
+  ladderMelee: [
+    { key: 'girl-ladder-melee-1', frames: [229, 230, 231, 232], fps: 16, activeDelayMs: 88 },
+    { key: 'girl-ladder-melee-2', frames: [233, 234, 235], fps: 16, activeDelayMs: 62 },
+    { key: 'girl-ladder-melee-3', frames: [236], fps: 10, activeDelayMs: 0 },
+  ],
+  jumpMelee: [
+    { key: 'girl-jump-melee-1', frames: [122, 195, 196, 197], fps: 16, activeDelayMs: 88 },
+    { key: 'girl-jump-melee-2', frames: [198, 199, 200], fps: 16, activeDelayMs: 62 },
+    { key: 'girl-jump-melee-3', frames: [201, 202, 203], fps: 16, activeDelayMs: 62 },
+  ],
+};
 const MELEE_ACTIVE_FRAMES = {
   melee: { start: 47, end: 51 },
   crouchMelee: { start: 83, end: 87 },
@@ -140,6 +166,7 @@ const COLORS = {
   ladder: 0xb88751,
   grenade: 0x89e072,
   explosion: 0xffb84d,
+  fire: 0xff6b2f,
   panel: 0x101622,
   crate: 0xa8794a,
   barrel: 0xcc6547,
@@ -443,11 +470,15 @@ class FightScene extends Phaser.Scene {
     this.updateDynamicProps();
     this.updateSwingingCrates(delta);
     this.updateBullets();
+    this.updateGrenades(time, delta);
+    this.updateBurningProps(time);
+    this.updateBurningPlayers(time);
 
     for (const player of this.players) {
       this.updatePlayer(player, time, delta);
     }
 
+    this.updateGrenadeCooking(time);
     this.updateDoorTeleports(time);
     this.updateDashAttacks(time);
     this.updatePickups(time);
@@ -704,6 +735,8 @@ class FightScene extends Phaser.Scene {
       crouchDownGun: 'girl-crouch-down-gun',
       crouch: 'girl-crouch',
       crouchMelee: 'girl-crouch-melee',
+      roll: 'girl-roll',
+      rollEnd: 'girl-roll-end',
       standUp: 'girl-stand-up',
       standUpGun: 'girl-stand-up-gun',
       jumpPrep: 'girl-jump-prep',
@@ -743,6 +776,22 @@ class FightScene extends Phaser.Scene {
         frameRate: setting.fps,
         repeat: setting.repeat ? -1 : 0,
       });
+    }
+
+    for (const combos of Object.values(MELEE_COMBO_ANIMATIONS)) {
+      for (const combo of combos) {
+        if (this.anims.exists(combo.key)) {
+          this.anims.remove(combo.key);
+        }
+        this.anims.create({
+          key: combo.key,
+          frames: combo.frames.map((frame) => ({
+            key: this.getCharacterTextureKey(frame),
+          })),
+          frameRate: combo.fps,
+          repeat: 0,
+        });
+      }
     }
   }
 
@@ -1150,7 +1199,7 @@ class FightScene extends Phaser.Scene {
     prop.setData('dynamicProp', isPushableProp);
     prop.setData('destructible', true);
     prop.setData('health', type === 'crate' || type === 'swingingCrate' ? 24 : 10);
-    prop.setData('explosiveRadius', type === 'barrel' ? 98 : type === 'smallExplosive' ? 62 : 0);
+    prop.setData('explosiveRadius', type === 'barrel' ? BARREL_EXPLOSION_RADIUS : type === 'smallExplosive' ? 72 : 0);
     prop.setData('explosiveDamage', type === 'barrel' ? 44 : type === 'smallExplosive' ? 26 : 0);
     prop.setData('levelGeometry', false);
     prop.setData('indestructible', false);
@@ -2120,12 +2169,17 @@ class FightScene extends Phaser.Scene {
       dashAttackUntil: 0,
       dashDirection: 0,
       dashHitTargets: new Set(),
+      rollUntil: 0,
+      rollEndAt: 0,
+      rollDirection: 0,
       meleeAnimationUntil: 0,
       meleeAnimationKey: null,
       meleeAttackId: 0,
       meleeAttackState: null,
       pickupAnimationUntil: 0,
       shootStanceUntil: 0,
+      grenadeCookStartedAt: 0,
+      grenadeCookText: null,
       jumpHeldUntil: 0,
       jumpReleased: true,
       jumpBufferUntil: 0,
@@ -2139,6 +2193,10 @@ class FightScene extends Phaser.Scene {
       slowedUntil: 0,
       shieldUntil: 0,
       hasteUntil: 0,
+      onFireUntil: 0,
+      nextFireDamageAt: 0,
+      fireOwnerId: null,
+      fireEffect: null,
     };
   }
 
@@ -3037,6 +3095,7 @@ class FightScene extends Phaser.Scene {
       child.getData?.('labelObj')?.destroy?.();
       child.getData?.('glowObj')?.destroy?.();
       child.getData?.('shine')?.destroy?.();
+      child.getData?.('timerText')?.destroy?.();
       child.destroy();
     }
   }
@@ -4031,6 +4090,18 @@ class FightScene extends Phaser.Scene {
       return;
     }
 
+    if (time < player.rollUntil) {
+      this.endShootStance(player);
+      player.crouching = false;
+      body.setAllowGravity(true);
+      this.applyBodyPose(player, grounded);
+      player.sprite.setVelocityX(player.rollDirection * ROLL_SPEED);
+      this.updateJumpPhysics(player, grounded, input, time);
+      this.updatePlayerAnimation(player, grounded, player.rollDirection, time);
+      this.updateAimVisuals(player);
+      return;
+    }
+
     player.sprite.setAngle(0);
     player.sprite.setAlpha(time < player.invulnerableUntil && Math.floor(time / 80) % 2 === 0 ? 0.42 : 1);
 
@@ -4118,6 +4189,13 @@ class FightScene extends Phaser.Scene {
       this.applyBodyPose(player, grounded);
       this.updateAimVisuals(player);
       this.updatePlayerAnimation(player, grounded, 0, time);
+      return;
+    }
+
+    if (input.pressed.crouch && grounded && horizontal !== 0) {
+      this.startRoll(player, time, horizontal);
+      this.updatePlayerAnimation(player, grounded, horizontal, time);
+      this.updateAimVisuals(player);
       return;
     }
 
@@ -4357,6 +4435,7 @@ class FightScene extends Phaser.Scene {
     player.aiming = false;
     player.aimMode = null;
     player.ladderGunDrawUntil = 0;
+    player.grenadeCookStartedAt = 0;
     this.setAimVisible(player, false);
   }
 
@@ -4412,6 +4491,8 @@ class FightScene extends Phaser.Scene {
       crouchDownGun: 'girl-crouch-down-gun',
       crouch: 'girl-crouch',
       crouchMelee: 'girl-crouch-melee',
+      roll: 'girl-roll',
+      rollEnd: 'girl-roll-end',
       standUp: 'girl-stand-up',
       standUpGun: 'girl-stand-up-gun',
       jumpPrep: 'girl-jump-prep',
@@ -4523,6 +4604,11 @@ class FightScene extends Phaser.Scene {
       return;
     }
 
+    if (time < player.rollUntil) {
+      this.continueOneShotAnimation(sprite, time < player.rollEndAt ? 'girl-roll' : 'girl-roll-end');
+      return;
+    }
+
     if (gunStanceActive && !player.crouching && time < player.standTransitionUntil) {
       this.continueOneShotAnimation(sprite, player.standTransitionGun ? 'girl-stand-up-gun' : 'girl-stand-up');
       return;
@@ -4626,6 +4712,7 @@ class FightScene extends Phaser.Scene {
     player.aiming = true;
     player.aimMode = mode;
     player.shootStanceUntil = 0;
+    player.grenadeCookStartedAt = mode === 'grenade' ? time : 0;
     if (player.climbing && mode === 'gun') {
       player.ladderGunDrawUntil = time + this.getAnimationDurationMs('ladderGunDraw');
       player.sprite.play(this.getPlayerAnimationKey('ladderGunDraw'));
@@ -4704,6 +4791,7 @@ class FightScene extends Phaser.Scene {
     player.aimGraphics.setVisible(visible);
     if (!visible) {
       player.aimGraphics.clear();
+      this.clearGrenadeCookText(player);
     }
   }
 
@@ -4733,14 +4821,20 @@ class FightScene extends Phaser.Scene {
     }
 
     const currentWeapon = player.weapon ? this.configData.weapons[player.weapon.id] : null;
-    if (player.aimMode === 'gun' && currentWeapon?.laser) {
-      player.aimGraphics.lineStyle(1, 0xff304b, 0.75);
-      player.aimGraphics.lineBetween(reticle.x, reticle.y, reticle.x + direction.x * 620, reticle.y + direction.y * 620);
+    if (player.aimMode === 'gun' && currentWeapon) {
+      const muzzle = this.getBulletOrigin(player);
+      player.aimGraphics.lineStyle(1, this.getLaserColor(player), 0.78);
+      player.aimGraphics.lineBetween(muzzle.x, muzzle.y, muzzle.x + direction.x * 900, muzzle.y + direction.y * 900);
     }
 
     if (player.aimMode === 'grenade') {
-      this.drawGrenadeArc(player, reticle, direction);
+      this.drawGrenadeArc(player, this.getGrenadeOrigin(player), direction);
+      this.updateGrenadeCookText(player);
     }
+  }
+
+  getLaserColor(player) {
+    return player.id === 'p1' ? 0x53d7ff : 0xff5ec7;
   }
 
   shouldShowGunArmOverlay(player, aimVisualActive) {
@@ -4880,7 +4974,7 @@ class FightScene extends Phaser.Scene {
     for (let i = 1; i <= 12; i += 1) {
       const t = i * 0.11;
       const x = shoulder.x + direction.x * speed * t;
-      const y = shoulder.y + direction.y * speed * t + 0.5 * gravity * t * t;
+      const y = shoulder.y + (direction.y * speed - (this.configData.grenades.throwLift ?? 0)) * t + 0.5 * gravity * t * t;
       player.aimGraphics.fillCircle(x, y, 2);
     }
   }
@@ -4941,10 +5035,42 @@ class FightScene extends Phaser.Scene {
   getMuzzleOrigin(player, angle = player.aimAngle, facing = player.aimFacing || player.facing) {
     const anchor = this.getAimAnchor(player, angle, facing);
     const offset = this.configData.visuals.gunMuzzleOffset ?? 28;
-    return {
+    const muzzle = {
       x: anchor.x + Math.cos(angle) * offset,
       y: anchor.y + Math.sin(angle) * offset,
     };
+    return this.getClearProjectileOrigin(anchor, muzzle);
+  }
+
+  getClearProjectileOrigin(anchor, target) {
+    if (!this.pointInsideSolidWall(target.x, target.y)) {
+      return target;
+    }
+
+    for (let step = 0.85; step >= 0; step -= 0.15) {
+      const candidate = {
+        x: Phaser.Math.Linear(anchor.x, target.x, step),
+        y: Phaser.Math.Linear(anchor.y, target.y, step),
+      };
+      if (!this.pointInsideSolidWall(candidate.x, candidate.y)) {
+        return candidate;
+      }
+    }
+
+    return anchor;
+  }
+
+  pointInsideSolidWall(x, y) {
+    return this.platforms.some((platform) => {
+      if (!platform?.active || platform.getData?.('thin')) {
+        return false;
+      }
+      const body = platform.body;
+      if (!body) {
+        return false;
+      }
+      return x >= body.x && x <= body.x + body.width && y >= body.y && y <= body.y + body.height;
+    });
   }
 
   spawnBullet(player, weapon, angle, originX, originY) {
@@ -4969,6 +5095,8 @@ class FightScene extends Phaser.Scene {
     bullet.setData('hitColor', color);
     bullet.setData('explosiveRadius', weapon.explosiveRadius ?? 0);
     bullet.setData('explosiveDamage', weapon.explosiveDamage ?? weapon.damage);
+    bullet.setData('previousX', originX);
+    bullet.setData('previousY', originY);
 
     return bullet;
   }
@@ -4987,10 +5115,46 @@ class FightScene extends Phaser.Scene {
       if (!bullet?.active) {
         continue;
       }
+      const wall = this.findBulletSegmentWallHit(bullet);
+      if (wall) {
+        this.handleBulletWall(bullet, wall);
+        continue;
+      }
       if (bullet.x < minX || bullet.x > maxX || bullet.y < minY || bullet.y > maxY) {
         bullet.destroy();
+        continue;
+      }
+      bullet.setData('previousX', bullet.x);
+      bullet.setData('previousY', bullet.y);
+    }
+  }
+
+  findBulletSegmentWallHit(bullet) {
+    const previousX = bullet.getData('previousX');
+    const previousY = bullet.getData('previousY');
+    if (!Number.isFinite(previousX) || !Number.isFinite(previousY)) {
+      return null;
+    }
+
+    const line = new Phaser.Geom.Line(previousX, previousY, bullet.x, bullet.y);
+    for (const platform of this.platforms) {
+      if (!platform?.active || platform.getData?.('thin')) {
+        continue;
+      }
+      const body = platform.body;
+      if (!body) {
+        continue;
+      }
+      const rect = new Phaser.Geom.Rectangle(body.x, body.y, body.width, body.height);
+      if (
+        rect.contains(previousX, previousY) ||
+        rect.contains(bullet.x, bullet.y) ||
+        Phaser.Geom.Intersects.LineToRectangle(line, rect)
+      ) {
+        return platform;
       }
     }
+    return null;
   }
 
   throwAimedGrenade(player, time) {
@@ -5001,6 +5165,8 @@ class FightScene extends Phaser.Scene {
     player.nextGrenadeAt = time + 500;
     player.grenadeAmmo -= 1;
 
+    const cookedMs = Math.max(0, time - (player.grenadeCookStartedAt || time));
+    const remainingFuseMs = Math.max(120, this.configData.grenades.fuseMs - cookedMs);
     const direction = new Phaser.Math.Vector2(Math.cos(player.aimAngle), Math.sin(player.aimAngle));
     const origin = this.getGrenadeOrigin(player);
     const grenade = this.physics.add
@@ -5008,12 +5174,21 @@ class FightScene extends Phaser.Scene {
       .setDepth(9);
     this.grenades.add(grenade);
     grenade.setBounce(this.configData.grenades.bounce);
-    grenade.setDragX(this.configData.grenades.dragX ?? 900);
+    grenade.setDragX(this.configData.grenades.dragX ?? 170);
     grenade.body.setCircle(7);
-    grenade.body.setVelocity(direction.x * this.configData.grenades.throwSpeed, direction.y * this.configData.grenades.throwSpeed);
+    grenade.body.setVelocity(
+      direction.x * this.configData.grenades.throwSpeed,
+      direction.y * this.configData.grenades.throwSpeed - (this.configData.grenades.throwLift ?? 0),
+    );
+    grenade.body.setMaxVelocity(this.configData.grenades.throwSpeed * 1.15, 920);
     grenade.setData('owner', player.id);
+    grenade.setData('fuseEnd', time + remainingFuseMs);
+    grenade.setData('timerText', this.createGrenadeTimerText(grenade));
 
-    this.time.delayedCall(this.configData.grenades.fuseMs, () => {
+    player.grenadeCookStartedAt = 0;
+    this.clearGrenadeCookText(player);
+
+    this.time.delayedCall(remainingFuseMs, () => {
       if (grenade.active) {
         this.explodeGrenade(grenade, player.id);
       }
@@ -5024,8 +5199,170 @@ class FightScene extends Phaser.Scene {
     return this.getAimAnchor(player, player.aimAngle, player.aimFacing || player.facing);
   }
 
+  createGrenadeTimerText(grenade) {
+    return this.add
+      .text(grenade.x + 12, grenade.y - 20, '', {
+        fontFamily: UI_FONT,
+        fontSize: GRENADE_TIMER_FONT,
+        color: '#ffffff',
+        stroke: '#111827',
+        strokeThickness: 3,
+      })
+      .setDepth(18)
+      .setOrigin(0, 0.5);
+  }
+
+  clearGrenadeCookText(player) {
+    player.grenadeCookText?.destroy?.();
+    player.grenadeCookText = null;
+  }
+
+  updateGrenadeCookText(player) {
+    if (player.aimMode !== 'grenade' || !player.grenadeCookStartedAt) {
+      this.clearGrenadeCookText(player);
+      return;
+    }
+
+    if (!player.grenadeCookText?.active) {
+      player.grenadeCookText = this.add
+        .text(0, 0, '', {
+          fontFamily: UI_FONT,
+          fontSize: GRENADE_TIMER_FONT,
+          color: '#ffffff',
+          stroke: '#111827',
+          strokeThickness: 3,
+        })
+        .setDepth(18)
+        .setOrigin(0, 0.5);
+    }
+
+    const origin = this.getGrenadeOrigin(player);
+    const remainingSeconds = Math.max(0, (this.configData.grenades.fuseMs - (this.time.now - player.grenadeCookStartedAt)) / 1000);
+    player.grenadeCookText
+      .setPosition(origin.x + 12, origin.y - 20)
+      .setText(remainingSeconds.toFixed(1));
+  }
+
+  updateGrenadeCooking(time) {
+    for (const player of this.players) {
+      if (player.aimMode !== 'grenade' || !player.aiming || !player.grenadeCookStartedAt) {
+        continue;
+      }
+      if (time - player.grenadeCookStartedAt < this.configData.grenades.fuseMs) {
+        continue;
+      }
+
+      const origin = this.getGrenadeOrigin(player);
+      if (player.grenadeAmmo > 0) {
+        player.grenadeAmmo -= 1;
+      }
+      player.nextGrenadeAt = time + 500;
+      player.aiming = false;
+      player.aimMode = null;
+      player.grenadeCookStartedAt = 0;
+      this.setAimVisible(player, false);
+      this.explodeAt(origin.x, origin.y, this.configData.grenades.radius, this.configData.grenades.damage, player.id, true);
+    }
+  }
+
+  updateGrenades(time, delta) {
+    if (!this.grenades) {
+      return;
+    }
+
+    const dt = Math.min(0.05, Math.max(0.001, delta / 1000));
+    for (const grenade of this.grenades.getChildren()) {
+      if (!grenade?.active) {
+        continue;
+      }
+
+      this.resolveGrenadeSlopeContact(grenade);
+      grenade.angle += (grenade.body?.velocity?.x ?? 0) * dt * 0.65;
+
+      const timerText = grenade.getData('timerText');
+      if (timerText?.active) {
+        const remainingSeconds = Math.max(0, ((grenade.getData('fuseEnd') ?? time) - time) / 1000);
+        timerText
+          .setPosition(grenade.x + 12, grenade.y - 20)
+          .setText(remainingSeconds.toFixed(1));
+      }
+
+      if (grenade.y > this.worldHeight + 900) {
+        timerText?.destroy?.();
+        grenade.destroy();
+      }
+    }
+  }
+
+  resolveGrenadeSlopeContact(grenade) {
+    const body = grenade?.body;
+    if (!body || !this.slopeTiles.length || body.velocity.y < -22) {
+      return false;
+    }
+
+    const footY = body.y + body.height;
+    const sampleXs = [
+      body.x + body.width * 0.25,
+      body.x + body.width * 0.5,
+      body.x + body.width * 0.75,
+    ];
+    const tileSize = this.editorLevel?.tileSize ?? 24;
+    const tileY = Math.floor((footY + 3) / tileSize);
+    let bestSurface = Infinity;
+
+    for (const sampleX of sampleXs) {
+      const tileX = Math.floor(sampleX / tileSize);
+      for (let y = tileY - 1; y <= tileY + 1; y += 1) {
+        for (let x = tileX - 1; x <= tileX + 1; x += 1) {
+          const slope = this.slopeTileMap.get(`${x},${y}`);
+          if (!slope || slope.side !== 'floor' || slope.thin) {
+            continue;
+          }
+          if (sampleX < slope.x - 2 || sampleX > slope.x + slope.size + 2) {
+            continue;
+          }
+          const localX = Phaser.Math.Clamp(sampleX - slope.x, 0, slope.size);
+          const surfaceY = slope.type === 'up'
+            ? slope.y + slope.size - localX
+            : slope.y + localX;
+          if (footY >= surfaceY - 5 && footY <= surfaceY + Math.max(14, slope.size * 0.8) && surfaceY < bestSurface) {
+            bestSurface = surfaceY;
+          }
+        }
+      }
+    }
+
+    if (!Number.isFinite(bestSurface)) {
+      return false;
+    }
+
+    this.setGrenadeBodyTop(grenade, bestSurface - body.height);
+    if (body.velocity.y > 0) {
+      body.setVelocityY(-Math.min(105, body.velocity.y * this.configData.grenades.bounce));
+    }
+    body.touching.down = true;
+    body.blocked.down = true;
+    body.updateCenter();
+    return true;
+  }
+
+  setGrenadeBodyTop(grenade, topY) {
+    const body = grenade.body;
+    grenade.y = topY + body.height / 2;
+    body.y = topY;
+    body.prev.y = topY;
+    body.prevFrame.y = topY;
+    body.autoFrame.y = topY;
+    body.updateCenter();
+  }
+
   handleMeleePressed(player, time) {
     if (time < player.meleeAnimationUntil || time < player.pickupAnimationUntil) {
+      return;
+    }
+
+    if (player.crouching) {
+      this.handlePickupPressed(player, time);
       return;
     }
 
@@ -5078,7 +5415,10 @@ class FightScene extends Phaser.Scene {
     const hit = this.configData.melee.hits[player.comboIndex];
     const comboNumber = player.comboIndex + 1;
     const animationName = this.getMeleeAnimationName(player);
-    const animationDuration = this.getAnimationDurationMs(animationName);
+    const comboSetting = this.getMeleeComboAnimationSetting(animationName, comboNumber);
+    const animationDuration = comboSetting
+      ? Math.max(80, (comboSetting.frames.length / Math.max(1, comboSetting.fps)) * 1000)
+      : this.getAnimationDurationMs(animationName);
     player.nextMeleeAt = time + Math.max(this.configData.melee.cooldownMs, animationDuration);
     player.comboResetAt = time + this.configData.melee.comboResetMs;
     player.comboIndex = (player.comboIndex + 1) % this.configData.melee.hits.length;
@@ -5092,17 +5432,18 @@ class FightScene extends Phaser.Scene {
     if (!player.sprite.body.blocked.down && !player.sprite.body.touching.down) {
       return 'jumpMelee';
     }
-    return player.crouching ? 'crouchMelee' : 'melee';
+    return 'melee';
   }
 
   startMeleeAnimation(player, animationName, time, duration, hit = this.configData.melee.hits[0], comboNumber = 1) {
+    const comboSetting = this.getMeleeComboAnimationSetting(animationName, comboNumber);
     const keyByAnimation = {
       melee: 'girl-melee',
       crouchMelee: 'girl-crouch-melee',
       jumpMelee: 'girl-jump-melee',
       ladderMelee: 'girl-ladder-melee',
     };
-    const animationKey = keyByAnimation[animationName] ?? 'girl-melee';
+    const animationKey = comboSetting?.key ?? keyByAnimation[animationName] ?? 'girl-melee';
     player.meleeAnimationKey = animationKey;
     player.meleeAnimationUntil = time + duration;
     player.meleeAttackId += 1;
@@ -5111,6 +5452,7 @@ class FightScene extends Phaser.Scene {
       animationName,
       hit,
       comboNumber,
+      activeDelayMs: comboSetting?.activeDelayMs,
       hitTargets: new Set(),
       environmentHitApplied: false,
     };
@@ -5118,7 +5460,20 @@ class FightScene extends Phaser.Scene {
     this.scheduleMeleeActiveFrames(player, player.meleeAttackState);
   }
 
+  getMeleeComboAnimationSetting(animationName, comboNumber) {
+    const combos = MELEE_COMBO_ANIMATIONS[animationName];
+    if (!combos?.length) {
+      return null;
+    }
+    return combos[Phaser.Math.Clamp(comboNumber - 1, 0, combos.length - 1)] ?? null;
+  }
+
   scheduleMeleeActiveFrames(player, attackState) {
+    if (Number.isFinite(attackState.activeDelayMs)) {
+      this.time.delayedCall(attackState.activeDelayMs, () => this.resolveMeleeActiveFrame(player, attackState.id));
+      return;
+    }
+
     const setting = this.animationConfig?.[attackState.animationName];
     const active = MELEE_ACTIVE_FRAMES[attackState.animationName];
     if (!setting || !active) {
@@ -5180,6 +5535,29 @@ class FightScene extends Phaser.Scene {
     player.meleeAnimationUntil = 0;
     player.sprite.setVelocityX(0);
     player.sprite.play('girl-pickup');
+  }
+
+  startRoll(player, time, direction) {
+    const rollDirection = direction || player.facing || 1;
+    const rollMs = this.getAnimationDurationMs('roll');
+    const rollEndMs = this.getAnimationDurationMs('rollEnd');
+    player.rollDirection = rollDirection;
+    player.rollEndAt = time + rollMs;
+    player.rollUntil = time + rollMs + rollEndMs;
+    player.invulnerableUntil = Math.max(player.invulnerableUntil, time + ROLL_INVULNERABLE_MS);
+    player.crouching = false;
+    player.crouchTransitionUntil = 0;
+    player.standTransitionUntil = 0;
+    player.meleeAnimationUntil = 0;
+    player.onFireUntil = 0;
+    player.nextFireDamageAt = 0;
+    player.fireOwnerId = null;
+    player.fireEffect?.destroy?.();
+    player.fireEffect = null;
+    player.facing = rollDirection;
+    player.sprite.setFlipX(rollDirection < 0);
+    player.sprite.setVelocityX(rollDirection * ROLL_SPEED);
+    player.sprite.play('girl-roll');
   }
 
   startDashAttack(player, time) {
@@ -5429,7 +5807,12 @@ class FightScene extends Phaser.Scene {
     const bullet = this.getCollisionObjectFromGroup(this.bullets, objectA, objectB, 'weaponId');
     const sprite = bullet === objectA ? objectB : objectA;
     const player = this.playerBySprite.get(sprite);
-    return Boolean(bullet?.active && player && bullet.getData('owner') !== player.id);
+    return Boolean(
+      bullet?.active &&
+      player &&
+      bullet.getData('owner') !== player.id &&
+      this.time.now >= player.rollUntil,
+    );
   }
 
   bulletWallProcess(objectA, objectB) {
@@ -5516,6 +5899,7 @@ class FightScene extends Phaser.Scene {
   explodeGrenade(grenade, ownerId) {
     const x = grenade.x;
     const y = grenade.y;
+    grenade.getData('timerText')?.destroy?.();
     grenade.destroy();
     this.explodeAt(x, y, this.configData.grenades.radius, this.configData.grenades.damage, ownerId, true);
   }
@@ -5613,6 +5997,9 @@ class FightScene extends Phaser.Scene {
     player.dashAttackUntil = 0;
     player.dashDirection = 0;
     player.dashHitTargets.clear();
+    player.rollUntil = 0;
+    player.rollEndAt = 0;
+    player.rollDirection = 0;
     player.comboIndex = 0;
     player.comboResetAt = 0;
     player.nextMeleeAt = 0;
@@ -5634,9 +6021,16 @@ class FightScene extends Phaser.Scene {
     player.doorExitDirection = 0;
     player.doorExitTargetX = 0;
     player.shootStanceUntil = 0;
+    player.grenadeCookStartedAt = 0;
+    this.clearGrenadeCookText(player);
     player.slowedUntil = 0;
     player.shieldUntil = 0;
     player.hasteUntil = 0;
+    player.onFireUntil = 0;
+    player.nextFireDamageAt = 0;
+    player.fireOwnerId = null;
+    player.fireEffect?.destroy?.();
+    player.fireEffect = null;
     player.aiming = false;
     player.aimMode = null;
     player.aimFacing = player.facing >= 0 ? 1 : -1;
@@ -6259,6 +6653,114 @@ class FightScene extends Phaser.Scene {
     ];
   }
 
+  igniteBarrel(prop, ownerId = null) {
+    prop.setData('ignited', true);
+    prop.setData('ignitedUntil', this.time.now + BARREL_BURN_MS);
+    prop.setData('ignitedBy', ownerId);
+    prop.setData('health', 1);
+    prop.setFillStyle(COLORS.fire, 1);
+
+    const flame = this.add
+      .circle(prop.x, prop.y - prop.displayHeight * 0.48, Math.max(8, prop.displayWidth * 0.26), COLORS.fire, 0.72)
+      .setDepth(14)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    flame.setData('offsetX', 0);
+    flame.setData('offsetY', -prop.displayHeight * 0.48);
+    const visuals = prop.getData('visuals') ?? [];
+    visuals.push(flame);
+    prop.setData('visuals', visuals);
+    prop.setData('flameVisual', flame);
+  }
+
+  updateBurningProps(time) {
+    for (const prop of this.getLevelProps()) {
+      if (!prop?.active || !prop.getData('ignited')) {
+        continue;
+      }
+
+      const flame = prop.getData('flameVisual');
+      if (flame?.active) {
+        const pulse = 0.82 + Math.sin(time * 0.018) * 0.22;
+        flame.setScale(pulse);
+        flame.setAlpha(0.58 + Math.sin(time * 0.021) * 0.18);
+      }
+
+      for (const player of this.players) {
+        if (!player.sprite?.active || time < player.rollUntil) {
+          continue;
+        }
+        const distance = Phaser.Math.Distance.Between(prop.x, prop.y, player.sprite.x, player.sprite.y);
+        if (distance <= BARREL_FLAME_RADIUS) {
+          this.ignitePlayer(player, prop.getData('ignitedBy'), time);
+        }
+      }
+
+      if (time >= prop.getData('ignitedUntil')) {
+        this.explodeIgnitedBarrel(prop);
+      }
+    }
+  }
+
+  explodeIgnitedBarrel(prop) {
+    if (!prop?.active) {
+      return;
+    }
+    const radius = prop.getData('explosiveRadius') ?? BARREL_EXPLOSION_RADIUS;
+    const explosiveDamage = prop.getData('explosiveDamage') ?? 44;
+    const ownerId = prop.getData('ignitedBy');
+    const explosionX = prop.x;
+    const explosionY = prop.y;
+    this.breakLevelProp(prop, explosionX, explosionY);
+    this.explodeAt(explosionX, explosionY, radius, explosiveDamage, ownerId, true);
+  }
+
+  ignitePlayer(player, ownerId = null, time = this.time.now) {
+    player.onFireUntil = Math.max(player.onFireUntil, time + FIRE_DURATION_MS);
+    player.nextFireDamageAt = Math.max(player.nextFireDamageAt || 0, time + FIRE_TICK_MS);
+    player.fireOwnerId = ownerId;
+    if (!player.fireEffect?.active) {
+      player.fireEffect = this.add
+        .circle(player.sprite.x, player.sprite.y - 20, 13, COLORS.fire, 0.48)
+        .setDepth(16)
+        .setBlendMode(Phaser.BlendModes.ADD);
+    }
+  }
+
+  updateBurningPlayers(time) {
+    for (const player of this.players) {
+      if (time < player.rollUntil && player.onFireUntil > 0) {
+        player.onFireUntil = 0;
+      }
+
+      if (time >= player.onFireUntil) {
+        player.fireEffect?.destroy?.();
+        player.fireEffect = null;
+        continue;
+      }
+
+      if (player.fireEffect?.active) {
+        player.fireEffect
+          .setPosition(player.sprite.x, player.sprite.y - 20)
+          .setAlpha(0.38 + Math.sin(time * 0.024) * 0.18)
+          .setScale(0.9 + Math.sin(time * 0.019) * 0.18);
+      }
+
+      if (time < player.nextFireDamageAt) {
+        continue;
+      }
+
+      player.nextFireDamageAt = time + FIRE_TICK_MS;
+      const amount = time < player.shieldUntil
+        ? Math.ceil(FIRE_DAMAGE * this.configData.powerups.shield.damageMultiplier)
+        : FIRE_DAMAGE;
+      player.health = Math.max(0, player.health - amount);
+      if (player.health <= 0) {
+        const owner = this.getPlayerById(player.fireOwnerId) ?? this.getOpponent(player);
+        this.scoreKill(owner === player ? this.getOpponent(player) : owner, player, 'fire');
+      }
+    }
+  }
+
   damageLevelProp(prop, damage, ownerId = null, impactX = prop.x, impactY = prop.y) {
     if (!prop.active || !prop.getData('destructible')) {
       return;
@@ -6268,6 +6770,11 @@ class FightScene extends Phaser.Scene {
     prop.setData('health', health);
     this.spawnHitEffect(prop.x, prop.y, prop.getData('explosiveRadius') ? COLORS.explosion : COLORS.crate);
     if (health > 0) {
+      return;
+    }
+
+    if (prop.getData('propType') === 'barrel' && !prop.getData('ignited')) {
+      this.igniteBarrel(prop, ownerId);
       return;
     }
 

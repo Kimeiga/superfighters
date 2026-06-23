@@ -611,8 +611,8 @@ export const DEFAULT_GAMEPLAY_CONFIG = {
     respawnInvulnerabilityMs: 1400,
   },
   movement: {
-    walkSpeed: 255,
-    runSpeed: 255,
+    walkSpeed: 225,
+    runSpeed: 225,
     crouchSpeed: 0,
     aimSpeed: 78,
     jumpSpeed: 390,
@@ -625,7 +625,7 @@ export const DEFAULT_GAMEPLAY_CONFIG = {
     dashTapMs: 260,
     runHoldMs: 900,
     dashAttackMs: 430,
-    dashAttackSpeed: 520,
+    dashAttackSpeed: 500,
     dashAttackLift: 210,
     aimRotateDegPerSecond: 155,
   },
@@ -651,8 +651,8 @@ export const DEFAULT_GAMEPLAY_CONFIG = {
     },
   },
   melee: {
-    comboResetMs: 760,
-    cooldownMs: 250,
+    comboResetMs: 680,
+    cooldownMs: 120,
     hitboxWidth: 58,
     hitboxHeight: 42,
     hits: [
@@ -672,12 +672,12 @@ export const DEFAULT_GAMEPLAY_CONFIG = {
   grenades: {
     startCount: 3,
     maxCount: 3,
-    throwSpeed: 510,
-    throwLift: 0,
-    fuseMs: 1700,
-    bounce: 0.42,
-    dragX: 900,
-    radius: 116,
+    throwSpeed: 680,
+    throwLift: 140,
+    fuseMs: 2500,
+    bounce: 0.5,
+    dragX: 170,
+    radius: 154,
     damage: 28,
     selfDamage: 12,
     knockback: 420,
@@ -750,7 +750,13 @@ function migrateSavedGameplayConfig(saved) {
   if (migrated.movement?.walkSpeed === 320) {
     migrated.movement.walkSpeed = DEFAULT_GAMEPLAY_CONFIG.movement.walkSpeed;
   }
+  if (migrated.movement?.walkSpeed === 255) {
+    migrated.movement.walkSpeed = DEFAULT_GAMEPLAY_CONFIG.movement.walkSpeed;
+  }
   if (migrated.movement?.runSpeed === 320) {
+    migrated.movement.runSpeed = DEFAULT_GAMEPLAY_CONFIG.movement.runSpeed;
+  }
+  if (migrated.movement?.runSpeed === 255) {
     migrated.movement.runSpeed = DEFAULT_GAMEPLAY_CONFIG.movement.runSpeed;
   }
   if (migrated.movement?.jumpSpeed === 590) {
@@ -763,6 +769,18 @@ function migrateSavedGameplayConfig(saved) {
     migrated.playerBody?.crouch?.height === 14
   ) {
     migrated.playerBody = structuredClone(DEFAULT_GAMEPLAY_CONFIG.playerBody);
+  }
+  if (migrated.grenades?.throwSpeed === 510) {
+    migrated.grenades.throwSpeed = DEFAULT_GAMEPLAY_CONFIG.grenades.throwSpeed;
+  }
+  if (migrated.grenades?.fuseMs === 1700) {
+    migrated.grenades.fuseMs = DEFAULT_GAMEPLAY_CONFIG.grenades.fuseMs;
+  }
+  if (migrated.grenades?.dragX === 900) {
+    migrated.grenades.dragX = DEFAULT_GAMEPLAY_CONFIG.grenades.dragX;
+  }
+  if (migrated.grenades?.radius === 116) {
+    migrated.grenades.radius = DEFAULT_GAMEPLAY_CONFIG.grenades.radius;
   }
   return migrated;
 }

@@ -76,6 +76,17 @@ window.__superfightersMechanicsSmoke = (async () => {
     player.ladderGunDrawUntil = 0;
     player.ladderEndFootY = 0;
     player.dashAttackUntil = 0;
+    player.rollUntil = 0;
+    player.rollEndAt = 0;
+    player.rollDirection = 0;
+    player.grenadeCookStartedAt = 0;
+    player.grenadeCookText?.destroy?.();
+    player.grenadeCookText = null;
+    player.onFireUntil = 0;
+    player.nextFireDamageAt = 0;
+    player.fireOwnerId = null;
+    player.fireEffect?.destroy?.();
+    player.fireEffect = null;
     player.dashHitTargets.clear();
     scene.applyBodyPose(player);
     scene.setAimVisible(player, false);
@@ -115,6 +126,10 @@ window.__superfightersMechanicsSmoke = (async () => {
   uiSmokeContainer.destroy();
 
   const weaponIds = Object.keys(scene.configData.weapons);
+  check('movement speed is tuned down', scene.configData.movement.walkSpeed === 225 && scene.configData.movement.runSpeed === 225, {
+    walkSpeed: scene.configData.movement.walkSpeed,
+    runSpeed: scene.configData.movement.runSpeed,
+  });
   check(
     'weapon textures exist',
     weaponIds.every((id) => scene.textures.exists(`weapon-${id}`)),
@@ -233,6 +248,23 @@ window.__superfightersMechanicsSmoke = (async () => {
   aimCheck('aim up while facing left', -1, -1, true);
   aimCheck('aim down while facing left', -1, 1, false);
 
+  resetPlayer(p1, 700, 484, 1);
+  resetPlayer(p2, 1040, 484, -1);
+  p1.weapon = scene.makeWeaponState('pistol');
+  p2.weapon = scene.makeWeaponState('pistol');
+  scene.beginAim(p1, 'gun', scene.time.now + 51);
+  scene.beginAim(p2, 'gun', scene.time.now + 51);
+  scene.updateAimVisuals(p1);
+  scene.updateAimVisuals(p2);
+  check('all guns draw player-colored aim lasers', p1.aimGraphics.visible && p2.aimGraphics.visible && scene.getLaserColor(p1) !== scene.getLaserColor(p2), {
+    p1Laser: scene.getLaserColor(p1),
+    p2Laser: scene.getLaserColor(p2),
+    p1GraphicsVisible: p1.aimGraphics.visible,
+    p2GraphicsVisible: p2.aimGraphics.visible,
+  });
+  scene.setAimVisible(p1, false);
+  scene.setAimVisible(p2, false);
+
   const empressFrameOf = (sprite) => Number((sprite?.texture?.key ?? '').match(/empress-frame-(\d+)$/)?.[1] ?? NaN);
   const gunLayerCheck = (name, animationKey, bodyFrame, expectedArmFrame) => {
     resetPlayer(p1, 700, 484, 1);
@@ -292,6 +324,36 @@ window.__superfightersMechanicsSmoke = (async () => {
 
   resetPlayer(p1, 700, 484, 1);
   p1.weapon = scene.makeWeaponState('pistol');
+  p1.crouching = true;
+  pickup = scene.createPickup(p1.sprite.x + 4, p1.sprite.y, 'weapon', 'rifle');
+  p1.currentPickup = pickup;
+  scene.handleMeleePressed(p1, scene.time.now + 70);
+  check('crouch plus melee swaps pickup instead of crouch melee', p1.weapon?.id === 'rifle' && p1.sprite.anims.currentAnim?.key === 'girl-pickup', {
+    weapon: p1.weapon?.id,
+    animation: p1.sprite.anims.currentAnim?.key,
+  });
+  clearGroup(scene.pickups);
+
+  resetPlayer(p1, 700, 484, 1);
+  p1.sprite.body.blocked.down = true;
+  p1.sprite.body.touching.down = true;
+  scene.performMeleeCombo(p1, scene.time.now + 80);
+  const comboFirst = p1.sprite.anims.currentAnim?.key;
+  const firstUntil = p1.meleeAnimationUntil;
+  scene.performMeleeCombo(p1, scene.time.now + 90);
+  const comboStillFirst = p1.sprite.anims.currentAnim?.key;
+  p1.meleeAnimationUntil = 0;
+  p1.nextMeleeAt = 0;
+  scene.performMeleeCombo(p1, firstUntil + 25);
+  const comboSecond = p1.sprite.anims.currentAnim?.key;
+  check('melee combo advances one hit per press', comboFirst === 'girl-melee-1' && comboStillFirst === 'girl-melee-1' && comboSecond === 'girl-melee-2', {
+    comboFirst,
+    comboStillFirst,
+    comboSecond,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
+  p1.weapon = scene.makeWeaponState('pistol');
   p1.aimMode = 'gun';
   p1.aiming = true;
   p1.aimFacing = 1;
@@ -304,6 +366,25 @@ window.__superfightersMechanicsSmoke = (async () => {
     anchor: { x: Math.round(gunAnchor.x), y: Math.round(gunAnchor.y) },
     origin: { x: Math.round(bulletOrigin.x), y: Math.round(bulletOrigin.y) },
   });
+
+  const targetPlatformForTrace = scene.platforms.find((platform) => platform.active && platform.getData('levelGeometry') && !platform.getData('thin'));
+  if (targetPlatformForTrace) {
+    clearGroup(scene.bullets);
+    const traceY = targetPlatformForTrace.body.y + targetPlatformForTrace.body.height / 2;
+    const traceBullet = scene.spawnBullet(p1, scene.configData.weapons.pistol, 0, targetPlatformForTrace.body.x - 22, traceY);
+    traceBullet.setData('previousX', targetPlatformForTrace.body.x - 22);
+    traceBullet.setData('previousY', traceY);
+    traceBullet.setPosition(targetPlatformForTrace.body.x + targetPlatformForTrace.body.width + 22, traceY);
+    check('bullet segment tracing catches wall tunneling', scene.findBulletSegmentWallHit(traceBullet) === targetPlatformForTrace, {
+      platform: {
+        x: Math.round(targetPlatformForTrace.body.x),
+        y: Math.round(targetPlatformForTrace.body.y),
+        width: Math.round(targetPlatformForTrace.body.width),
+        height: Math.round(targetPlatformForTrace.body.height),
+      },
+    });
+    traceBullet.destroy();
+  }
 
   for (const id of weaponIds) {
     clearGroup(scene.bullets);
@@ -469,6 +550,7 @@ window.__superfightersMechanicsSmoke = (async () => {
   resetPlayer(p1, 700, 484, 1);
   p1.grenadeAmmo = 3;
   scene.beginAim(p1, 'grenade', scene.time.now + 2200);
+  p1.grenadeCookStartedAt = scene.time.now + 1200;
   scene.updateAim(p1, 0, -1, 250);
   const expectedGrenadeOrigin = scene.getGrenadeOrigin(p1);
   scene.releaseAim(p1, scene.time.now + 2250);
@@ -495,6 +577,49 @@ window.__superfightersMechanicsSmoke = (async () => {
     dragX: grenades[0]?.body?.drag?.x,
     configured: scene.configData.grenades.dragX,
   });
+  check('thrown grenade keeps visible cooked fuse timer', grenades[0]?.getData('timerText')?.active && grenades[0]?.getData('fuseEnd') > scene.time.now, {
+    timerActive: grenades[0]?.getData('timerText')?.active,
+    fuseRemaining: grenades[0] ? Math.round(grenades[0].getData('fuseEnd') - scene.time.now) : null,
+  });
+
+  const oldSlopeTiles = scene.slopeTiles;
+  const oldSlopeTileMap = scene.slopeTileMap;
+  const oldEditorLevel = scene.editorLevel;
+  scene.editorLevel = { tileSize: 30 };
+  const testSlope = { x: 300, y: 300, size: 30, type: 'down', side: 'floor', thin: false, tileX: 10, tileY: 10 };
+  scene.slopeTiles = [testSlope];
+  scene.slopeTileMap = new Map([['10,10', testSlope]]);
+  const slopeGrenade = scene.physics.add.image(315, 306, 'grenade-pixel');
+  scene.grenades.add(slopeGrenade);
+  slopeGrenade.body.setCircle(7);
+  slopeGrenade.body.setVelocity(90, 160);
+  const slopeResolved = scene.resolveGrenadeSlopeContact(slopeGrenade);
+  const slopeGrenadeBottom = slopeGrenade.body.y + slopeGrenade.body.height;
+  check('grenades resolve against solid slope floors', slopeResolved && slopeGrenadeBottom >= testSlope.y && slopeGrenadeBottom <= testSlope.y + testSlope.size, {
+    slopeResolved,
+    grenadeBottom: Math.round(slopeGrenadeBottom),
+  });
+  slopeGrenade.destroy();
+  scene.slopeTiles = oldSlopeTiles;
+  scene.slopeTileMap = oldSlopeTileMap;
+  scene.editorLevel = oldEditorLevel;
+  clearGroup(scene.grenades);
+
+  resetPlayer(p1, 700, 484, 1);
+  const barrel = scene.createLevelProp(p1.sprite.x + 8, p1.sprite.y, 30, 30, 'barrel');
+  scene.damageLevelProp(barrel, 999, p1.id, p1.sprite.x, p1.sprite.y);
+  scene.updateBurningProps(scene.time.now + 20);
+  check('barrels ignite before exploding and set nearby players on fire', barrel.active && barrel.getData('ignited') && p1.onFireUntil > scene.time.now, {
+    barrelActive: barrel.active,
+    ignited: barrel.getData('ignited'),
+    onFireUntil: p1.onFireUntil,
+  });
+  scene.startRoll(p1, scene.time.now + 40, 1);
+  check('rolling extinguishes player fire', p1.onFireUntil === 0 && p1.rollUntil > scene.time.now, {
+    onFireUntil: p1.onFireUntil,
+    rollUntil: p1.rollUntil,
+  });
+  scene.explodeIgnitedBarrel(barrel);
 
   resetPlayer(p1, 700, 484, 1);
   p1.health = 50;
