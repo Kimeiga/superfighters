@@ -150,6 +150,7 @@ io.onConnection((channel) => {
 
     lobby.started = true;
     lobby.inputs.clear();
+    lobby.inputSeqs.clear();
     lobby.snapshots.clear();
     lobby.hostSnapshot = null;
     emitLobbyState(lobby);
@@ -173,16 +174,24 @@ io.onConnection((channel) => {
     if (!player) {
       return;
     }
+    const seq = safeInteger(data?.seq);
+    const lastSeq = lobby.inputSeqs.get(player.playerId) ?? 0;
+    if (seq > 0 && seq <= lastSeq) {
+      return;
+    }
+    if (seq > 0) {
+      lobby.inputSeqs.set(player.playerId, seq);
+    }
     const packet = {
       playerId: player.playerId,
       roundId: lobby.roundId,
-      seq: safeInteger(data?.seq),
+      seq,
       t: safeInteger(data?.t),
       input: sanitizeInput(data?.input),
       serverTime: Date.now(),
     };
     lobby.inputs.set(player.playerId, packet);
-    io.room(lobby.code).emit('player-input', packet, { reliable: true });
+    io.room(lobby.code).emit('player-input', packet);
   });
 
   channel.on('player-snapshot', (data) => {
@@ -236,6 +245,7 @@ io.onConnection((channel) => {
     }
     lobby.started = true;
     lobby.inputs.clear();
+    lobby.inputSeqs.clear();
     lobby.snapshots.clear();
     lobby.hostSnapshot = null;
     lobby.roundId = (lobby.roundId ?? 0) + 1;
@@ -331,6 +341,7 @@ function createLobby(channel) {
     createdAt: Date.now(),
     players: new Map(),
     inputs: new Map(),
+    inputSeqs: new Map(),
     snapshots: new Map(),
     hostSnapshot: null,
     roundId: 0,

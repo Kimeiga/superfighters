@@ -77,7 +77,7 @@ For iPhone PWA play, serve over HTTPS, open the invite link in Safari, then use 
 4. Share the copied invite link with the second player.
 5. When both players are connected, the match starts.
 
-The current online implementation has the server own lobby membership/player slots and relay timestamped input/snapshot packets over Geckos. The browser still runs Phaser gameplay locally so local play remains unchanged. Full server-side physics authority should be the next network hardening step once the core mechanics settle.
+The current online implementation has the server own lobby membership/player slots and relay timestamped input/snapshot packets over Geckos. Inputs are latest-state, sequence-numbered packets, and stale input packets are ignored by both the relay and clients. The host simulates the authoritative match and sends snapshots; non-host clients reconcile their local player immediately and render remote authoritative players through a small interpolation buffer to smooth jitter. Full server-side physics authority should be the next network hardening step once the core mechanics settle.
 
 ## Cloudflare Worker Proxy
 

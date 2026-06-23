@@ -30,6 +30,10 @@ const INPUT_ACTIONS = ['left', 'right', 'jump', 'crouch', 'melee', 'pickup', 'sh
 const GAME_DEFAULT_CAPTURE_CODES = new Set(['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'Slash', 'KeyE', 'Quote']);
 const ONLINE_INPUT_SEND_MS = 50;
 const ONLINE_SNAPSHOT_SEND_MS = 90;
+const ONLINE_INTERPOLATION_DELAY_MS = 135;
+const ONLINE_EXTRAPOLATION_LIMIT_MS = 120;
+const ONLINE_REMOTE_SNAPSHOT_BUFFER_MAX = 10;
+const ONLINE_REMOTE_TELEPORT_DISTANCE = 180;
 const CPU_PLAYER_ID = 'p2';
 const CPU_SHOOT_HOLD_MS = 360;
 const CPU_GRENADE_HOLD_MS = 520;
@@ -235,6 +239,8 @@ class FightScene extends Phaser.Scene {
     this.onlineLastInputSentAt = 0;
     this.onlineLastSnapshotSentAt = 0;
     this.onlineLastHostSnapshotServerTime = 0;
+    this.onlineServerClockOffsetMs = 0;
+    this.onlineServerClockReady = false;
     this.onlinePickupSnapshotKey = '';
     this.onlineRoundId = 0;
     this.touchInputDown = createInputDown();
@@ -486,6 +492,7 @@ class FightScene extends Phaser.Scene {
     this.updatePickups(time);
     this.checkKillZones();
     this.checkRoundTimer(time);
+    this.renderOnlineRemoteSnapshots();
     this.syncOnlineState(time);
     this.updateCamera(delta);
     this.updateUiLayer();
@@ -2142,6 +2149,8 @@ class FightScene extends Phaser.Scene {
       cpuInputDown: createInputDown(),
       cpuState: createCpuState(),
       remoteInputSeq: 0,
+      remoteSnapshotBuffer: [],
+      remoteLastSnapshotServerTime: 0,
       aimAngle: config.facing > 0 ? 0 : Math.PI,
       aimFacing: config.facing > 0 ? 1 : -1,
       aimOffset: 0,
@@ -2965,7 +2974,7 @@ class FightScene extends Phaser.Scene {
       return;
     }
     const seq = safeClientInteger(data.seq);
-    if (seq && seq < (player.remoteInputSeq ?? 0)) {
+    if (seq && seq <= (player.remoteInputSeq ?? 0)) {
       return;
     }
     player.remoteInputSeq = seq;
@@ -2983,7 +2992,8 @@ class FightScene extends Phaser.Scene {
     if (!player || !data.snapshot) {
       return;
     }
-    this.applyRemoteSnapshot(player, data.snapshot);
+    const serverTime = safeClientInteger(data.serverTime);
+    this.queueRemoteSnapshot(player, data.snapshot, serverTime);
   }
 
   handleOnlineHostSnapshot(data) {
@@ -3005,9 +3015,13 @@ class FightScene extends Phaser.Scene {
       if (!player || !snapshot) {
         continue;
       }
-      this.applyRemoteSnapshot(player, snapshot, {
-        localReconcile: player.id === this.localOnlinePlayerId,
-      });
+      if (player.id === this.localOnlinePlayerId) {
+        this.applyRemoteSnapshot(player, snapshot, {
+          localReconcile: true,
+        });
+      } else {
+        this.queueRemoteSnapshot(player, snapshot, serverTime);
+      }
     }
 
     if (Array.isArray(data.pickups)) {
@@ -3070,6 +3084,8 @@ class FightScene extends Phaser.Scene {
       player.inputState = createInputState();
       player.remoteInputDown = createInputDown();
       player.remoteInputSeq = 0;
+      player.remoteSnapshotBuffer = [];
+      player.remoteLastSnapshotServerTime = 0;
     }
     this.touchInputDown = createInputDown();
   }
@@ -3087,6 +3103,8 @@ class FightScene extends Phaser.Scene {
     this.onlineLastInputSentAt = 0;
     this.onlineLastSnapshotSentAt = 0;
     this.onlineLastHostSnapshotServerTime = 0;
+    this.onlineServerClockOffsetMs = 0;
+    this.onlineServerClockReady = false;
     this.onlinePickupSnapshotKey = '';
     this.resetOnlineInputs();
     this.clearGameObjectGroup(this.bullets);
@@ -3148,7 +3166,7 @@ class FightScene extends Phaser.Scene {
       seq: this.onlineInputSeq,
       input: player.inputState.down,
       t: Math.round(time),
-    }, { reliable: true });
+    });
   }
 
   syncOnlineState(time) {
@@ -3237,21 +3255,176 @@ class FightScene extends Phaser.Scene {
     };
   }
 
+  updateOnlineServerClock(serverTime) {
+    const parsedServerTime = safeClientInteger(serverTime);
+    if (!parsedServerTime) {
+      return this.onlineServerClockOffsetMs;
+    }
+
+    const observedOffset = parsedServerTime - Date.now();
+    if (!this.onlineServerClockReady) {
+      this.onlineServerClockOffsetMs = observedOffset;
+      this.onlineServerClockReady = true;
+      return this.onlineServerClockOffsetMs;
+    }
+
+    this.onlineServerClockOffsetMs = Phaser.Math.Linear(this.onlineServerClockOffsetMs, observedOffset, 0.08);
+    return this.onlineServerClockOffsetMs;
+  }
+
+  getEstimatedOnlineServerTime() {
+    return Date.now() + (this.onlineServerClockReady ? this.onlineServerClockOffsetMs : 0);
+  }
+
+  queueRemoteSnapshot(player, snapshot, serverTime = 0) {
+    if (!player || !snapshot) {
+      return;
+    }
+
+    const estimatedServerTime = this.updateOnlineServerClock(serverTime);
+    const snapshotTime = safeClientInteger(serverTime) || Math.round(Date.now() + estimatedServerTime);
+    if (snapshotTime && snapshotTime <= (player.remoteLastSnapshotServerTime ?? 0)) {
+      return;
+    }
+
+    const entry = {
+      serverTime: snapshotTime,
+      snapshot: this.cloneNetworkSnapshot(snapshot),
+    };
+    const buffer = player.remoteSnapshotBuffer ?? [];
+    const previous = buffer.at(-1);
+    if (previous) {
+      const distance = Phaser.Math.Distance.Between(
+        Number(previous.snapshot.x),
+        Number(previous.snapshot.y),
+        Number(entry.snapshot.x),
+        Number(entry.snapshot.y),
+      );
+      if (distance > ONLINE_REMOTE_TELEPORT_DISTANCE) {
+        player.remoteSnapshotBuffer = [entry];
+        player.remoteLastSnapshotServerTime = snapshotTime;
+        this.applyRemoteSnapshot(player, entry.snapshot, { instant: true });
+        return;
+      }
+    }
+
+    buffer.push(entry);
+    buffer.sort((left, right) => left.serverTime - right.serverTime);
+    while (buffer.length > ONLINE_REMOTE_SNAPSHOT_BUFFER_MAX) {
+      buffer.shift();
+    }
+    player.remoteSnapshotBuffer = buffer;
+    player.remoteLastSnapshotServerTime = Math.max(player.remoteLastSnapshotServerTime ?? 0, snapshotTime);
+  }
+
+  renderOnlineRemoteSnapshots(serverNow = this.getEstimatedOnlineServerTime()) {
+    if (!this.onlineMode || !this.onlineReady) {
+      return;
+    }
+
+    const targetServerTime = serverNow - ONLINE_INTERPOLATION_DELAY_MS;
+    for (const player of this.players) {
+      if (player.id === this.localOnlinePlayerId) {
+        continue;
+      }
+      this.renderRemotePlayerSnapshot(player, targetServerTime);
+    }
+  }
+
+  renderRemotePlayerSnapshot(player, targetServerTime) {
+    const buffer = player.remoteSnapshotBuffer;
+    if (!buffer?.length) {
+      return;
+    }
+
+    while (buffer.length >= 2 && buffer[1].serverTime <= targetServerTime) {
+      buffer.shift();
+    }
+
+    const from = buffer[0];
+    const to = buffer[1];
+    if (!to) {
+      const extrapolated = this.extrapolateRemoteSnapshot(from, targetServerTime);
+      this.applyRemoteSnapshot(player, extrapolated, { interpolated: true });
+      return;
+    }
+
+    const span = Math.max(1, to.serverTime - from.serverTime);
+    const t = Phaser.Math.Clamp((targetServerTime - from.serverTime) / span, 0, 1);
+    const interpolated = this.interpolateRemoteSnapshots(from.snapshot, to.snapshot, t);
+    this.applyRemoteSnapshot(player, interpolated, { interpolated: true });
+  }
+
+  interpolateRemoteSnapshots(from, to, t) {
+    const discrete = t >= 0.5 ? to : from;
+    return {
+      ...discrete,
+      x: Phaser.Math.Linear(Number(from.x), Number(to.x), t),
+      y: Phaser.Math.Linear(Number(from.y), Number(to.y), t),
+      vx: Phaser.Math.Linear(Number(from.vx), Number(to.vx), t),
+      vy: Phaser.Math.Linear(Number(from.vy), Number(to.vy), t),
+      aimOffset: Phaser.Math.Linear(Number(from.aimOffset), Number(to.aimOffset), t),
+      aimAngle: lerpAngle(Number(from.aimAngle), Number(to.aimAngle), t),
+    };
+  }
+
+  extrapolateRemoteSnapshot(entry, targetServerTime) {
+    const snapshot = entry.snapshot;
+    const extrapolateMs = Phaser.Math.Clamp(targetServerTime - entry.serverTime, 0, ONLINE_EXTRAPOLATION_LIMIT_MS);
+    return {
+      ...snapshot,
+      x: Number(snapshot.x) + Number(snapshot.vx || 0) * (extrapolateMs / 1000),
+      y: Number(snapshot.y) + Number(snapshot.vy || 0) * (extrapolateMs / 1000),
+    };
+  }
+
+  cloneNetworkSnapshot(snapshot) {
+    return {
+      x: Number(snapshot.x),
+      y: Number(snapshot.y),
+      vx: Number(snapshot.vx) || 0,
+      vy: Number(snapshot.vy) || 0,
+      health: snapshot.health,
+      lives: snapshot.lives,
+      kills: snapshot.kills,
+      facing: snapshot.facing === -1 ? -1 : 1,
+      aimFacing: snapshot.aimFacing === -1 ? -1 : 1,
+      aimOffset: Number(snapshot.aimOffset) || 0,
+      aimAngle: Number(snapshot.aimAngle) || 0,
+      aiming: Boolean(snapshot.aiming),
+      aimMode: snapshot.aimMode === 'gun' || snapshot.aimMode === 'grenade' ? snapshot.aimMode : null,
+      crouching: Boolean(snapshot.crouching),
+      climbing: Boolean(snapshot.climbing),
+      weapon: snapshot.weapon?.id ? { id: snapshot.weapon.id, ammo: snapshot.weapon.ammo } : null,
+      grenadeAmmo: snapshot.grenadeAmmo,
+      powerup: snapshot.powerup ?? null,
+    };
+  }
+
+  setNetworkPlayerPosition(player, x, y) {
+    player.sprite.setPosition(x, y);
+    player.sprite.body.updateFromGameObject?.();
+    player.sprite.body.updateCenter?.();
+  }
+
   applyRemoteSnapshot(player, snapshot, options = {}) {
     const x = Number(snapshot.x);
     const y = Number(snapshot.y);
     if (Number.isFinite(x) && Number.isFinite(y)) {
-      const distance = Phaser.Math.Distance.Between(player.sprite.x, player.sprite.y, x, y);
-      const hardSnapDistance = options.localReconcile ? 96 : 58;
-      const minimumCorrection = options.localReconcile ? 4 : 1;
-      if (distance > hardSnapDistance) {
-        player.sprite.setPosition(x, y);
-        player.sprite.body.reset(x, y);
-      } else if (distance > minimumCorrection) {
-        const lerp = options.localReconcile ? 0.22 : 0.55;
-        player.sprite.x = Phaser.Math.Linear(player.sprite.x, x, lerp);
-        player.sprite.y = Phaser.Math.Linear(player.sprite.y, y, lerp);
-        player.sprite.body.updateFromGameObject?.();
+      if (options.instant || options.interpolated) {
+        this.setNetworkPlayerPosition(player, x, y);
+      } else {
+        const distance = Phaser.Math.Distance.Between(player.sprite.x, player.sprite.y, x, y);
+        const hardSnapDistance = options.localReconcile ? 96 : 58;
+        const minimumCorrection = options.localReconcile ? 4 : 1;
+        if (distance > hardSnapDistance) {
+          this.setNetworkPlayerPosition(player, x, y);
+        } else if (distance > minimumCorrection) {
+          const lerp = options.localReconcile ? 0.22 : 0.55;
+          player.sprite.x = Phaser.Math.Linear(player.sprite.x, x, lerp);
+          player.sprite.y = Phaser.Math.Linear(player.sprite.y, y, lerp);
+          player.sprite.body.updateFromGameObject?.();
+        }
       }
     }
 
@@ -7327,6 +7500,14 @@ function safeClientInteger(value) {
 
 function roundForNetwork(value) {
   return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function lerpAngle(from, to, t) {
+  if (!Number.isFinite(from) || !Number.isFinite(to)) {
+    return Number.isFinite(to) ? to : Number.isFinite(from) ? from : 0;
+  }
+  const delta = Phaser.Math.Angle.Wrap(to - from);
+  return Phaser.Math.Angle.Wrap(from + delta * Phaser.Math.Clamp(t, 0, 1));
 }
 
 function comparePickupSnapshotEntries(left, right) {

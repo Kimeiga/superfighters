@@ -480,7 +480,7 @@ window.__superfightersMechanicsSmoke = (async () => {
     };
     try {
       scene.fireWeapon(p1, scene.time.now + 100 + weaponIds.indexOf(id) * 1000);
-      await wait(Math.max(90, weapon.burst * weapon.burstDelayMs + 80));
+      await wait(Math.max(140, weapon.burst * weapon.burstDelayMs + 160));
     } finally {
       scene.spawnBullet = originalSpawnBullet;
     }
@@ -780,6 +780,110 @@ window.__superfightersMechanicsSmoke = (async () => {
     powerup: p2.powerup,
     aiming: p2.aiming,
   });
+
+  const previousOnlineState = {
+    onlineMode: scene.onlineMode,
+    onlineReady: scene.onlineReady,
+    onlineIsHost: scene.onlineIsHost,
+    localOnlinePlayerId: scene.localOnlinePlayerId,
+    onlineRoundId: scene.onlineRoundId,
+    onlineLastHostSnapshotServerTime: scene.onlineLastHostSnapshotServerTime,
+    onlineServerClockOffsetMs: scene.onlineServerClockOffsetMs,
+    onlineServerClockReady: scene.onlineServerClockReady,
+  };
+  const makeNetSnapshot = (x, y, overrides = {}) => ({
+    x,
+    y,
+    vx: overrides.vx ?? 0,
+    vy: overrides.vy ?? 0,
+    health: overrides.health ?? 100,
+    lives: overrides.lives ?? scene.configData.round.lives,
+    kills: overrides.kills ?? 0,
+    facing: overrides.facing ?? 1,
+    aimFacing: overrides.aimFacing ?? 1,
+    aimOffset: overrides.aimOffset ?? 0,
+    aimAngle: overrides.aimAngle ?? 0,
+    aiming: overrides.aiming ?? false,
+    aimMode: overrides.aimMode ?? null,
+    crouching: overrides.crouching ?? false,
+    climbing: overrides.climbing ?? false,
+    weapon: overrides.weapon ?? null,
+    grenadeAmmo: overrides.grenadeAmmo ?? 3,
+    powerup: overrides.powerup ?? null,
+  });
+
+  scene.onlineMode = true;
+  scene.onlineReady = true;
+  scene.onlineIsHost = false;
+  scene.localOnlinePlayerId = 'p1';
+  scene.onlineRoundId = 9;
+  p2.remoteInputSeq = 4;
+  p2.remoteInputDown = Object.fromEntries(Object.keys(p2.remoteInputDown).map((action) => [action, false]));
+  scene.handleOnlinePlayerInput({ playerId: 'p2', roundId: 9, seq: 4, input: { left: true } });
+  const staleInputIgnored = !p2.remoteInputDown.left && p2.remoteInputSeq === 4;
+  scene.handleOnlinePlayerInput({ playerId: 'p2', roundId: 9, seq: 5, input: { right: true, shoot: true } });
+  check('online input drops stale sequence packets and applies newest input', staleInputIgnored && p2.remoteInputDown.right && p2.remoteInputDown.shoot && p2.remoteInputSeq === 5, {
+    staleInputIgnored,
+    remoteInputSeq: p2.remoteInputSeq,
+    remoteInputDown: p2.remoteInputDown,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
+  resetPlayer(p2, 1040, 484, -1);
+  scene.onlineMode = true;
+  scene.onlineReady = true;
+  scene.onlineIsHost = false;
+  scene.localOnlinePlayerId = 'p2';
+  scene.onlineRoundId = 10;
+  scene.onlineLastHostSnapshotServerTime = 0;
+  scene.onlineServerClockReady = false;
+  p1.remoteSnapshotBuffer = [];
+  p1.remoteLastSnapshotServerTime = 0;
+  scene.handleOnlineHostSnapshot({
+    roundId: 10,
+    serverTime: 100000,
+    snapshots: {
+      p1: makeNetSnapshot(600, 360, { vx: 100, facing: 1 }),
+      p2: makeNetSnapshot(970, 430, { vx: -80, facing: -1 }),
+    },
+  });
+  check('host snapshots buffer remote players and immediately reconcile local player', (
+    p1.remoteSnapshotBuffer.length === 1 &&
+    Math.abs(p1.sprite.x - 700) < 1 &&
+    p2.sprite.x < 1040 &&
+    p2.sprite.x > 970
+  ), {
+    remoteBufferLength: p1.remoteSnapshotBuffer.length,
+    p1X: p1.sprite.x,
+    p2X: p2.sprite.x,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
+  p1.remoteSnapshotBuffer = [];
+  p1.remoteLastSnapshotServerTime = 0;
+  scene.queueRemoteSnapshot(p1, makeNetSnapshot(100, 300, { vx: 1000, facing: 1 }), 200000);
+  scene.queueRemoteSnapshot(p1, makeNetSnapshot(190, 300, { vx: 1000, facing: 1 }), 200090);
+  scene.renderRemotePlayerSnapshot(p1, 200045);
+  check('remote snapshot interpolation renders between buffered authoritative states', Math.abs(p1.sprite.x - 145) < 1 && Math.abs(p1.sprite.y - 300) < 1, {
+    x: p1.sprite.x,
+    y: p1.sprite.y,
+    bufferLength: p1.remoteSnapshotBuffer.length,
+  });
+
+  p1.remoteSnapshotBuffer = [];
+  p1.remoteLastSnapshotServerTime = 0;
+  scene.queueRemoteSnapshot(p1, makeNetSnapshot(110, 320), 201000);
+  scene.queueRemoteSnapshot(p1, makeNetSnapshot(420, 320), 201090);
+  check('large remote snapshot discontinuities snap instead of interpolating across the map', p1.remoteSnapshotBuffer.length === 1 && Math.abs(p1.sprite.x - 420) < 1, {
+    x: p1.sprite.x,
+    bufferLength: p1.remoteSnapshotBuffer.length,
+  });
+
+  Object.assign(scene, previousOnlineState);
+  p1.remoteSnapshotBuffer = [];
+  p1.remoteLastSnapshotServerTime = 0;
+  p2.remoteSnapshotBuffer = [];
+  p2.remoteLastSnapshotServerTime = 0;
 
   resetPlayer(p1, 700, 484, 1);
   resetPlayer(p2, 1040, 484, -1);
