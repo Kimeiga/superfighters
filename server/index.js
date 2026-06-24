@@ -12,6 +12,7 @@ const port = Number(process.env.PORT || process.env.GECKOS_PORT || 9208);
 const udpMin = Number(process.env.GECKOS_UDP_MIN || 20000);
 const udpMax = Number(process.env.GECKOS_UDP_MAX || udpMin);
 const basePath = normalizeBasePath(process.env.BASE_PATH || process.env.VITE_BASE_PATH || '/');
+const maxSkinIndex = 31;
 const lobbies = new Map();
 
 const app = express();
@@ -92,8 +93,8 @@ const io = geckos({
 io.addServer(httpServer);
 
 io.onConnection((channel) => {
-  channel.on('create-lobby', () => {
-    const lobby = createLobby(channel);
+  channel.on('create-lobby', (data) => {
+    const lobby = createLobby(channel, sanitizeSkinIndex(data?.skinIndex));
     channel.emit('lobby-created', {
       code: lobby.code,
       playerId: 'p1',
@@ -120,7 +121,7 @@ io.onConnection((channel) => {
     const playerId = lobby.players.has(channel.id)
       ? lobby.players.get(channel.id).playerId
       : nextPlayerId(lobby);
-    addPlayerToLobby(lobby, channel, playerId);
+    addPlayerToLobby(lobby, channel, playerId, sanitizeSkinIndex(data?.skinIndex), playerId === 'p2' ? getUsedSkinIndices(lobby) : null);
     channel.emit('lobby-joined', {
       code,
       playerId,
@@ -334,7 +335,7 @@ function getCurrentHashedAssetPath(requestPath) {
   return currentAsset ? path.join(assetsDir, currentAsset) : null;
 }
 
-function createLobby(channel) {
+function createLobby(channel, skinIndex = 0) {
   const code = generateLobbyCode();
   const lobby = {
     code,
@@ -348,15 +349,17 @@ function createLobby(channel) {
     started: false,
   };
   lobbies.set(code, lobby);
-  addPlayerToLobby(lobby, channel, 'p1');
+  addPlayerToLobby(lobby, channel, 'p1', skinIndex);
   return lobby;
 }
 
-function addPlayerToLobby(lobby, channel, playerId) {
+function addPlayerToLobby(lobby, channel, playerId, skinIndex = 0, usedSkins = null) {
+  const normalizedSkin = chooseAvailableSkin(skinIndex, usedSkins);
   channel.join(lobby.code);
   lobby.players.set(channel.id, {
     channelId: channel.id,
     playerId,
+    skinIndex: normalizedSkin,
     joinedAt: Date.now(),
   });
 }
@@ -391,7 +394,34 @@ function publicPlayer(player) {
   return {
     playerId: player.playerId,
     channelId: player.channelId,
+    skinIndex: sanitizeSkinIndex(player.skinIndex),
   };
+}
+
+function sanitizeSkinIndex(value) {
+  const number = safeInteger(value);
+  if (!Number.isFinite(number)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(maxSkinIndex, number));
+}
+
+function getUsedSkinIndices(lobby) {
+  return new Set([...lobby.players.values()].map((player) => sanitizeSkinIndex(player.skinIndex)));
+}
+
+function chooseAvailableSkin(skinIndex, usedSkins = null) {
+  let normalized = sanitizeSkinIndex(skinIndex);
+  if (!usedSkins?.has(normalized)) {
+    return normalized;
+  }
+  for (let offset = 1; offset <= maxSkinIndex; offset += 1) {
+    const candidate = (normalized + offset) % (maxSkinIndex + 1);
+    if (!usedSkins.has(candidate)) {
+      return candidate;
+    }
+  }
+  return normalized;
 }
 
 function generateLobbyCode() {

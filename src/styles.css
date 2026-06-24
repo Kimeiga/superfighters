@@ -247,7 +247,7 @@ textarea {
   width: 64px;
   height: 64px;
   justify-self: center;
-  image-rendering: pixelated;
+  image-rendering: auto;
 }
 
 .start-panel h1,
@@ -267,6 +267,72 @@ textarea {
 .boot-actions {
   display: grid;
   gap: 10px;
+}
+
+.boot-skins {
+  display: grid;
+  gap: 10px;
+  margin: 2px 0 6px;
+  padding: 10px;
+  border: 1px solid #344257;
+  border-radius: 6px;
+  background: rgba(8, 13, 22, 0.48);
+}
+
+.boot-skin-row {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.boot-skin-label {
+  color: #dbe7ff;
+  font-size: 12px;
+  text-align: left;
+}
+
+.boot-skin-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.skin-swatch {
+  position: relative;
+  width: 31px;
+  height: 42px;
+  min-height: 0 !important;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid #40516a;
+  border-radius: 5px;
+  background: #0f1724;
+}
+
+.skin-swatch:hover:not(:disabled),
+.skin-swatch.is-selected {
+  border-color: #ffd166;
+  box-shadow: 0 0 0 2px rgba(255, 209, 102, 0.2);
+}
+
+.skin-swatch:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+}
+
+.skin-swatch-preview {
+  position: absolute;
+  left: 2px;
+  top: 1px;
+  width: 37px;
+  height: 57px;
+  background-repeat: no-repeat;
+  background-position: var(--skin-x) var(--skin-y);
+  image-rendering: auto;
+  transform: scale(0.7);
+  transform-origin: top left;
 }
 
 .start-panel button,

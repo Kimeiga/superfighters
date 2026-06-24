@@ -40,6 +40,9 @@ const CPU_GRENADE_HOLD_MS = 520;
 const CPU_ACTION_RELEASE_WINDOW_MS = 150;
 const CHARACTER_SOURCE_KEY = 'empress-source';
 const CHARACTER_TEXTURE_PREFIX = 'empress-frame';
+const CHARACTER_SKIN_TEXTURE_PREFIX = 'empress-skin-frame';
+const CHARACTER_SKIN_STORAGE_KEY = 'superfighters.characterSkins';
+const CHARACTER_SKIN_COUNT = 32;
 const HANDGUN_SOURCE_KEY = 'handgun-source';
 const PROJECTILE_TEXTURE_KEY = 'projectile-glow';
 const GRENADE_TIMER_FONT = '14px';
@@ -86,6 +89,12 @@ const CHARACTER_SHEET = {
   sheetBackground: [27, 89, 153],
   maxExtension: 96,
 };
+const CHARACTER_PALETTE_PREVIEW_CELLS = Array.from({ length: CHARACTER_SKIN_COUNT }, (_entry, index) => ({
+  x: 1 + (index % 16) * 39,
+  y: index < 16 ? 2606 : 2665,
+  width: 37,
+  height: 57,
+}));
 const HANDGUN_SHEET = {
   frameSize: 64,
   gap: 1,
@@ -217,7 +226,9 @@ class FightScene extends Phaser.Scene {
     this.swingingCrates = [];
     this.clouds = [];
     this.levelSpawns = null;
-    this.editorLevel = pendingBootOptions?.editorLevel ? getSavedLevel() ?? createCurrentArenaSeed() : null;
+    this.bootOptions = pendingBootOptions ?? {};
+    this.playerSkinIndices = getBootPlayerSkins(this.bootOptions);
+    this.editorLevel = this.bootOptions?.editorLevel ? getSavedLevel() ?? createCurrentArenaSeed() : null;
     this.worldWidth = WORLD_WIDTH;
     this.worldHeight = WORLD_HEIGHT;
     this.configData = getGameplayConfig();
@@ -275,6 +286,8 @@ class FightScene extends Phaser.Scene {
       color: COLORS.p1,
       darkColor: COLORS.p1Dark,
       facing: 1,
+      textureSlot: 'p1',
+      skinIndex: this.playerSkinIndices.p1,
       controls: {
         left: this.keys.a,
         right: this.keys.d,
@@ -307,6 +320,8 @@ class FightScene extends Phaser.Scene {
       color: COLORS.p2,
       darkColor: COLORS.p2Dark,
       facing: -1,
+      textureSlot: 'p2',
+      skinIndex: this.playerSkinIndices.p2,
       controls: {
         left: this.keys.left,
         right: this.keys.right,
@@ -554,25 +569,59 @@ class FightScene extends Phaser.Scene {
     const geometry = detectSheetFrameGeometry(sourceImage, CHARACTER_SHEET, {
       includeExtensions: true,
     });
+    const pixels = getImagePixels(sourceImage);
+    const paletteCells = detectCharacterPaletteCells(sourceImage, CHARACTER_SHEET, pixels);
+    const paletteMaps = buildCharacterPaletteMaps(CHARACTER_SHEET, pixels, paletteCells);
+    const p1Skin = clampSkinIndex(this.playerSkinIndices?.p1, paletteMaps.length);
+    const p2Skin = clampSkinIndex(this.playerSkinIndices?.p2, paletteMaps.length, p1Skin);
+    this.playerSkinIndices = { p1: p1Skin, p2: p2Skin };
+    this.characterPaletteCells = paletteCells;
+    this.characterPaletteMaps = paletteMaps;
 
     this.characterFrames = geometry.frameCells;
     this.characterFrameCount = geometry.frameCells.length;
-    for (let index = 0; index < geometry.frameCells.length; index += 1) {
-      const key = this.getCharacterTextureKey(index + 1);
-      if (this.textures.exists(key)) {
-        this.textures.remove(key);
+    const textureSets = [
+      { slot: 'base', paletteMap: null },
+      { slot: 'p1', paletteMap: paletteMaps[p1Skin] ?? null },
+      { slot: 'p2', paletteMap: paletteMaps[p2Skin] ?? null },
+    ];
+    for (const textureSet of textureSets) {
+      for (let index = 0; index < geometry.frameCells.length; index += 1) {
+        const key = this.getCharacterTextureKey(index + 1, textureSet.slot);
+        if (this.textures.exists(key)) {
+          this.textures.remove(key);
+        }
+        this.textures.addCanvas(
+          key,
+          makeFrameCanvas(sourceImage, CHARACTER_SHEET, geometry.frameCells[index], {
+            fixedCanvas: true,
+            paletteMap: textureSet.paletteMap,
+          }),
+        );
+        this.setPixelTextureFilter(key);
       }
-      this.textures.addCanvas(
-        key,
-        makeFrameCanvas(sourceImage, CHARACTER_SHEET, geometry.frameCells[index], {
-          fixedCanvas: true,
-        }),
-      );
-      this.setPixelTextureFilter(key);
     }
+    this.createSkinPreviewTexture('p1', sourceImage, paletteCells[p1Skin]);
+    this.createSkinPreviewTexture('p2', sourceImage, paletteCells[p2Skin]);
   }
 
-  getCharacterTextureKey(frame) {
+  createSkinPreviewTexture(slot, sourceImage, paletteCell) {
+    const key = this.getSkinPreviewTextureKey(slot);
+    if (this.textures.exists(key)) {
+      this.textures.remove(key);
+    }
+    this.textures.addCanvas(key, makeCharacterPreviewCanvas(sourceImage, CHARACTER_SHEET, paletteCell));
+    this.setPixelTextureFilter(key);
+  }
+
+  getSkinPreviewTextureKey(slot) {
+    return `empress-${slot}-preview`;
+  }
+
+  getCharacterTextureKey(frame, slot = 'base') {
+    if (slot === 'p1' || slot === 'p2') {
+      return `${CHARACTER_SKIN_TEXTURE_PREFIX}-${slot}-${frame}`;
+    }
     return `${CHARACTER_TEXTURE_PREFIX}-${frame}`;
   }
 
@@ -681,8 +730,8 @@ class FightScene extends Phaser.Scene {
 
   setPixelTextureFilter(textureKey) {
     const texture = this.textures.get(textureKey);
-    const nearest = Phaser.Textures?.FilterMode?.NEAREST ?? 1;
-    texture?.setFilter?.(nearest);
+    const linear = Phaser.Textures?.FilterMode?.LINEAR ?? 0;
+    texture?.setFilter?.(linear);
   }
 
   drawBackground() {
@@ -780,37 +829,41 @@ class FightScene extends Phaser.Scene {
       pickup: 'girl-pickup',
     };
 
-    for (const name of ANIMATION_ORDER) {
-      if (!animationKeys[name]) {
-        continue;
-      }
-      const setting = config[name];
-      if (this.anims.exists(animationKeys[name])) {
-        this.anims.remove(animationKeys[name]);
-      }
-      this.anims.create({
-        key: animationKeys[name],
-        frames: makeFrameList1Based(setting, frameCount).map((frame) => ({
-          key: this.getCharacterTextureKey(frame),
-        })),
-        frameRate: setting.fps,
-        repeat: setting.repeat ? -1 : 0,
-      });
-    }
-
-    for (const combos of Object.values(MELEE_COMBO_ANIMATIONS)) {
-      for (const combo of combos) {
-        if (this.anims.exists(combo.key)) {
-          this.anims.remove(combo.key);
+    for (const slot of ['base', 'p1', 'p2']) {
+      for (const name of ANIMATION_ORDER) {
+        if (!animationKeys[name]) {
+          continue;
+        }
+        const setting = config[name];
+        const animationKey = this.getAnimationKeyForSlot(animationKeys[name], slot);
+        if (this.anims.exists(animationKey)) {
+          this.anims.remove(animationKey);
         }
         this.anims.create({
-          key: combo.key,
-          frames: combo.frames.map((frame) => ({
-            key: this.getCharacterTextureKey(frame),
+          key: animationKey,
+          frames: makeFrameList1Based(setting, frameCount).map((frame) => ({
+            key: this.getCharacterTextureKey(frame, slot),
           })),
-          frameRate: combo.fps,
-          repeat: 0,
+          frameRate: setting.fps,
+          repeat: setting.repeat ? -1 : 0,
         });
+      }
+
+      for (const combos of Object.values(MELEE_COMBO_ANIMATIONS)) {
+        for (const combo of combos) {
+          const animationKey = this.getAnimationKeyForSlot(combo.key, slot);
+          if (this.anims.exists(animationKey)) {
+            this.anims.remove(animationKey);
+          }
+          this.anims.create({
+            key: animationKey,
+            frames: combo.frames.map((frame) => ({
+              key: this.getCharacterTextureKey(frame, slot),
+            })),
+            frameRate: combo.fps,
+            repeat: 0,
+          });
+        }
       }
     }
   }
@@ -2105,7 +2158,7 @@ class FightScene extends Phaser.Scene {
 
   createPlayer(config) {
     const sprite = this.physics.add
-      .sprite(config.spawnX, config.spawnY, this.getCharacterTextureKey(23))
+      .sprite(config.spawnX, config.spawnY, this.getCharacterTextureKey(23, config.textureSlot))
       .setScale(PLAYER_SCALE)
       .setDepth(10)
       .setOrigin(0.5)
@@ -2114,11 +2167,11 @@ class FightScene extends Phaser.Scene {
       .setMaxVelocity(620, 920);
 
     this.applyBodyConfig(sprite, this.configData.playerBody.standing);
-    sprite.play('girl-idle');
+    sprite.play(this.getPlayerAnimationKey(config, 'idle'));
     sprite.setFlipX(config.facing < 0);
 
     const arm = this.add
-      .sprite(sprite.x, sprite.y, this.getCharacterTextureKey(37))
+      .sprite(sprite.x, sprite.y, this.getCharacterTextureKey(37, config.textureSlot))
       .setScale(PLAYER_SCALE)
       .setDepth(14)
       .setOrigin(0.5)
@@ -2318,6 +2371,9 @@ class FightScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(51);
 
+    this.p1HudSprites = this.createHudSprites(false);
+    this.p2HudSprites = this.createHudSprites(true);
+
     this.messageText = this.add
       .text(0, 92, '', {
         fontFamily: UI_FONT,
@@ -2338,8 +2394,30 @@ class FightScene extends Phaser.Scene {
       this.coordText,
       this.p2StatusText,
       this.messageText,
+      ...Object.values(this.p1HudSprites),
+      ...Object.values(this.p2HudSprites),
     ]);
     this.positionHudObjects();
+  }
+
+  createHudSprites(alignRight) {
+    const textStyle = {
+      fontFamily: UI_FONT,
+      fontSize: '11px',
+      color: '#ffffff',
+      stroke: '#101622',
+      strokeThickness: 2,
+      align: alignRight ? 'right' : 'left',
+    };
+    return {
+      portrait: this.add.image(0, 0, this.getSkinPreviewTextureKey(alignRight ? 'p2' : 'p1')).setScrollFactor(0).setDepth(52),
+      weapon: this.add.image(0, 0, 'weapon-pistol').setScrollFactor(0).setDepth(52),
+      grenade: this.add.image(0, 0, 'grenade-pixel').setScrollFactor(0).setDepth(52),
+      powerup: this.add.image(0, 0, 'powerup-shield').setScrollFactor(0).setDepth(52),
+      ammoText: this.add.text(0, 0, '', textStyle).setOrigin(alignRight ? 1 : 0, 0.5).setScrollFactor(0).setDepth(53),
+      grenadeText: this.add.text(0, 0, '', textStyle).setOrigin(alignRight ? 1 : 0, 0.5).setScrollFactor(0).setDepth(53),
+      powerupText: this.add.text(0, 0, '', textStyle).setOrigin(alignRight ? 1 : 0, 0.5).setScrollFactor(0).setDepth(53),
+    };
   }
 
   positionHudObjects() {
@@ -2348,15 +2426,22 @@ class FightScene extends Phaser.Scene {
     }
 
     const width = this.getViewportWidth();
+    const height = this.getViewportHeight();
     const compact = width < 620 || isMobileLike();
     this.hintText.setVisible(!compact);
-    this.coordText.setPosition(compact ? 10 : 14, compact ? 8 : 28);
-    this.coordText.setFontSize(compact ? 11 : 12);
-    this.timerText.setPosition(width / 2, compact ? 86 : 17);
+    this.hintText.setOrigin(0.5, 0);
+    this.hintText.setPosition(width / 2, 49);
+    this.hintText.setFontSize(11);
+    this.coordText.setPosition(compact ? 10 : 14, height - (compact ? 24 : 28));
+    this.coordText.setFontSize(compact ? 10 : 11);
+    this.coordText.setAlpha(0.72);
+    this.timerText.setPosition(width / 2, compact ? 78 : 17);
     this.timerText.setFontSize(compact ? 20 : 24);
-    this.p2StatusText.setPosition(width - (compact ? 18 : 24), compact ? 50 : 47);
-    this.p1StatusText?.setPosition(compact ? 18 : 24, compact ? 50 : 47);
-    this.messageText.setPosition(width / 2, compact ? 120 : 92);
+    this.p2StatusText.setPosition(width - (compact ? 18 : 24), compact ? 122 : 124);
+    this.p2StatusText.setFontSize(compact ? 10 : 11);
+    this.p1StatusText?.setPosition(compact ? 18 : 24, compact ? 122 : 124);
+    this.p1StatusText?.setFontSize(compact ? 10 : 11);
+    this.messageText.setPosition(width / 2, compact ? 112 : 92);
     this.messageText.setFontSize(compact ? 20 : 24);
   }
 
@@ -2796,7 +2881,7 @@ class FightScene extends Phaser.Scene {
     try {
       const channel = await this.ensureOnlineConnection();
       this.setOnlineStatus('Creating lobby...');
-      channel.emit('create-lobby', {}, { reliable: true });
+      channel.emit('create-lobby', { skinIndex: this.playerSkinIndices?.p1 ?? 0 }, { reliable: true });
     } catch (error) {
       this.setOnlineStatus(error.message || 'Could not connect');
     }
@@ -2812,7 +2897,7 @@ class FightScene extends Phaser.Scene {
     try {
       const channel = await this.ensureOnlineConnection();
       this.setOnlineStatus(`Joining ${lobbyCode}...`);
-      channel.emit('join-lobby', { code: lobbyCode }, { reliable: true });
+      channel.emit('join-lobby', { code: lobbyCode, skinIndex: this.playerSkinIndices?.p2 ?? 1 }, { reliable: true });
     } catch (error) {
       this.setOnlineStatus(error.message || 'Could not connect');
     }
@@ -4472,7 +4557,7 @@ class FightScene extends Phaser.Scene {
     this.clearLadderState(player);
     player.sprite.body.setAllowGravity(true);
     player.sprite.setAngle(player.facing > 0 ? 82 : -82);
-    player.sprite.play('girl-crouch', true);
+    player.sprite.play(this.getPlayerAnimationKey(player, 'crouch'), true);
     player.sprite.setVelocityX(player.sprite.body.velocity.x * 0.96);
   }
 
@@ -4576,14 +4661,14 @@ class FightScene extends Phaser.Scene {
     player.currentThinSlope = null;
     player.dropThroughPlatform = null;
     player.dropThroughSlope = null;
-    player.sprite.play(this.getPlayerAnimationKey(animationName));
+    player.sprite.play(this.getPlayerAnimationKey(player, animationName));
   }
 
   startJumpLand(player, time) {
     player.jumpPrepUntil = 0;
     const animationName = player.weapon ? 'jumpGunLand' : 'jumpLand';
     player.jumpLandUntil = time + this.getAnimationDurationMs(animationName);
-    player.sprite.play(this.getPlayerAnimationKey(animationName));
+    player.sprite.play(this.getPlayerAnimationKey(player, animationName));
   }
 
   updateJumpPhysics(player, grounded, input, time) {
@@ -4663,7 +4748,7 @@ class FightScene extends Phaser.Scene {
     player.standTransitionUntil = 0;
     const animationName = player.crouchTransitionGun ? 'crouchDownGun' : 'crouchDown';
     player.crouchTransitionUntil = time + this.getAnimationDurationMs(animationName);
-    player.sprite.play(this.getPlayerAnimationKey(animationName));
+    player.sprite.play(this.getPlayerAnimationKey(player, animationName));
   }
 
   startStandTransition(player, time) {
@@ -4671,10 +4756,20 @@ class FightScene extends Phaser.Scene {
     player.crouchTransitionUntil = 0;
     const animationName = player.standTransitionGun ? 'standUpGun' : 'standUp';
     player.standTransitionUntil = time + this.getAnimationDurationMs(animationName);
-    player.sprite.play(this.getPlayerAnimationKey(animationName));
+    player.sprite.play(this.getPlayerAnimationKey(player, animationName));
   }
 
-  getPlayerAnimationKey(animationName) {
+  getAnimationKeyForSlot(baseKey, slot = 'base') {
+    return slot === 'p1' || slot === 'p2' ? `${baseKey}-${slot}` : baseKey;
+  }
+
+  getBaseAnimationKey(animationKey) {
+    return String(animationKey ?? '').replace(/-(p1|p2)$/, '');
+  }
+
+  getPlayerAnimationKey(playerOrAnimationName, animationNameMaybe) {
+    const player = typeof playerOrAnimationName === 'string' ? null : playerOrAnimationName;
+    const animationName = typeof playerOrAnimationName === 'string' ? playerOrAnimationName : animationNameMaybe;
     const animationKeys = {
       idle: 'girl-idle',
       idleAimStraight: 'girl-idle-gun',
@@ -4710,7 +4805,11 @@ class FightScene extends Phaser.Scene {
       ladderMelee: 'girl-ladder-melee',
       pickup: 'girl-pickup',
     };
-    return animationKeys[animationName] ?? 'girl-idle';
+    return this.getAnimationKeyForSlot(animationKeys[animationName] ?? 'girl-idle', player?.textureSlot);
+  }
+
+  getPlayerAnimationKeyFromBase(player, baseKey) {
+    return this.getAnimationKeyForSlot(baseKey, player?.textureSlot);
   }
 
   continueOneShotAnimation(sprite, animationKey) {
@@ -4772,26 +4871,26 @@ class FightScene extends Phaser.Scene {
         return;
       }
       if (player.aiming && player.aimMode === 'gun' && time < player.ladderGunDrawUntil) {
-        this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey('ladderGunDraw'));
+        this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player, 'ladderGunDraw'));
         return;
       }
       if ((player.aiming || this.isInShootStance(player, time)) && player.aimMode === 'gun') {
-        sprite.play(this.getPlayerAnimationKey('ladderGunHold'), true);
+        sprite.play(this.getPlayerAnimationKey(player, 'ladderGunHold'), true);
         return;
       }
       if (time < player.climbIntroUntil) {
-        this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey('climbLadderBegin'));
+        this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player, 'climbLadderBegin'));
         return;
       }
       if (time < player.climbEndUntil) {
-        this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey('climbLadderEnd'));
+        this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player, 'climbLadderEnd'));
         return;
       }
       if (Math.abs(sprite.body.velocity.y) > 8 || horizontal !== 0) {
         sprite.anims.resume();
-        sprite.play(this.getPlayerAnimationKey('climbLadder'), true);
-      } else if (sprite.anims.currentAnim?.key !== this.getPlayerAnimationKey('climbLadder')) {
-        sprite.play(this.getPlayerAnimationKey('climbLadder'), true);
+        sprite.play(this.getPlayerAnimationKey(player, 'climbLadder'), true);
+      } else if (sprite.anims.currentAnim?.key !== this.getPlayerAnimationKey(player, 'climbLadder')) {
+        sprite.play(this.getPlayerAnimationKey(player, 'climbLadder'), true);
         sprite.anims.pause();
       } else {
         sprite.anims.pause();
@@ -4800,27 +4899,27 @@ class FightScene extends Phaser.Scene {
     }
 
     if (time < player.rollUntil) {
-      this.continueOneShotAnimation(sprite, time < player.rollEndAt ? 'girl-roll' : 'girl-roll-end');
+      this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player, time < player.rollEndAt ? 'roll' : 'rollEnd'));
       return;
     }
 
     if (gunStanceActive && !player.crouching && time < player.standTransitionUntil) {
-      this.continueOneShotAnimation(sprite, player.standTransitionGun ? 'girl-stand-up-gun' : 'girl-stand-up');
+      this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player, player.standTransitionGun ? 'standUpGun' : 'standUp'));
       return;
     }
 
     if (gunStanceActive && player.crouching && time < player.crouchTransitionUntil) {
-      this.continueOneShotAnimation(sprite, player.crouchTransitionGun ? 'girl-crouch-down-gun' : 'girl-crouch-down');
+      this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player, player.crouchTransitionGun ? 'crouchDownGun' : 'crouchDown'));
       return;
     }
 
     if (gunStanceActive) {
-      sprite.play(player.crouching ? 'girl-crouch' : 'girl-aim', true);
+      sprite.play(this.getPlayerAnimationKey(player, player.crouching ? 'crouch' : 'aim'), true);
       return;
     }
 
     if (time < player.pickupAnimationUntil) {
-      this.continueOneShotAnimation(sprite, 'girl-pickup');
+      this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player, 'pickup'));
       return;
     }
 
@@ -4832,12 +4931,12 @@ class FightScene extends Phaser.Scene {
     }
 
     if (time < player.dashAttackUntil) {
-      sprite.play('girl-run', true);
+      sprite.play(this.getPlayerAnimationKey(player, 'run'), true);
       return;
     }
 
     if (time < player.jumpPrepUntil) {
-      this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player.weapon ? 'jumpPrepGun' : 'jumpPrep'));
+      this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player, player.weapon ? 'jumpPrepGun' : 'jumpPrep'));
       return;
     }
 
@@ -4854,36 +4953,36 @@ class FightScene extends Phaser.Scene {
           : velocityY < 95
             ? 'jumpPeak'
             : 'jumpDown';
-      sprite.play(this.getPlayerAnimationKey(animationName), true);
+      sprite.play(this.getPlayerAnimationKey(player, animationName), true);
       return;
     }
 
     if (time < player.jumpLandUntil) {
-      this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player.weapon ? 'jumpGunLand' : 'jumpLand'));
+      this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player, player.weapon ? 'jumpGunLand' : 'jumpLand'));
       return;
     }
 
     if (!player.crouching && time < player.standTransitionUntil) {
-      this.continueOneShotAnimation(sprite, player.standTransitionGun ? 'girl-stand-up-gun' : 'girl-stand-up');
+      this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player, player.standTransitionGun ? 'standUpGun' : 'standUp'));
       return;
     }
 
     if (player.crouching && time < player.crouchTransitionUntil) {
-      this.continueOneShotAnimation(sprite, player.crouchTransitionGun ? 'girl-crouch-down-gun' : 'girl-crouch-down');
+      this.continueOneShotAnimation(sprite, this.getPlayerAnimationKey(player, player.crouchTransitionGun ? 'crouchDownGun' : 'crouchDown'));
       return;
     }
 
     if (player.crouching) {
-      sprite.play('girl-crouch', true);
+      sprite.play(this.getPlayerAnimationKey(player, 'crouch'), true);
       return;
     }
 
     if (horizontal !== 0) {
-      sprite.play(this.getPlayerAnimationKey(player.weapon ? 'runGun' : 'run'), true);
+      sprite.play(this.getPlayerAnimationKey(player, player.weapon ? 'runGun' : 'run'), true);
       return;
     }
 
-    sprite.play(this.getPlayerAnimationKey(player.weapon ? 'idleAimStraight' : 'idle'), true);
+    sprite.play(this.getPlayerAnimationKey(player, player.weapon ? 'idleAimStraight' : 'idle'), true);
   }
 
   beginAim(player, mode, time) {
@@ -4910,7 +5009,7 @@ class FightScene extends Phaser.Scene {
     player.grenadeCookStartedAt = mode === 'grenade' ? time : 0;
     if (player.climbing && mode === 'gun') {
       player.ladderGunDrawUntil = time + this.getAnimationDurationMs('ladderGunDraw');
-      player.sprite.play(this.getPlayerAnimationKey('ladderGunDraw'));
+      player.sprite.play(this.getPlayerAnimationKey(player, 'ladderGunDraw'));
     } else {
       player.ladderGunDrawUntil = 0;
     }
@@ -5040,7 +5139,7 @@ class FightScene extends Phaser.Scene {
       return false;
     }
 
-    const key = player.sprite.anims.currentAnim?.key;
+    const key = this.getBaseAnimationKey(player.sprite.anims.currentAnim?.key);
     return (
       aimVisualActive ||
       [
@@ -5083,7 +5182,7 @@ class FightScene extends Phaser.Scene {
 
     player.arm.stop();
     player.arm
-      .setTexture(this.getCharacterTextureKey(armFrame))
+      .setTexture(this.getCharacterTextureKey(armFrame, player.textureSlot))
       .setOrigin(originX, originY)
       .setPosition(pivot.x, pivot.y)
       .setScale(PLAYER_SCALE)
@@ -5093,7 +5192,7 @@ class FightScene extends Phaser.Scene {
   }
 
   isGunCarryAnimation(player) {
-    const key = player.sprite.anims.currentAnim?.key;
+    const key = this.getBaseAnimationKey(player.sprite.anims.currentAnim?.key);
     return [
       'girl-idle-gun',
       'girl-run-gun',
@@ -5227,14 +5326,24 @@ class FightScene extends Phaser.Scene {
     return this.getMuzzleOrigin(player, player.aimAngle, player.aimFacing || player.facing);
   }
 
-  getMuzzleOrigin(player, angle = player.aimAngle, facing = player.aimFacing || player.facing) {
-    const anchor = this.getAimAnchor(player, angle, facing);
-    const offset = this.configData.visuals.gunMuzzleOffset ?? 28;
+  getMuzzleOrigin(player, angle = player.aimAngle) {
+    const pivot = this.getAimPivot(player);
+    const offset = this.getGunMuzzleOffset(angle);
     const muzzle = {
-      x: anchor.x + Math.cos(angle) * offset,
-      y: anchor.y + Math.sin(angle) * offset,
+      x: pivot.x + offset.x,
+      y: pivot.y + offset.y,
     };
-    return this.getClearProjectileOrigin(anchor, muzzle);
+    return this.getClearProjectileOrigin(pivot, muzzle);
+  }
+
+  getGunMuzzleOffset(angle) {
+    const distance = this.configData.visuals.gunMuzzleOffset ?? 28;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return {
+      x: distance * cos,
+      y: distance * sin,
+    };
   }
 
   getClearProjectileOrigin(anchor, target) {
@@ -5773,7 +5882,7 @@ class FightScene extends Phaser.Scene {
       ladderMelee: 'girl-ladder-melee',
     };
     const animationKey = comboSetting?.key ?? keyByAnimation[animationName] ?? 'girl-melee';
-    player.meleeAnimationKey = animationKey;
+    player.meleeAnimationKey = this.getPlayerAnimationKeyFromBase(player, animationKey);
     player.meleeAnimationUntil = time + duration;
     player.meleeAttackId += 1;
     player.meleeAttackState = {
@@ -5785,7 +5894,7 @@ class FightScene extends Phaser.Scene {
       hitTargets: new Set(),
       environmentHitApplied: false,
     };
-    player.sprite.play(animationKey);
+    player.sprite.play(player.meleeAnimationKey);
     this.scheduleMeleeActiveFrames(player, player.meleeAttackState);
   }
 
@@ -5863,7 +5972,7 @@ class FightScene extends Phaser.Scene {
     player.standTransitionUntil = 0;
     player.meleeAnimationUntil = 0;
     player.sprite.setVelocityX(0);
-    player.sprite.play('girl-pickup');
+    player.sprite.play(this.getPlayerAnimationKey(player, 'pickup'));
   }
 
   startRoll(player, time, direction) {
@@ -5886,7 +5995,7 @@ class FightScene extends Phaser.Scene {
     player.facing = rollDirection;
     player.sprite.setFlipX(rollDirection < 0);
     player.sprite.setVelocityX(rollDirection * ROLL_SPEED);
-    player.sprite.play('girl-roll');
+    player.sprite.play(this.getPlayerAnimationKey(player, 'roll'));
   }
 
   startDashAttack(player, time) {
@@ -5948,7 +6057,7 @@ class FightScene extends Phaser.Scene {
       player.dropUntil = time + DROP_DURATION;
       player.climbIntroUntil = time + this.getAnimationDurationMs('climbLadderBegin');
       player.sprite.setVelocityY(this.configData.movement.climbSpeed * 0.38);
-      player.sprite.play(this.getPlayerAnimationKey('climbLadderBegin'));
+      player.sprite.play(this.getPlayerAnimationKey(player, 'climbLadderBegin'));
     } else {
       player.climbIntroUntil = 0;
     }
@@ -5967,7 +6076,7 @@ class FightScene extends Phaser.Scene {
     body.setAllowGravity(false);
     this.applyBodyPose(player, true);
     this.snapPlayerBodyTo(player, body.x, targetFootY + LADDER_END_VISUAL_DROP - body.height);
-    player.sprite.play(this.getPlayerAnimationKey('climbLadderEnd'));
+    player.sprite.play(this.getPlayerAnimationKey(player, 'climbLadderEnd'));
     this.updateAimVisuals(player);
   }
 
@@ -7205,23 +7314,23 @@ class FightScene extends Phaser.Scene {
     this.positionHudObjects();
     const viewportWidth = this.getViewportWidth();
     const compact = viewportWidth < 620 || isMobileLike();
-    const hudWidth = compact ? Math.max(132, Math.min(178, Math.floor((viewportWidth - 54) / 2))) : 286;
-    const hudY = compact ? 28 : 25;
-    const hudLeftX = compact ? 18 : 24;
-    const hudRightX = compact ? viewportWidth - hudWidth - 18 : viewportWidth - 310;
+    const hudWidth = compact ? Math.min(190, Math.max(118, Math.floor((viewportWidth - 42) / 2))) : 360;
+    const hudY = compact ? 26 : 24;
+    const hudLeftX = compact ? 14 : 24;
+    const hudRightX = compact ? viewportWidth - hudWidth - 14 : viewportWidth - hudWidth - 24;
     const timerWidth = compact ? 88 : 104;
     const timerHeight = compact ? 30 : 34;
-    const timerY = compact ? 84 : 9;
+    const timerY = compact ? 76 : 9;
 
     this.ui.clear();
     if (!compact) {
       this.ui.fillStyle(0x08101b, 0.62);
-      this.ui.fillRoundedRect(8, 5, 274, 19, 4);
+      this.ui.fillRoundedRect(viewportWidth / 2 - 132, 47, 264, 18, 4);
     }
     this.ui.fillStyle(0x08101b, 0.62);
     this.ui.fillRoundedRect(viewportWidth / 2 - timerWidth / 2, timerY, timerWidth, timerHeight, 4);
-    this.drawPlayerHud(hudLeftX, hudY, hudWidth, this.p1, false, time);
-    this.drawPlayerHud(hudRightX, hudY, hudWidth, this.p2, true, time);
+    this.drawPlayerHud(hudLeftX, hudY, hudWidth, this.p1, false, compact, time);
+    this.drawPlayerHud(hudRightX, hudY, hudWidth, this.p2, true, compact, time);
 
     const secondsLeft = Math.max(0, Math.ceil((this.roundEndsAt - time) / 1000));
     const minutes = Math.floor(secondsLeft / 60);
@@ -7229,8 +7338,8 @@ class FightScene extends Phaser.Scene {
     this.timerText.setText(`${minutes}:${seconds}`);
 
     this.coordText?.setText(this.formatCoordinateLine());
-    this.p1StatusText.setText(this.statusLine(this.p1));
-    this.p2StatusText.setText(this.statusLine(this.p2));
+    this.p1StatusText.setText(this.controlsLine(this.p1, compact));
+    this.p2StatusText.setText(this.controlsLine(this.p2, compact));
   }
 
   formatCoordinateLine() {
@@ -7245,13 +7354,26 @@ class FightScene extends Phaser.Scene {
     return `P1 x:${Math.round(footX)} y:${Math.round(footY)} tile:${Math.floor(footX / tileSize)},${Math.floor(footY / tileSize)}`;
   }
 
-  drawPlayerHud(x, y, width, player, alignRight, time) {
+  drawPlayerHud(x, y, width, player, alignRight, compact, time) {
     const healthPct = Phaser.Math.Clamp(player.health / PLAYER_MAX_HEALTH, 0, 1);
     const fillWidth = Math.round(width * healthPct);
     const fillX = alignRight ? x + width - fillWidth : x;
+    const panelHeight = compact ? 84 : 100;
+    const portraitSize = compact ? (width < 160 ? 42 : 50) : 64;
+    const slotSize = compact ? (width < 160 ? 24 : 30) : 40;
+    const slotGap = compact ? 3 : 8;
+    const slotY = y + (compact ? 42 : 45);
+    const portraitX = alignRight ? x + width - portraitSize / 2 - 8 : x + portraitSize / 2 + 8;
+    const portraitY = y + panelHeight / 2 - 2;
+    const inventoryGap = compact ? 8 : 20;
+    const inventoryStartX = alignRight
+      ? x + width - portraitSize - inventoryGap - slotSize * 3 - slotGap * 2
+      : x + portraitSize + inventoryGap;
 
     this.ui.fillStyle(0x172033, 0.9);
-    this.ui.fillRoundedRect(x - 8, y - 8, width + 16, 55, 4);
+    this.ui.fillRoundedRect(x - 8, y - 8, width + 16, panelHeight, 5);
+    this.ui.fillStyle(player.darkColor, 0.64);
+    this.ui.fillRoundedRect(portraitX - portraitSize / 2, portraitY - portraitSize / 2, portraitSize, portraitSize, 4);
     this.ui.fillStyle(0xffffff, 0.18);
     this.ui.fillRect(x, y, width, 12);
     this.ui.fillStyle(player.color, 1);
@@ -7259,23 +7381,89 @@ class FightScene extends Phaser.Scene {
     this.ui.lineStyle(2, player.darkColor, 1);
     this.ui.strokeRect(x, y, width, 12);
 
-    const lifeY = y + 17;
+    const lifeY = y + 18;
     for (let i = 0; i < this.configData.round.lives; i += 1) {
-      const boxX = alignRight ? x + width - 13 - i * 15 : x + i * 15;
+      const boxX = alignRight ? x + width - portraitSize - inventoryGap - 8 - i * 14 : x + portraitSize + inventoryGap + i * 14;
       this.ui.fillStyle(i < player.lives ? player.color : 0x2d3748, 1);
       this.ui.fillRect(boxX, lifeY, 11, 8);
     }
 
+    const slots = [
+      { key: 'weapon', texture: player.weapon ? `weapon-${player.weapon.id}` : 'weapon-pistol', active: Boolean(player.weapon), text: player.weapon ? String(player.weapon.ammo) : '-' },
+      { key: 'grenade', texture: 'grenade-pixel', active: player.grenadeAmmo > 0, text: String(player.grenadeAmmo) },
+      { key: 'powerup', texture: player.powerup ? `powerup-${player.powerup}` : 'powerup-shield', active: Boolean(player.powerup), text: player.powerup ? this.configData.powerups[player.powerup].label : '-' },
+    ];
+    for (let index = 0; index < slots.length; index += 1) {
+      const slot = slots[index];
+      const slotX = inventoryStartX + index * (slotSize + slotGap);
+      this.drawHudSlot(slotX, slotY, slotSize, slot.active, player.color);
+      this.positionHudSlot(player, alignRight, slot.key, slot.texture, slot.active, slot.text, slotX, slotY, slotSize);
+    }
+
+    this.positionHudPortrait(player, alignRight, portraitX, portraitY, portraitSize);
+
     if (time < player.shieldUntil) {
       this.ui.lineStyle(2, 0x8cffab, 0.9);
-      this.ui.strokeRoundedRect(x - 9, y - 9, width + 18, 32, 6);
+      this.ui.strokeRoundedRect(x - 9, y - 9, width + 18, panelHeight + 1, 6);
     }
   }
 
-  statusLine(player) {
-    const weapon = player.weapon ? `${this.configData.weapons[player.weapon.id].label}:${player.weapon.ammo}` : 'No weapon';
-    const power = player.powerup ? this.configData.powerups[player.powerup].label : 'No power';
-    return `${player.label}  ${weapon}  G:${player.grenadeAmmo}  ${power}`;
+  drawHudSlot(x, y, size, active, color) {
+    this.ui.fillStyle(0x08101b, active ? 0.82 : 0.48);
+    this.ui.fillRoundedRect(x, y, size, size, 4);
+    this.ui.lineStyle(1, active ? color : 0x506079, active ? 0.9 : 0.55);
+    this.ui.strokeRoundedRect(x + 0.5, y + 0.5, size - 1, size - 1, 4);
+  }
+
+  positionHudPortrait(player, alignRight, x, y, size) {
+    const elements = alignRight ? this.p2HudSprites : this.p1HudSprites;
+    elements.portrait
+      .setTexture(this.getSkinPreviewTextureKey(player.textureSlot))
+      .setPosition(x, y)
+      .setFlipX(alignRight)
+      .setDisplaySize(size, size)
+      .setAlpha(1);
+  }
+
+  positionHudSlot(player, alignRight, key, texture, active, text, x, y, size) {
+    const elements = alignRight ? this.p2HudSprites : this.p1HudSprites;
+    const icon = elements[key];
+    const label = key === 'weapon' ? elements.ammoText : key === 'grenade' ? elements.grenadeText : elements.powerupText;
+    icon
+      .setTexture(texture)
+      .setPosition(x + size / 2, y + size / 2)
+      .setAlpha(active ? 1 : 0.24)
+      .setVisible(true);
+    if (key === 'weapon') {
+      icon.setDisplaySize(size * 0.92, size * 0.68);
+    } else if (key === 'grenade') {
+      icon.setDisplaySize(size * 0.58, size * 0.58);
+    } else {
+      icon.setDisplaySize(size * 0.68, size * 0.68);
+    }
+    label
+      .setText(text)
+      .setPosition(alignRight ? x + size - 2 : x + 2, y + size + 8)
+      .setAlpha(active || key === 'grenade' ? 1 : 0.55)
+      .setVisible(true);
+    if (key === 'powerup') {
+      label.setFontSize(text.length > 6 ? '9px' : '10px');
+    } else {
+      label.setFontSize('10px');
+    }
+  }
+
+  controlsLine(player, compact = false) {
+    if (player.id === 'p1') {
+      if (compact) {
+        return 'WASD  E  1/2/3/4';
+      }
+      return 'WASD move  E pick  1 hit  2 aim  3 nade  4 power';
+    }
+    if (compact) {
+      return "Arrows  '  M , . /";
+    }
+    return "Arrows move  ' pick  M hit  , aim  . nade  / power";
   }
 
   showMessage(message, duration) {
@@ -7761,6 +7949,47 @@ function makeFrameCanvas(sourceImage, sheet, cell, options = {}) {
   for (let index = 0; index < imageData.data.length; index += 4) {
     if (isTransparentAssetPixel(sheet, imageData.data, index)) {
       imageData.data[index + 3] = 0;
+      continue;
+    }
+
+    if (options.paletteMap) {
+      const replacement = options.paletteMap.get(rgbKey(imageData.data[index], imageData.data[index + 1], imageData.data[index + 2]));
+      if (replacement) {
+        imageData.data[index] = replacement[0];
+        imageData.data[index + 1] = replacement[1];
+        imageData.data[index + 2] = replacement[2];
+      }
+    }
+  }
+  context.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
+function makeCharacterPreviewCanvas(sourceImage, sheet, paletteCell) {
+  const canvas = document.createElement('canvas');
+  canvas.width = sheet.frameSize;
+  canvas.height = sheet.frameSize;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.imageSmoothingEnabled = true;
+  if (!paletteCell) {
+    return canvas;
+  }
+  context.drawImage(
+    sourceImage,
+    paletteCell.x,
+    paletteCell.y,
+    paletteCell.width,
+    paletteCell.height,
+    Math.floor((sheet.frameSize - paletteCell.width) / 2),
+    sheet.frameSize - paletteCell.height,
+    paletteCell.width,
+    paletteCell.height,
+  );
+
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  for (let index = 0; index < imageData.data.length; index += 4) {
+    if (isTransparentAssetPixel(sheet, imageData.data, index)) {
+      imageData.data[index + 3] = 0;
     }
   }
   context.putImageData(imageData, 0, 0);
@@ -7782,6 +8011,132 @@ function getImagePixels(sourceImage) {
     height: canvas.height,
     data: context.getImageData(0, 0, canvas.width, canvas.height).data,
   };
+}
+
+function detectCharacterPaletteCells(sourceImage, sheet, pixels) {
+  const scanTop = Math.max(0, sourceImage.naturalHeight - 180);
+  const scanRight = Math.min(sourceImage.naturalWidth, 760);
+  const scanHeight = sourceImage.naturalHeight - scanTop;
+  const visited = new Uint8Array(scanRight * scanHeight);
+  const components = [];
+
+  const localIndex = (x, y) => (y - scanTop) * scanRight + x;
+
+  for (let y = scanTop; y < sourceImage.naturalHeight; y += 1) {
+    for (let x = 0; x < scanRight; x += 1) {
+      const startIndex = localIndex(x, y);
+      if (visited[startIndex] || !isPaletteSpritePixel(sheet, pixels, x, y)) {
+        continue;
+      }
+
+      const stack = [[x, y]];
+      visited[startIndex] = 1;
+      let left = x;
+      let right = x;
+      let top = y;
+      let bottom = y;
+      let count = 0;
+
+      while (stack.length) {
+        const [currentX, currentY] = stack.pop();
+        count += 1;
+        left = Math.min(left, currentX);
+        right = Math.max(right, currentX);
+        top = Math.min(top, currentY);
+        bottom = Math.max(bottom, currentY);
+
+        for (const [nextX, nextY] of [
+          [currentX + 1, currentY],
+          [currentX - 1, currentY],
+          [currentX, currentY + 1],
+          [currentX, currentY - 1],
+        ]) {
+          if (nextX < 0 || nextX >= scanRight || nextY < scanTop || nextY >= sourceImage.naturalHeight) {
+            continue;
+          }
+          const nextIndex = localIndex(nextX, nextY);
+          if (visited[nextIndex] || !isPaletteSpritePixel(sheet, pixels, nextX, nextY)) {
+            continue;
+          }
+          visited[nextIndex] = 1;
+          stack.push([nextX, nextY]);
+        }
+      }
+
+      const width = right - left + 1;
+      const height = bottom - top + 1;
+      if (width >= 30 && width <= 46 && height >= 38 && height <= 56 && count >= 500) {
+        components.push({ x: left, y: top, width, height, count });
+      }
+    }
+  }
+
+  const cells = components
+    .sort((left, right) => left.y - right.y || left.x - right.x)
+    .slice(0, CHARACTER_SKIN_COUNT)
+    .map((component) => ({
+      x: component.x,
+      y: component.y,
+      width: component.width,
+      height: Math.min(58, sourceImage.naturalHeight - component.y),
+    }));
+
+  return cells.length >= 2 ? cells : CHARACTER_PALETTE_PREVIEW_CELLS;
+}
+
+function buildCharacterPaletteMaps(sheet, pixels, paletteCells) {
+  if (!paletteCells.length) {
+    return [new Map()];
+  }
+
+  const baseCell = paletteCells[0];
+  return paletteCells.map((targetCell) => {
+    const replacementCounts = new Map();
+    const width = Math.min(baseCell.width, targetCell.width);
+    const height = Math.min(baseCell.height, targetCell.height);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const baseX = baseCell.x + x;
+        const baseY = baseCell.y + y;
+        const targetX = targetCell.x + x;
+        const targetY = targetCell.y + y;
+        if (
+          !isPaletteSpritePixel(sheet, pixels, baseX, baseY) ||
+          !isPaletteSpritePixel(sheet, pixels, targetX, targetY)
+        ) {
+          continue;
+        }
+        const baseIndex = (baseY * pixels.width + baseX) * 4;
+        const targetIndex = (targetY * pixels.width + targetX) * 4;
+        const sourceKey = rgbKey(pixels.data[baseIndex], pixels.data[baseIndex + 1], pixels.data[baseIndex + 2]);
+        const targetKey = rgbKey(pixels.data[targetIndex], pixels.data[targetIndex + 1], pixels.data[targetIndex + 2]);
+        if (!replacementCounts.has(sourceKey)) {
+          replacementCounts.set(sourceKey, new Map());
+        }
+        const targetCounts = replacementCounts.get(sourceKey);
+        const entry = targetCounts.get(targetKey) ?? {
+          color: [pixels.data[targetIndex], pixels.data[targetIndex + 1], pixels.data[targetIndex + 2]],
+          count: 0,
+        };
+        entry.count += 1;
+        targetCounts.set(targetKey, entry);
+      }
+    }
+
+    const paletteMap = new Map();
+    for (const [sourceKey, targetCounts] of replacementCounts.entries()) {
+      let best = null;
+      for (const entry of targetCounts.values()) {
+        if (!best || entry.count > best.count) {
+          best = entry;
+        }
+      }
+      if (best) {
+        paletteMap.set(sourceKey, best.color);
+      }
+    }
+    return paletteMap;
+  });
 }
 
 function detectAssetRowStarts(sourceImage, sheet, pixels) {
@@ -7881,6 +8236,10 @@ function isSpritePixel(sheet, pixels, x, y) {
   );
 }
 
+function isPaletteSpritePixel(sheet, pixels, x, y) {
+  return isSpritePixel(sheet, pixels, x, y);
+}
+
 function isTransparentAssetPixel(sheet, data, index) {
   return [
     sheet.cellBackground,
@@ -7896,6 +8255,10 @@ function isNearColor(data, index, color, tolerance = 3) {
     Math.abs(data[index + 1] - green) <= tolerance &&
     Math.abs(data[index + 2] - blue) <= tolerance
   );
+}
+
+function rgbKey(red, green, blue) {
+  return `${red},${green},${blue}`;
 }
 
 function collapseContiguousRuns(values) {
@@ -7936,7 +8299,7 @@ function getBodyBounds(object) {
 }
 
 function getEmpressFrameNumber(textureKey) {
-  const match = /^empress-frame-(\d+)$/.exec(textureKey ?? '');
+  const match = /(?:^empress-frame-|^empress-skin-frame-(?:p1|p2)-)(\d+)$/.exec(textureKey ?? '');
   return match ? Number.parseInt(match[1], 10) : null;
 }
 
@@ -7965,6 +8328,143 @@ function getGunArmOverlayFrame(bodyFrame) {
   return 37;
 }
 
+function clampSkinIndex(value, count = CHARACTER_SKIN_COUNT, avoid = null) {
+  const max = Math.max(1, Number.isFinite(count) ? count : CHARACTER_SKIN_COUNT);
+  let index = Number.parseInt(value, 10);
+  if (!Number.isFinite(index)) {
+    index = 0;
+  }
+  index = Phaser.Math.Clamp(index, 0, max - 1);
+  if (avoid !== null && max > 1 && index === avoid) {
+    index = (index + 1) % max;
+  }
+  return index;
+}
+
+function normalizeSkinSelection(selection = {}) {
+  const p1 = clampSkinIndex(selection.p1 ?? 0);
+  const p2 = clampSkinIndex(selection.p2 ?? 1, CHARACTER_SKIN_COUNT, p1);
+  return { p1, p2 };
+}
+
+function getStoredSkinSelection() {
+  try {
+    return normalizeSkinSelection(JSON.parse(window.localStorage?.getItem(CHARACTER_SKIN_STORAGE_KEY) ?? '{}'));
+  } catch (_error) {
+    return normalizeSkinSelection();
+  }
+}
+
+function saveSkinSelection(selection) {
+  try {
+    window.localStorage?.setItem(CHARACTER_SKIN_STORAGE_KEY, JSON.stringify(normalizeSkinSelection(selection)));
+  } catch (_error) {
+    // Skin choice persistence is optional.
+  }
+}
+
+function getBootSkinSelection(overlay) {
+  return normalizeSkinSelection({
+    p1: overlay?.dataset?.p1Skin,
+    p2: overlay?.dataset?.p2Skin,
+  });
+}
+
+function getBootPlayerSkins(options = {}) {
+  if (Array.isArray(options.players)) {
+    return getSkinsFromOnlinePlayers(options.players, options.skins);
+  }
+  return normalizeSkinSelection(options.skins ?? getStoredSkinSelection());
+}
+
+function getSkinsFromOnlinePlayers(players, fallback = {}) {
+  const fallbackSelection = normalizeSkinSelection(fallback);
+  const selection = { ...fallbackSelection };
+  if (Array.isArray(players)) {
+    for (const player of players) {
+      if (player?.playerId === 'p1') {
+        selection.p1 = clampSkinIndex(player.skinIndex, CHARACTER_SKIN_COUNT);
+      }
+      if (player?.playerId === 'p2') {
+        selection.p2 = clampSkinIndex(player.skinIndex, CHARACTER_SKIN_COUNT);
+      }
+    }
+  }
+  return normalizeSkinSelection(selection);
+}
+
+function renderSkinPicker(selection) {
+  const normalized = normalizeSkinSelection(selection);
+  return `
+    <section class="boot-skins" aria-label="Character colors">
+      ${renderSkinPickerRow('p1', 'P1 Color', normalized.p1)}
+      ${renderSkinPickerRow('p2', 'P2 Color', normalized.p2)}
+    </section>
+  `;
+}
+
+function renderSkinPickerRow(playerId, label, selectedSkin) {
+  return `
+    <div class="boot-skin-row" data-skin-row="${playerId}">
+      <div class="boot-skin-label">${label}</div>
+      <div class="boot-skin-grid">
+        ${CHARACTER_PALETTE_PREVIEW_CELLS.map((cell, index) => renderSkinSwatch(playerId, index, cell, index === selectedSkin)).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderSkinSwatch(playerId, index, cell, selected) {
+  const style = [
+    `--skin-x:${-cell.x}px`,
+    `--skin-y:${-cell.y}px`,
+    `background-image:url(${assetUrl('assets/empress.png')})`,
+  ].join(';');
+  return `
+    <button class="skin-swatch${selected ? ' is-selected' : ''}" type="button" data-player="${playerId}" data-skin="${index}" aria-label="${playerId.toUpperCase()} color ${index + 1}">
+      <span class="skin-swatch-preview" style="${style}"></span>
+    </button>
+  `;
+}
+
+function bindSkinPicker(overlay) {
+  const update = (nextSelection) => {
+    const normalized = normalizeSkinSelection(nextSelection);
+    overlay.dataset.p1Skin = String(normalized.p1);
+    overlay.dataset.p2Skin = String(normalized.p2);
+    saveSkinSelection(normalized);
+    for (const button of overlay.querySelectorAll('.skin-swatch')) {
+      const playerId = button.dataset.player;
+      const skin = Number.parseInt(button.dataset.skin, 10);
+      button.classList.toggle('is-selected', normalized[playerId] === skin);
+      button.disabled = playerId === 'p1'
+        ? normalized.p2 === skin
+        : normalized.p1 === skin;
+    }
+  };
+
+  overlay.addEventListener('click', (event) => {
+    const button = event.target.closest?.('.skin-swatch');
+    if (!button || !overlay.contains(button)) {
+      return;
+    }
+    const playerId = button.dataset.player;
+    const skin = Number.parseInt(button.dataset.skin, 10);
+    if (!playerId || !Number.isFinite(skin)) {
+      return;
+    }
+    const selection = getBootSkinSelection(overlay);
+    const otherId = playerId === 'p1' ? 'p2' : 'p1';
+    if (selection[otherId] === skin) {
+      selection[otherId] = selection[playerId];
+    }
+    selection[playerId] = skin;
+    update(selection);
+  });
+
+  update(getBootSkinSelection(overlay));
+}
+
 retireServiceWorkers();
 createBootMenu();
 
@@ -7973,13 +8473,17 @@ function createBootMenu() {
   existing?.remove();
 
   const initialCode = getInitialLobbyCode();
+  const bootSkinSelection = getStoredSkinSelection();
   const overlay = document.createElement('main');
   overlay.className = 'boot-menu';
+  overlay.dataset.p1Skin = String(bootSkinSelection.p1);
+  overlay.dataset.p2Skin = String(bootSkinSelection.p2);
   overlay.innerHTML = `
     <section class="boot-panel">
       <canvas class="boot-sprite" width="64" height="64" aria-hidden="true"></canvas>
       <h1>Superfighters</h1>
       <p class="boot-copy">Choose a match type.</p>
+      ${renderSkinPicker(bootSkinSelection)}
       <div class="boot-actions">
         <button class="boot-cpu" type="button">Play vs CPU</button>
         <button class="boot-local" type="button">Local Multiplayer</button>
@@ -8012,6 +8516,7 @@ function createBootMenu() {
 
   document.body.appendChild(overlay);
   startBootSpriteAnimation(overlay.querySelector('.boot-sprite'));
+  bindSkinPicker(overlay);
 
   const state = {
     channel: null,
@@ -8115,6 +8620,8 @@ function createBootMenu() {
         code: data?.code ?? state.code,
         playerId: state.playerId,
         playerCount: state.playerCount,
+        players: data?.players,
+        skins: getSkinsFromOnlinePlayers(data?.players, getBootSkinSelection(overlay)),
       });
     });
     channel.on('lobby-error', (data) => setStatus(data?.message || 'Lobby error'));
@@ -8127,7 +8634,7 @@ function createBootMenu() {
     try {
       const channel = await ensureChannel();
       setStatus('Creating lobby...');
-      channel.emit('create-lobby', {}, { reliable: true });
+      channel.emit('create-lobby', { skinIndex: getBootSkinSelection(overlay).p1 }, { reliable: true });
     } catch (error) {
       setStatus(error.message || 'Could not connect');
     }
@@ -8142,7 +8649,7 @@ function createBootMenu() {
     try {
       const channel = await ensureChannel();
       setStatus(`Joining ${code}...`);
-      channel.emit('join-lobby', { code }, { reliable: true });
+      channel.emit('join-lobby', { code, skinIndex: getBootSkinSelection(overlay).p2 }, { reliable: true });
     } catch (error) {
       setStatus(error.message || 'Could not connect');
     }
@@ -8150,11 +8657,11 @@ function createBootMenu() {
 
   overlay.querySelector('.boot-local')?.addEventListener('click', () => {
     state.channel?.close();
-    startGameFromBoot(overlay, { mode: 'local' });
+    startGameFromBoot(overlay, { mode: 'local', skins: getBootSkinSelection(overlay) });
   });
   overlay.querySelector('.boot-cpu')?.addEventListener('click', () => {
     state.channel?.close();
-    startGameFromBoot(overlay, { mode: 'cpu' });
+    startGameFromBoot(overlay, { mode: 'cpu', skins: getBootSkinSelection(overlay) });
   });
   overlay.querySelector('.boot-online')?.addEventListener('click', showOnlinePanel);
   overlay.querySelector('.boot-create')?.addEventListener('click', createLobby);
@@ -8194,7 +8701,7 @@ function createBootMenu() {
     showOnlinePanel();
     window.setTimeout(joinLobby, 250);
   } else if (shouldAutoPlaytestEditorLevel()) {
-    startGameFromBoot(overlay, { mode: 'local', editorLevel: true });
+    startGameFromBoot(overlay, { mode: 'local', editorLevel: true, skins: getBootSkinSelection(overlay) });
   }
 }
 

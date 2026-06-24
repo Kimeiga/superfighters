@@ -12,6 +12,8 @@ window.__superfightersMechanicsSmoke = (async () => {
   const check = (name, pass, details = {}) => {
     checks.push({ name, pass: Boolean(pass), details });
   };
+  const baseAnimationKey = (key) => String(key ?? '').replace(/-(p1|p2)$/, '');
+  const empressFrameOf = (sprite) => Number((sprite?.texture?.key ?? '').match(/(?:empress-frame-|empress-skin-frame-(?:p1|p2)-)(\d+)$/)?.[1] ?? NaN);
 
   const clearGroup = (group) => {
     for (const child of [...group.getChildren()]) {
@@ -135,17 +137,17 @@ window.__superfightersMechanicsSmoke = (async () => {
     weaponIds.every((id) => scene.textures.exists(`weapon-${id}`)),
     { weaponIds },
   );
-  const nearestFilter = Phaser.Textures.FilterMode.NEAREST;
+  const smoothFilter = Phaser.Textures.FilterMode.LINEAR;
   check(
-    'pixel-art textures use nearest filtering without canvas pixelation',
-    scene.textures.get(scene.getCharacterTextureKey(23))?.source?.[0]?.scaleMode === nearestFilter &&
-      scene.textures.get('weapon-pistol')?.source?.[0]?.scaleMode === nearestFilter &&
-      scene.textures.get('grenade-pixel')?.source?.[0]?.scaleMode === nearestFilter,
+    'game textures use smooth filtering for zoomed camera readability',
+    scene.textures.get(scene.getCharacterTextureKey(23, 'p1'))?.source?.[0]?.scaleMode === smoothFilter &&
+      scene.textures.get('weapon-pistol')?.source?.[0]?.scaleMode === smoothFilter &&
+      scene.textures.get('grenade-pixel')?.source?.[0]?.scaleMode === smoothFilter,
     {
-      character: scene.textures.get(scene.getCharacterTextureKey(23))?.source?.[0]?.scaleMode,
+      character: scene.textures.get(scene.getCharacterTextureKey(23, 'p1'))?.source?.[0]?.scaleMode,
       weapon: scene.textures.get('weapon-pistol')?.source?.[0]?.scaleMode,
       grenade: scene.textures.get('grenade-pixel')?.source?.[0]?.scaleMode,
-      nearestFilter,
+      smoothFilter,
     },
   );
   await wait(1800);
@@ -218,7 +220,7 @@ window.__superfightersMechanicsSmoke = (async () => {
 
   resetPlayer(p1, 700, 484, 1);
   scene.startCrouchTransition(p1, scene.time.now + 5);
-  check('crouch transition without weapon uses no-gun animation', !p1.crouchTransitionGun && p1.sprite.anims.currentAnim?.key === 'girl-crouch-down', {
+  check('crouch transition without weapon uses no-gun animation', !p1.crouchTransitionGun && baseAnimationKey(p1.sprite.anims.currentAnim?.key) === 'girl-crouch-down', {
     crouchTransitionGun: p1.crouchTransitionGun,
     animation: p1.sprite.anims.currentAnim?.key,
   });
@@ -226,7 +228,7 @@ window.__superfightersMechanicsSmoke = (async () => {
   resetPlayer(p1, 700, 484, 1);
   p1.weapon = scene.makeWeaponState('pistol');
   scene.startCrouchTransition(p1, scene.time.now + 5);
-  check('crouch transition with weapon uses gun animation', p1.crouchTransitionGun && p1.sprite.anims.currentAnim?.key === 'girl-crouch-down-gun', {
+  check('crouch transition with weapon uses gun animation', p1.crouchTransitionGun && baseAnimationKey(p1.sprite.anims.currentAnim?.key) === 'girl-crouch-down-gun', {
     crouchTransitionGun: p1.crouchTransitionGun,
     animation: p1.sprite.anims.currentAnim?.key,
   });
@@ -297,12 +299,11 @@ window.__superfightersMechanicsSmoke = (async () => {
   scene.setAimVisible(p1, false);
   scene.setAimVisible(p2, false);
 
-  const empressFrameOf = (sprite) => Number((sprite?.texture?.key ?? '').match(/empress-frame-(\d+)$/)?.[1] ?? NaN);
-  const gunLayerCheck = (name, animationKey, bodyFrame, expectedArmFrame) => {
+  const gunLayerCheck = (name, animationName, bodyFrame, expectedArmFrame) => {
     resetPlayer(p1, 700, 484, 1);
     p1.weapon = scene.makeWeaponState('pistol');
-    p1.sprite.play(animationKey, true);
-    p1.sprite.setTexture(scene.getCharacterTextureKey(bodyFrame));
+    p1.sprite.play(scene.getPlayerAnimationKey(p1, animationName), true);
+    p1.sprite.setTexture(scene.getCharacterTextureKey(bodyFrame, p1.textureSlot));
     scene.updateAimVisuals(p1);
     check(name, empressFrameOf(p1.sprite) === bodyFrame && empressFrameOf(p1.arm) === expectedArmFrame && p1.weaponSprite.visible && p1.arm.visible && p1.sprite.depth < p1.weaponSprite.depth && p1.weaponSprite.depth < p1.arm.depth, {
       bodyFrame: empressFrameOf(p1.sprite),
@@ -316,23 +317,23 @@ window.__superfightersMechanicsSmoke = (async () => {
       },
     });
   };
-  gunLayerCheck('idle gun keeps full body plus arm overlay', 'girl-idle-gun', 29, 37);
-  gunLayerCheck('run gun keeps full body plus arm overlay', 'girl-run-gun', 106, 114);
-  gunLayerCheck('crouch gun keeps full body plus arm overlay', 'girl-crouch', 61, 73);
-  gunLayerCheck('jump gun keeps full body plus arm overlay', 'girl-jump-up-gun', 134, 145);
+  gunLayerCheck('idle gun keeps full body plus arm overlay', 'idleAimStraight', 29, 37);
+  gunLayerCheck('run gun keeps full body plus arm overlay', 'runGun', 106, 114);
+  gunLayerCheck('crouch gun keeps full body plus arm overlay', 'crouch', 61, 73);
+  gunLayerCheck('jump gun keeps full body plus arm overlay', 'jumpGunUp', 134, 145);
 
   const ladderBounds = new Phaser.Geom.Rectangle(700, 392, 30, 190);
   const fakeLadder = { active: true, getData: (key) => (key === 'bounds' ? ladderBounds : null) };
   resetPlayer(p1, 700, 484, 1);
   p1.weapon = scene.makeWeaponState('pistol');
-  p1.sprite.play('girl-jump-up-gun', true);
-  p1.sprite.setTexture(scene.getCharacterTextureKey(134));
+  p1.sprite.play(scene.getPlayerAnimationKey(p1, 'jumpGunUp'), true);
+  p1.sprite.setTexture(scene.getCharacterTextureKey(134, p1.textureSlot));
   scene.updateAimVisuals(p1);
   const ladderBefore = { armVisible: p1.arm.visible, weaponVisible: p1.weaponSprite.visible };
   scene.startLadderClimb(p1, fakeLadder, -1, scene.time.now + 55);
   scene.updatePlayerAnimation(p1, true, 0, scene.time.now + 55);
   scene.updateAimVisuals(p1);
-  check('entering ladder clears stale gun animation layers', ladderBefore.armVisible && ladderBefore.weaponVisible && p1.climbing && p1.sprite.anims.currentAnim?.key === 'girl-climb-ladder' && !p1.arm.visible && !p1.weaponSprite.visible, {
+  check('entering ladder clears stale gun animation layers', ladderBefore.armVisible && ladderBefore.weaponVisible && p1.climbing && baseAnimationKey(p1.sprite.anims.currentAnim?.key) === 'girl-climb-ladder' && !p1.arm.visible && !p1.weaponSprite.visible, {
     before: ladderBefore,
     animation: p1.sprite.anims.currentAnim?.key,
     climbing: p1.climbing,
@@ -360,7 +361,7 @@ window.__superfightersMechanicsSmoke = (async () => {
   pickup = scene.createPickup(p1.sprite.x + 4, p1.sprite.y, 'weapon', 'rifle');
   p1.currentPickup = pickup;
   scene.handleMeleePressed(p1, scene.time.now + 70);
-  check('crouch plus melee swaps pickup instead of crouch melee', p1.weapon?.id === 'rifle' && p1.sprite.anims.currentAnim?.key === 'girl-pickup', {
+  check('crouch plus melee swaps pickup instead of crouch melee', p1.weapon?.id === 'rifle' && baseAnimationKey(p1.sprite.anims.currentAnim?.key) === 'girl-pickup', {
     weapon: p1.weapon?.id,
     animation: p1.sprite.anims.currentAnim?.key,
   });
@@ -378,7 +379,7 @@ window.__superfightersMechanicsSmoke = (async () => {
   p1.nextMeleeAt = 0;
   scene.performMeleeCombo(p1, firstUntil + 25);
   const comboSecond = p1.sprite.anims.currentAnim?.key;
-  check('melee combo advances one hit per press', comboFirst === 'girl-melee-1' && comboStillFirst === 'girl-melee-1' && comboSecond === 'girl-melee-2', {
+  check('melee combo advances one hit per press', baseAnimationKey(comboFirst) === 'girl-melee-1' && baseAnimationKey(comboStillFirst) === 'girl-melee-1' && baseAnimationKey(comboSecond) === 'girl-melee-2', {
     comboFirst,
     comboStillFirst,
     comboSecond,
@@ -392,11 +393,24 @@ window.__superfightersMechanicsSmoke = (async () => {
   p1.aimAngle = 0;
   const bulletPivot = scene.getAimPivot(p1);
   const gunAnchor = scene.getAimAnchor(p1, p1.aimAngle);
+  const reticle = scene.getAimReticlePosition(p1, p1.aimAngle);
   const bulletOrigin = scene.getBulletOrigin(p1);
-  check('bullet origin comes from gun hand instead of body center', bulletOrigin.x > gunAnchor.x && bulletOrigin.x > bulletPivot.x + 18, {
+  const horizontalOriginAligned = Math.abs(bulletOrigin.y - reticle.y) < 0.5;
+  const originBetweenPivotAndReticle = bulletOrigin.x > bulletPivot.x + 18 && bulletOrigin.x < reticle.x;
+  p1.aimAngle = -Math.PI / 5;
+  const angledOrigin = scene.getBulletOrigin(p1);
+  const angledReticle = scene.getAimReticlePosition(p1, p1.aimAngle);
+  const angledCross = (angledOrigin.x - bulletPivot.x) * (angledReticle.y - bulletPivot.y)
+    - (angledOrigin.y - bulletPivot.y) * (angledReticle.x - bulletPivot.x);
+  const angledOriginAligned = Math.abs(angledCross) < 0.5;
+  p1.aimAngle = 0;
+  check('bullet origin follows the reticle aim line', horizontalOriginAligned && originBetweenPivotAndReticle && angledOriginAligned, {
     pivot: { x: Math.round(bulletPivot.x), y: Math.round(bulletPivot.y) },
     anchor: { x: Math.round(gunAnchor.x), y: Math.round(gunAnchor.y) },
     origin: { x: Math.round(bulletOrigin.x), y: Math.round(bulletOrigin.y) },
+    reticle: { x: Math.round(reticle.x), y: Math.round(reticle.y) },
+    angledOrigin: { x: Math.round(angledOrigin.x), y: Math.round(angledOrigin.y) },
+    angledReticle: { x: Math.round(angledReticle.x), y: Math.round(angledReticle.y) },
   });
 
   const targetPlatformForTrace = scene.platforms.find((platform) => platform.active && platform.getData('levelGeometry') && !platform.getData('thin'));
