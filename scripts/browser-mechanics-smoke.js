@@ -43,6 +43,7 @@ window.__superfightersMechanicsSmoke = (async () => {
     player.facing = facing;
     player.sprite.setFlipX(facing < 0);
     player.aimFacing = facing;
+    player.aimInputDirection = facing;
     player.aimOffset = 0;
     player.aimAngle = scene.getAimAngle(facing, 0);
     player.aiming = false;
@@ -62,6 +63,8 @@ window.__superfightersMechanicsSmoke = (async () => {
     player.currentPickup = null;
     player.invulnerableUntil = 0;
     player.knockedUntil = 0;
+    player.stun = 0;
+    player.stunLastHitAt = 0;
     player.sprite.body?.setAllowGravity?.(true);
     player.nextMeleeAt = 0;
     player.nextShotAt = 0;
@@ -294,7 +297,7 @@ window.__superfightersMechanicsSmoke = (async () => {
     const reticle = scene.getAimReticlePosition(p1, p1.aimAngle);
     const anchor = scene.getAimAnchor(p1, p1.aimAngle, p1.aimFacing);
     const weaponDistance = Phaser.Math.Distance.Between(p1.weaponSprite.x, p1.weaponSprite.y, anchor.x, anchor.y);
-    const expectedArmSign = shouldBeAbove ? (facing > 0 ? -1 : 1) : (facing > 0 ? 1 : -1);
+    const expectedArmSign = Math.sign(scene.getAimOffsetFromAngle(p1.aimAngle, p1.aimFacing));
     check(name, shouldBeAbove ? reticle.y < pivot.y : reticle.y > pivot.y, {
       facing,
       vertical,
@@ -306,6 +309,7 @@ window.__superfightersMechanicsSmoke = (async () => {
       facing,
       vertical,
       armRotation: Number(p1.arm.rotation.toFixed(3)),
+      expectedArmSign,
       weaponDistance: Number(weaponDistance.toFixed(2)),
       armVisible: p1.arm.visible,
     });
@@ -314,6 +318,21 @@ window.__superfightersMechanicsSmoke = (async () => {
   aimCheck('aim down while facing right', 1, 1, false);
   aimCheck('aim up while facing left', -1, -1, true);
   aimCheck('aim down while facing left', -1, 1, false);
+
+  resetPlayer(p1, 700, 484, 1);
+  p1.weapon = scene.makeWeaponState('pistol');
+  scene.beginAim(p1, 'gun', scene.time.now + 52);
+  scene.updateAim(p1, 0, -1, 3000);
+  const spunFacing = p1.aimFacing;
+  const spunReticle = scene.getAimReticlePosition(p1, p1.aimAngle);
+  scene.updateAim(p1, 0, -1, 1500);
+  check('holding aim rotates through vertical and flips facing across the back arc', spunFacing === -1 && p1.aimFacing === 1 && spunReticle.x < scene.getAimPivot(p1).x, {
+    spunFacing,
+    finalFacing: p1.aimFacing,
+    spunAngle: Number(p1.aimAngle.toFixed(3)),
+    spunReticleX: Math.round(spunReticle.x),
+    pivotX: Math.round(scene.getAimPivot(p1).x),
+  });
 
   resetPlayer(p1, 700, 484, 1);
   resetPlayer(p2, 1040, 484, -1);
@@ -630,9 +649,33 @@ window.__superfightersMechanicsSmoke = (async () => {
   scene.performMeleeCombo(p1, scene.time.now + 1500);
   scene.resolveMeleeActiveFrame(p1, p1.meleeAttackState.id);
   check('melee combo damages opponent', p2.health < 100, { p2Health: p2.health });
-  check('normal melee does not knock down', p2.knockedUntil <= scene.time.now, {
+  check('normal melee adds stun but does not knock down', p2.stun > 0 && p2.knockedUntil <= scene.time.now, {
+    stun: p2.stun,
     knockedUntil: p2.knockedUntil,
     now: scene.time.now,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
+  resetPlayer(p2, 735, 484, -1);
+  p2.invulnerableUntil = 0;
+  p1.sprite.body.blocked.down = false;
+  p1.sprite.body.touching.down = false;
+  p1.sprite.setVelocityY(-80);
+  scene.performMeleeCombo(p1, scene.time.now + 1560);
+  scene.resolveMeleeActiveFrame(p1, p1.meleeAttackState.id);
+  check('single jump melee builds stun without immediate knockdown', p2.stun > 0 && p2.stun < scene.configData.melee.stunThreshold && p2.knockedUntil <= scene.time.now, {
+    stun: p2.stun,
+    threshold: scene.configData.melee.stunThreshold,
+    knockedUntil: p2.knockedUntil,
+  });
+
+  scene.addPlayerStun(p2, scene.configData.melee.stunThreshold, 1, scene.configData.melee.dashKnockdownMs);
+  scene.updateKnockedPlayer(p2);
+  check('filled stun bar knocks down into a floor pose without sprite rotation', p2.knockedUntil > scene.time.now && p2.sprite.angle === 0 && p2.sprite.texture.key.endsWith('-358'), {
+    stun: p2.stun,
+    knockedUntil: p2.knockedUntil,
+    angle: p2.sprite.angle,
+    texture: p2.sprite.texture.key,
   });
 
   resetPlayer(p1, 700, 484, 1);
@@ -687,8 +730,15 @@ window.__superfightersMechanicsSmoke = (async () => {
       y: Math.round(grenades[0].y),
     } : null,
   });
-  check('grenade uses high ground-slide drag', grenades[0]?.body?.drag?.x >= scene.configData.grenades.dragX, {
+  const initialGrenadeDrag = grenades[0]?.body?.drag?.x;
+  if (grenades[0]) {
+    grenades[0].body.blocked.down = true;
+    scene.updateGrenades(scene.time.now + 20, 16);
+  }
+  check('grenade keeps air throw speed then uses high ground-slide drag', initialGrenadeDrag === (scene.configData.grenades.airDragX ?? 0) && grenades[0]?.body?.drag?.x >= scene.configData.grenades.dragX, {
+    initialDragX: initialGrenadeDrag,
     dragX: grenades[0]?.body?.drag?.x,
+    configuredAir: scene.configData.grenades.airDragX,
     configured: scene.configData.grenades.dragX,
   });
   check('thrown grenade keeps visible cooked fuse timer', grenades[0]?.getData('timerText')?.active && grenades[0]?.getData('fuseEnd') > scene.time.now, {
@@ -854,6 +904,8 @@ window.__superfightersMechanicsSmoke = (async () => {
     aimMode: overrides.aimMode ?? null,
     crouching: overrides.crouching ?? false,
     climbing: overrides.climbing ?? false,
+    stun: overrides.stun ?? 0,
+    knockedMs: overrides.knockedMs ?? 0,
     weapon: overrides.weapon ?? null,
     grenadeAmmo: overrides.grenadeAmmo ?? 3,
     powerup: overrides.powerup ?? null,
@@ -924,6 +976,15 @@ window.__superfightersMechanicsSmoke = (async () => {
   check('large remote snapshot discontinuities snap instead of interpolating across the map', p1.remoteSnapshotBuffer.length === 1 && Math.abs(p1.sprite.x - 420) < 1, {
     x: p1.sprite.x,
     bufferLength: p1.remoteSnapshotBuffer.length,
+  });
+
+  resetPlayer(p1, 700, 484, 1);
+  scene.applyRemoteSnapshot(p1, makeNetSnapshot(710, 484, { stun: 66, knockedMs: 600, facing: -1 }), { instant: true });
+  check('remote snapshots apply stun and knocked floor pose', p1.stun === 66 && p1.knockedUntil > scene.time.now && p1.sprite.angle === 0 && p1.sprite.texture.key.endsWith('-358'), {
+    stun: p1.stun,
+    knockedUntil: p1.knockedUntil,
+    angle: p1.sprite.angle,
+    texture: p1.sprite.texture.key,
   });
 
   Object.assign(scene, previousOnlineState);

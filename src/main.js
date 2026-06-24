@@ -25,7 +25,7 @@ const JUMP_BUFFER_MS = 140;
 const PLAYER_HEAD_SUPPORT_MS = 130;
 const DOOR_EXIT_MS = 520;
 const LADDER_END_VISUAL_DROP = 38;
-const AIM_HALF_ARC = Math.PI / 2;
+const AIM_OFFSET_LIMIT = Math.PI;
 const INPUT_ACTIONS = ['left', 'right', 'jump', 'crouch', 'melee', 'pickup', 'shoot', 'grenade', 'powerup', 'aimUp', 'aimDown'];
 const GAME_DEFAULT_CAPTURE_CODES = new Set(['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'Space', 'Slash', 'KeyE', 'Quote']);
 const ONLINE_INPUT_SEND_MS = 50;
@@ -2014,20 +2014,15 @@ class FightScene extends Phaser.Scene {
   }
 
   applyCpuAimInput(player, input, desiredAngle) {
-    const facing = player.aiming ? player.aimFacing : player.facing;
-    const baseAngle = facing >= 0 ? 0 : Math.PI;
-    const desiredOffset = Phaser.Math.Clamp(
-      Math.atan2(Math.sin(desiredAngle - baseAngle), Math.cos(desiredAngle - baseAngle)),
-      -AIM_HALF_ARC,
-      AIM_HALF_ARC,
-    );
-    const currentOffset = player.aiming ? (player.aimOffset ?? 0) : 0;
-    const diff = desiredOffset - currentOffset;
+    const currentAngle = player.aiming
+      ? player.aimAngle
+      : this.getAimAngle(player.facing >= 0 ? 1 : -1, 0);
+    const diff = Math.atan2(Math.sin(desiredAngle - currentAngle), Math.cos(desiredAngle - currentAngle));
     if (Math.abs(diff) < 0.06) {
       return;
     }
 
-    const vertical = Math.sign(diff) * facing;
+    const vertical = Math.sign(diff);
     input.aimDown = vertical > 0;
     input.aimUp = vertical < 0;
   }
@@ -2248,6 +2243,7 @@ class FightScene extends Phaser.Scene {
       remoteLastSnapshotServerTime: 0,
       aimAngle: config.facing > 0 ? 0 : Math.PI,
       aimFacing: config.facing > 0 ? 1 : -1,
+      aimInputDirection: config.facing > 0 ? 1 : -1,
       aimOffset: 0,
       aimMode: null,
       aiming: false,
@@ -2315,6 +2311,8 @@ class FightScene extends Phaser.Scene {
       headSupportUntil: 0,
       headSupportPlayerId: null,
       knockedUntil: 0,
+      stun: 0,
+      stunLastHitAt: 0,
       invulnerableUntil: 0,
       slowedUntil: 0,
       shieldUntil: 0,
@@ -3376,6 +3374,8 @@ class FightScene extends Phaser.Scene {
       aimMode: player.aimMode,
       crouching: player.crouching,
       climbing: player.climbing,
+      stun: roundForNetwork(player.stun ?? 0),
+      knockedMs: Math.max(0, Math.round((player.knockedUntil ?? 0) - this.time.now)),
       weapon: player.weapon,
       grenadeAmmo: player.grenadeAmmo,
       powerup: player.powerup,
@@ -3522,6 +3522,8 @@ class FightScene extends Phaser.Scene {
       aimMode: snapshot.aimMode === 'gun' || snapshot.aimMode === 'grenade' ? snapshot.aimMode : null,
       crouching: Boolean(snapshot.crouching),
       climbing: Boolean(snapshot.climbing),
+      stun: Number(snapshot.stun) || 0,
+      knockedMs: Math.max(0, Number(snapshot.knockedMs) || 0),
       weapon: snapshot.weapon?.id ? { id: snapshot.weapon.id, ammo: snapshot.weapon.ammo } : null,
       grenadeAmmo: snapshot.grenadeAmmo,
       powerup: snapshot.powerup ?? null,
@@ -3564,7 +3566,7 @@ class FightScene extends Phaser.Scene {
     player.kills = clampNetworkNumber(snapshot.kills, 0, 99, player.kills);
     player.facing = snapshot.facing === -1 ? -1 : 1;
     player.aimFacing = snapshot.aimFacing === -1 ? -1 : 1;
-    player.aimOffset = clampNetworkNumber(snapshot.aimOffset, -AIM_HALF_ARC, AIM_HALF_ARC, player.aimOffset);
+    player.aimOffset = clampNetworkNumber(snapshot.aimOffset, -AIM_OFFSET_LIMIT, AIM_OFFSET_LIMIT, player.aimOffset);
     player.aimAngle = Number.isFinite(snapshot.aimAngle) ? snapshot.aimAngle : player.aimAngle;
     player.aiming = Boolean(snapshot.aiming);
     if (Object.hasOwn(snapshot, 'aimMode')) {
@@ -3572,6 +3574,8 @@ class FightScene extends Phaser.Scene {
     }
     player.crouching = Boolean(snapshot.crouching);
     player.climbing = Boolean(snapshot.climbing);
+    player.stun = clampNetworkNumber(snapshot.stun, 0, this.configData.melee.stunThreshold ?? 100, player.stun ?? 0);
+    player.knockedUntil = snapshot.knockedMs > 0 ? Math.max(player.knockedUntil, this.time.now + snapshot.knockedMs) : 0;
     if (Object.hasOwn(snapshot, 'weapon')) {
       player.weapon = snapshot.weapon?.id ? snapshot.weapon : null;
     }
@@ -3581,6 +3585,9 @@ class FightScene extends Phaser.Scene {
     }
     player.sprite.setFlipX(player.facing < 0);
     this.applyBodyPose(player);
+    if (this.time.now < player.knockedUntil) {
+      this.updateKnockedPlayer(player);
+    }
     this.updateAimVisuals(player);
   }
 
@@ -4405,6 +4412,10 @@ class FightScene extends Phaser.Scene {
       this.startJumpLand(player, time);
     }
 
+    if (time >= player.knockedUntil) {
+      this.recoverPlayerStun(player, delta);
+    }
+
     if (time < player.knockedUntil) {
       this.resetJumpState(player);
       this.endShootStance(player);
@@ -4598,9 +4609,20 @@ class FightScene extends Phaser.Scene {
     this.endShootStance(player);
     this.clearLadderState(player);
     player.sprite.body.setAllowGravity(true);
-    player.sprite.setAngle(player.facing > 0 ? 82 : -82);
-    player.sprite.play(this.getPlayerAnimationKey(player, 'crouch'), true);
+    this.applyBodyPose(player);
+    player.sprite.stop();
+    player.sprite.setAngle(0);
+    player.sprite.setTexture(this.getCharacterTextureKey(Math.min(358, this.animationFrameCount ?? 358), player.textureSlot));
+    player.sprite.setFlipX(player.facing < 0);
     player.sprite.setVelocityX(player.sprite.body.velocity.x * 0.96);
+  }
+
+  recoverPlayerStun(player, delta) {
+    if (!player.stun) {
+      return;
+    }
+    const recoverPerMs = (this.configData.melee.stunRecoverPerSecond ?? 18) / 1000;
+    player.stun = Math.max(0, player.stun - recoverPerMs * delta);
   }
 
   tryStartPlatformDrop(player, grounded, time) {
@@ -5057,9 +5079,11 @@ class FightScene extends Phaser.Scene {
     }
     if (continuingGunStance) {
       player.aimFacing = player.aimFacing || (player.facing >= 0 ? 1 : -1);
+      player.aimInputDirection = player.aimInputDirection || player.aimFacing;
       player.aimOffset = this.getAimOffsetFromAngle(player.aimAngle, player.aimFacing);
     } else {
       player.aimFacing = player.facing >= 0 ? 1 : -1;
+      player.aimInputDirection = player.aimFacing;
       player.aimOffset = 0;
       player.aimAngle = this.getAimAngle(player.aimFacing, player.aimOffset);
     }
@@ -5069,14 +5093,16 @@ class FightScene extends Phaser.Scene {
 
   updateAim(player, horizontal, vertical, delta) {
     const rotateSpeed = Phaser.Math.DegToRad(this.configData.movement.aimRotateDegPerSecond);
-    const aimFacing = player.aimFacing || (player.facing >= 0 ? 1 : -1);
-    const nextOffset = (player.aimOffset ?? 0) + vertical * aimFacing * rotateSpeed * (delta / 1000);
-    player.aimFacing = aimFacing;
-    player.aimOffset = Phaser.Math.Clamp(nextOffset, -AIM_HALF_ARC, AIM_HALF_ARC);
-    player.aimAngle = this.getAimAngle(player.aimFacing, player.aimOffset);
+    const currentAngle = Number.isFinite(player.aimAngle)
+      ? player.aimAngle
+      : this.getAimAngle(player.aimFacing || player.facing || 1, player.aimOffset || 0);
+    const inputDirection = player.aimInputDirection || player.aimFacing || player.facing || 1;
+    player.aimAngle = Phaser.Math.Angle.Normalize(currentAngle + vertical * inputDirection * rotateSpeed * (delta / 1000));
+    player.aimFacing = this.getFacingFromAimAngle(player.aimAngle, player.aimFacing || player.facing || 1);
+    player.aimOffset = this.getAimOffsetFromAngle(player.aimAngle, player.aimFacing);
 
-    player.facing = aimFacing;
-    player.sprite.setFlipX(aimFacing < 0);
+    player.facing = player.aimFacing;
+    player.sprite.setFlipX(player.aimFacing < 0);
 
     const grounded = player.sprite.body.blocked.down || player.sprite.body.touching.down;
     if (horizontal !== 0 && !(player.crouching && grounded)) {
@@ -5096,7 +5122,15 @@ class FightScene extends Phaser.Scene {
   getAimOffsetFromAngle(angle, facing) {
     const baseAngle = facing >= 0 ? 0 : Math.PI;
     const wrapped = Math.atan2(Math.sin(angle - baseAngle), Math.cos(angle - baseAngle));
-    return Phaser.Math.Clamp(wrapped, -AIM_HALF_ARC, AIM_HALF_ARC);
+    return Phaser.Math.Clamp(wrapped, -AIM_OFFSET_LIMIT, AIM_OFFSET_LIMIT);
+  }
+
+  getFacingFromAimAngle(angle, fallbackFacing = 1) {
+    const horizontal = Math.cos(angle);
+    if (Math.abs(horizontal) < 0.0001) {
+      return fallbackFacing >= 0 ? 1 : -1;
+    }
+    return horizontal >= 0 ? 1 : -1;
   }
 
   releaseAim(player, time) {
@@ -5654,7 +5688,7 @@ class FightScene extends Phaser.Scene {
       .setDepth(9);
     this.grenades.add(grenade);
     grenade.setBounce(this.configData.grenades.bounce);
-    grenade.setDragX(this.configData.grenades.dragX ?? 170);
+    grenade.setDragX(this.configData.grenades.airDragX ?? 0);
     grenade.body.setCircle(7);
     grenade.body.setVelocity(
       direction.x * this.configData.grenades.throwSpeed,
@@ -5756,7 +5790,9 @@ class FightScene extends Phaser.Scene {
         continue;
       }
 
-      this.resolveGrenadeSlopeContact(grenade);
+      const onSlope = this.resolveGrenadeSlopeContact(grenade);
+      const grounded = onSlope || grenade.body?.blocked?.down || grenade.body?.touching?.down;
+      grenade.setDragX(grounded ? (this.configData.grenades.dragX ?? 420) : (this.configData.grenades.airDragX ?? 0));
       grenade.angle += (grenade.body?.velocity?.x ?? 0) * dt * 0.65;
 
       const timerText = grenade.getData('timerText');
@@ -5987,7 +6023,6 @@ class FightScene extends Phaser.Scene {
     const pivot = this.getAimPivot(player);
     const centerX = pivot.x + player.facing * 34;
     const centerY = pivot.y;
-    this.flashHitbox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, player.facing, 0xffffff, 0.2);
 
     if (!attack.environmentHitApplied) {
       this.breakWindowsInBox(centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight, hit.damage);
@@ -6002,7 +6037,15 @@ class FightScene extends Phaser.Scene {
 
     if (this.isTargetInBox(opponent.sprite, centerX, centerY, this.configData.melee.hitboxWidth, this.configData.melee.hitboxHeight)) {
       attack.hitTargets.add(opponent.id);
+      const fallbackStun = [20, 27, 42][Phaser.Math.Clamp((attack.comboNumber ?? 1) - 1, 0, 2)] ?? 20;
+      const baseStun = hit.stun ?? fallbackStun;
+      const stun = attack.animationName === 'jumpMelee'
+        ? Math.max(baseStun, this.configData.melee.jumpStun ?? 0)
+        : baseStun;
       this.damagePlayer(opponent, hit.damage, player.facing, hit.knockbackX, hit.knockbackY, {
+        stun,
+        knockdownMs: this.configData.melee.dashKnockdownMs,
+        quietImpact: true,
         source: `${player.label} combo ${attack.comboNumber}`,
       });
     }
@@ -6051,8 +6094,6 @@ class FightScene extends Phaser.Scene {
     player.dashHitTargets.clear();
     player.sprite.setVelocityX(player.facing * this.configData.movement.dashAttackSpeed);
     player.sprite.setVelocityY(-this.configData.movement.dashAttackLift);
-    const pivot = this.getAimPivot(player);
-    this.flashHitbox(pivot.x + player.facing * 40, pivot.y, 64, 44, player.facing, 0xffd166, 0.3);
   }
 
   updateDashAttacks(time) {
@@ -6071,7 +6112,9 @@ class FightScene extends Phaser.Scene {
       if (!player.dashHitTargets.has(opponent.id) && time >= opponent.knockedUntil && this.isTargetInBox(opponent.sprite, centerX, centerY, 70, 48)) {
         player.dashHitTargets.add(opponent.id);
         this.damagePlayer(opponent, this.configData.melee.dashDamage, player.dashDirection, this.configData.melee.dashKnockbackX, this.configData.melee.dashKnockbackY, {
+          stun: this.configData.melee.knockdownStun,
           knockdownMs: this.configData.melee.dashKnockdownMs,
+          quietImpact: true,
           source: `${player.label} dash takedown`,
         });
       }
@@ -6426,16 +6469,38 @@ class FightScene extends Phaser.Scene {
     player.sprite.setVelocityX(direction * knockbackX);
     player.sprite.setVelocityY(-knockbackY);
 
-    if (options.knockdownMs) {
-      player.knockedUntil = Math.max(player.knockedUntil, now + options.knockdownMs);
+    if (options.stun) {
+      this.addPlayerStun(player, options.stun, direction, options.knockdownMs);
+    } else if (options.forceKnockdown && options.knockdownMs) {
+      this.knockPlayerDown(player, direction, options.knockdownMs);
     }
 
-    this.cameras.main.shake(60, 0.0035);
-    this.flashDamage(player);
+    if (!options.quietImpact) {
+      this.cameras.main.shake(60, 0.0035);
+      this.flashDamage(player);
+    }
 
     if (player.health <= 0) {
       this.scoreKill(this.getOpponent(player), player, options.source ?? 'KO');
     }
+  }
+
+  addPlayerStun(player, amount, direction, knockdownMs = this.configData.melee.dashKnockdownMs) {
+    const threshold = this.configData.melee.stunThreshold ?? 100;
+    player.stun = Math.min(threshold, Math.max(0, player.stun ?? 0) + amount);
+    player.stunLastHitAt = this.time.now;
+    if (player.stun >= threshold) {
+      this.knockPlayerDown(player, direction, knockdownMs);
+      player.stun = 0;
+    }
+  }
+
+  knockPlayerDown(player, direction, knockdownMs) {
+    player.knockedUntil = Math.max(player.knockedUntil, this.time.now + knockdownMs);
+    player.facing = direction >= 0 ? 1 : -1;
+    player.sprite.setFlipX(player.facing < 0);
+    player.aiming = false;
+    this.endShootStance(player);
   }
 
   scoreKill(winner, loser, source) {
@@ -6474,6 +6539,8 @@ class FightScene extends Phaser.Scene {
     player.jumpLandUntil = 0;
     player.wasGrounded = true;
     player.knockedUntil = 0;
+    player.stun = 0;
+    player.stunLastHitAt = 0;
     player.dashAttackUntil = 0;
     player.dashDirection = 0;
     player.dashHitTargets.clear();
@@ -6514,11 +6581,14 @@ class FightScene extends Phaser.Scene {
     player.aiming = false;
     player.aimMode = null;
     player.aimFacing = player.facing >= 0 ? 1 : -1;
+    player.aimInputDirection = player.aimFacing;
     player.aimOffset = 0;
     player.aimAngle = this.getAimAngle(player.aimFacing, player.aimOffset);
     player.crouching = false;
     player.crouchTransitionUntil = 0;
     player.standTransitionUntil = 0;
+    player.sprite.setAngle(0);
+    player.sprite.clearTint();
     this.clearLadderState(player);
     player.sprite.body.setAllowGravity(true);
     player.invulnerableUntil = this.time.now + this.configData.round.respawnInvulnerabilityMs;
@@ -7423,7 +7493,16 @@ class FightScene extends Phaser.Scene {
     this.ui.lineStyle(2, player.darkColor, 1);
     this.ui.strokeRect(x, y, width, 12);
 
-    const lifeY = y + 18;
+    const stunThreshold = this.configData.melee.stunThreshold ?? 100;
+    const stunPct = Phaser.Math.Clamp((player.stun ?? 0) / Math.max(1, stunThreshold), 0, 1);
+    const stunWidth = Math.round(width * stunPct);
+    const stunX = alignRight ? x + width - stunWidth : x;
+    this.ui.fillStyle(0xffffff, 0.12);
+    this.ui.fillRect(x, y + 15, width, 4);
+    this.ui.fillStyle(0xffd166, 0.95);
+    this.ui.fillRect(stunX, y + 15, stunWidth, 4);
+
+    const lifeY = y + 24;
     for (let i = 0; i < this.configData.round.lives; i += 1) {
       const boxX = alignRight ? x + width - portraitSize - inventoryGap - 8 - i * 14 : x + portraitSize + inventoryGap + i * 14;
       this.ui.fillStyle(i < player.lives ? player.color : 0x2d3748, 1);

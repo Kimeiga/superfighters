@@ -655,10 +655,14 @@ export const DEFAULT_GAMEPLAY_CONFIG = {
     cooldownMs: 120,
     hitboxWidth: 58,
     hitboxHeight: 42,
+    stunThreshold: 100,
+    stunRecoverPerSecond: 18,
+    knockdownStun: 115,
+    jumpStun: 48,
     hits: [
-      { damage: 8, knockbackX: 155, knockbackY: 115 },
-      { damage: 10, knockbackX: 205, knockbackY: 145 },
-      { damage: 15, knockbackX: 285, knockbackY: 230 },
+      { damage: 8, knockbackX: 155, knockbackY: 115, stun: 20 },
+      { damage: 10, knockbackX: 205, knockbackY: 145, stun: 27 },
+      { damage: 15, knockbackX: 285, knockbackY: 230, stun: 42 },
     ],
     dashDamage: 18,
     dashKnockbackX: 420,
@@ -672,11 +676,12 @@ export const DEFAULT_GAMEPLAY_CONFIG = {
   grenades: {
     startCount: 3,
     maxCount: 3,
-    throwSpeed: 680,
-    throwLift: 140,
+    throwSpeed: 860,
+    throwLift: 185,
     fuseMs: 2500,
     bounce: 0.5,
-    dragX: 170,
+    airDragX: 0,
+    dragX: 420,
     radius: 154,
     damage: 28,
     selfDamage: 12,
@@ -773,10 +778,19 @@ function migrateSavedGameplayConfig(saved) {
   if (migrated.grenades?.throwSpeed === 510) {
     migrated.grenades.throwSpeed = DEFAULT_GAMEPLAY_CONFIG.grenades.throwSpeed;
   }
+  if (migrated.grenades?.throwSpeed === 680) {
+    migrated.grenades.throwSpeed = DEFAULT_GAMEPLAY_CONFIG.grenades.throwSpeed;
+  }
+  if (migrated.grenades?.throwLift === 140) {
+    migrated.grenades.throwLift = DEFAULT_GAMEPLAY_CONFIG.grenades.throwLift;
+  }
   if (migrated.grenades?.fuseMs === 1700) {
     migrated.grenades.fuseMs = DEFAULT_GAMEPLAY_CONFIG.grenades.fuseMs;
   }
   if (migrated.grenades?.dragX === 900) {
+    migrated.grenades.dragX = DEFAULT_GAMEPLAY_CONFIG.grenades.dragX;
+  }
+  if (migrated.grenades?.dragX === 170) {
     migrated.grenades.dragX = DEFAULT_GAMEPLAY_CONFIG.grenades.dragX;
   }
   if (migrated.grenades?.radius === 116) {

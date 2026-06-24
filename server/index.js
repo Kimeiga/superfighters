@@ -473,6 +473,8 @@ function sanitizeSnapshot(snapshot) {
     aimMode: snapshot.aimMode === 'gun' || snapshot.aimMode === 'grenade' ? snapshot.aimMode : null,
     crouching: Boolean(snapshot.crouching),
     climbing: Boolean(snapshot.climbing),
+    stun: safeNumber(snapshot.stun),
+    knockedMs: Math.max(0, safeNumber(snapshot.knockedMs)),
     weapon: snapshot.weapon?.id ? {
       id: String(snapshot.weapon.id),
       ammo: safeNumber(snapshot.weapon.ammo),
