@@ -1,6 +1,5 @@
 import {
   ANIMATION_ORDER,
-  DEFAULT_EMPRESS_ARM_OVERLAY_CONFIG,
   DEFAULT_EMPRESS_ANIMATION_CONFIG,
   DEFAULT_ANIMATION_CONFIG,
   getAnimationConfig,
@@ -34,18 +33,18 @@ const DEFAULT_CHARACTER_GUN_HANDS = {
   63: { x: 42, y: 66 },
   64: { x: 42, y: 66 },
   68: { x: 42, y: 67 },
-  69: { x: 42, y: 52 },
-  70: { x: 39, y: 50 },
+  69: { x: 40, y: 60 },
+  70: { x: 41, y: 57 },
   133: { x: 41, y: 57 },
-  134: { x: 41, y: 57 },
-  135: { x: 41, y: 57 },
-  136: { x: 41, y: 57 },
-  137: { x: 41, y: 57 },
-  138: { x: 41, y: 57 },
-  139: { x: 41, y: 57 },
-  140: { x: 41, y: 57 },
-  141: { x: 41, y: 57 },
-  142: { x: 41, y: 57 },
+  134: { x: 42, y: 51 },
+  135: { x: 42, y: 51 },
+  136: { x: 42, y: 51 },
+  137: { x: 42, y: 51 },
+  138: { x: 42, y: 51 },
+  139: { x: 42, y: 51 },
+  140: { x: 42, y: 51 },
+  141: { x: 42, y: 51 },
+  142: { x: 42, y: 51 },
   143: { x: 41, y: 57 },
 };
 const DEFAULT_ATTACHMENT_CONFIG = {
@@ -54,7 +53,7 @@ const DEFAULT_ATTACHMENT_CONFIG = {
   gunGrip: { x: 18, y: 35 },
   gunFrame: 30,
   previewShowGun: true,
-  previewCleanView: false,
+  previewCleanView: true,
   playtestHasGun: true,
 };
 const CHARACTER_PALETTE_COUNT = 32;
@@ -89,6 +88,25 @@ const GUN_ATTACHMENT_ANIMATIONS = new Set([
   'jumpAimUp',
   'jumpAimDown',
   'ladderGunDraw',
+  'ladderGunHold',
+  'ladderGun',
+]);
+const GUN_ARM_OVERLAY_ANIMATIONS = new Set([
+  'idleAimStraight',
+  'idleAimUp',
+  'aim',
+  'runGun',
+  'crouchDownGun',
+  'crouch',
+  'standUpGun',
+  'jumpPrepGun',
+  'jumpGunUp',
+  'jumpGunPeak',
+  'jumpGunDown',
+  'jumpGunLand',
+  'jumpAimStraight',
+  'jumpAimUp',
+  'jumpAimDown',
   'ladderGunHold',
   'ladderGun',
 ]);
@@ -391,6 +409,11 @@ previewFrameInput.addEventListener('input', () => {
 });
 
 attachmentModeInput.addEventListener('change', () => {
+  if (attachmentModeInput.value === 'characterHand' && !attachmentConfig.previewCleanView) {
+    attachmentConfig.previewCleanView = true;
+    previewCleanInput.checked = true;
+    saveAttachmentConfig();
+  }
   syncAttachmentControls(lastPreviewFrame ?? getPreviewFrame(performance.now()));
   drawPreview(lastPreviewFrame ?? getPreviewFrame(performance.now()));
 });
@@ -2350,15 +2373,15 @@ function drawPreview(frame) {
   lastPreviewGunBox = null;
   const cleanView = Boolean(attachmentConfig.previewCleanView);
   if (activeSheet.id === 'handguns') {
-    if (!cleanView) {
+    if (!cleanView && attachmentModeInput.value !== 'gunGrip') {
       drawGunGripGizmo(x, y, scale);
     }
   } else {
     if (attachmentConfig.previewShowGun) {
       drawAttachedGun(previewCtx, x, y, scale, 1, frame, selectedAnimation, true, { force: true });
-      drawSyncedArmOverlay(previewCtx, x, y, scale, 1, selectedAnimation, frames, frame);
+      drawSyncedArmOverlay(previewCtx, x, y, scale, 1, selectedAnimation, frame, { force: true });
     }
-    if (!cleanView) {
+    if (!cleanView && attachmentModeInput.value !== 'characterHand') {
       drawCharacterHandGizmo(frame, x, y, scale);
     }
   }
@@ -2367,11 +2390,27 @@ function drawPreview(frame) {
     drawColliderOverlay(x, y);
     drawFrameAnchor(frame, x, y, scale);
   }
+  if (!cleanView) {
+    drawActiveAttachmentGizmo(frame, x, y, scale);
+  }
   updateAnchorInputs(frame);
   if (!isEditingAttachmentField()) {
     syncAttachmentControls(frame);
   }
   updateColliderMeta();
+}
+
+function drawActiveAttachmentGizmo(frame, frameX, frameY, scale) {
+  const mode = attachmentModeInput.value;
+  if (activeSheet.id === 'handguns' || mode === 'gunGrip') {
+    drawGunGripGizmo(frameX, frameY, scale, true);
+    return;
+  }
+  if (mode === 'characterHand') {
+    drawCharacterHandGizmo(frame, frameX, frameY, scale, true);
+    return;
+  }
+  drawFrameAnchor(frame, frameX, frameY, scale, true);
 }
 
 function drawAttachedGun(context, frameX, frameY, scale, facing, frame, animationName, recordPreviewBox = false, options = {}) {
@@ -2408,19 +2447,15 @@ function drawAttachedGun(context, frameX, frameY, scale, facing, frame, animatio
   }
 }
 
-function drawSyncedArmOverlay(context, frameX, frameY, scale, facing, animationName, bodyFrames, bodyFrame) {
-  const armSetting = getArmOverlaySetting(animationName);
-  if (!armSetting) {
+function drawSyncedArmOverlay(context, frameX, frameY, scale, facing, animationName, bodyFrame, options = {}) {
+  if (!shouldRenderArmOverlay(animationName, options)) {
     return;
   }
 
-  const armFrames = makeFrameList1Based(armSetting, frameCount || 1);
-  if (!armFrames.length) {
+  const armFrame = getGunArmOverlayFrame(bodyFrame);
+  if (!armFrame) {
     return;
   }
-
-  const bodyIndex = Math.max(0, bodyFrames.indexOf(bodyFrame));
-  const armFrame = armFrames[bodyIndex % armFrames.length] ?? armFrames[0];
   drawFrameBitmap(context, getFrameBitmap(armFrame), frameX, frameY, scale, facing);
 }
 
@@ -2445,7 +2480,7 @@ function drawFrameBitmap(context, bitmap, frameX, frameY, scale, facing) {
   context.restore();
 }
 
-function drawCharacterHandGizmo(frame, frameX, frameY, scale) {
+function drawCharacterHandGizmo(frame, frameX, frameY, scale, active = false) {
   const hand = getCharacterHandPoint(frame);
   drawPointGizmo(
     previewCtx,
@@ -2453,32 +2488,56 @@ function drawCharacterHandGizmo(frame, frameX, frameY, scale) {
     frameY + hand.y * scale,
     '#ffef6e',
     `H${frame}`,
+    active,
   );
 }
 
-function drawGunGripGizmo(frameX, frameY, scale) {
+function drawGunGripGizmo(frameX, frameY, scale, active = false) {
   drawPointGizmo(
     previewCtx,
     frameX + attachmentConfig.gunGrip.x * scale,
     frameY + attachmentConfig.gunGrip.y * scale,
     '#ff6cda',
     'G',
+    active,
   );
 }
 
-function drawPointGizmo(context, x, y, color, label) {
+function drawPointGizmo(context, x, y, color, label, active = false) {
+  const cx = Math.round(x);
+  const cy = Math.round(y);
+  const arm = active ? 13 : 8;
+  const radius = active ? 5 : 3;
   context.save();
-  context.strokeStyle = color;
-  context.fillStyle = color;
-  context.lineWidth = 2;
+  context.lineCap = 'square';
+  context.lineJoin = 'miter';
+  context.strokeStyle = '#05070d';
+  context.lineWidth = active ? 6 : 4;
   context.beginPath();
-  context.moveTo(Math.round(x) - 8, Math.round(y));
-  context.lineTo(Math.round(x) + 8, Math.round(y));
-  context.moveTo(Math.round(x), Math.round(y) - 8);
-  context.lineTo(Math.round(x), Math.round(y) + 8);
+  context.moveTo(cx - arm, cy);
+  context.lineTo(cx + arm, cy);
+  context.moveTo(cx, cy - arm);
+  context.lineTo(cx, cy + arm);
   context.stroke();
+  context.strokeStyle = color;
+  context.lineWidth = active ? 3 : 2;
+  context.stroke();
+  context.fillStyle = '#05070d';
+  context.beginPath();
+  context.arc(cx, cy, radius + 2, 0, Math.PI * 2);
+  context.fill();
+  context.fillStyle = color;
+  context.beginPath();
+  context.arc(cx, cy, radius, 0, Math.PI * 2);
+  context.fill();
   context.font = '10px FusionPixel12, monospace';
-  context.fillText(label, Math.round(x) + 6, Math.round(y) - 10);
+  const labelX = cx + 8;
+  const labelY = cy - 12;
+  const textWidth = Math.ceil(context.measureText(label).width);
+  context.fillStyle = 'rgba(5, 7, 13, 0.86)';
+  context.fillRect(labelX - 2, labelY - 9, textWidth + 4, 12);
+  context.fillStyle = color;
+  context.fillText(label, labelX, labelY);
   context.restore();
 }
 
@@ -2490,7 +2549,7 @@ function drawPreviewFrameBox(x, y, size) {
   previewCtx.restore();
 }
 
-function drawFrameAnchor(frame, frameX, frameY, scale) {
+function drawFrameAnchor(frame, frameX, frameY, scale, active = false) {
   const anchor = frameAnchors[String(frame)];
   if (!anchor) {
     return;
@@ -2498,18 +2557,35 @@ function drawFrameAnchor(frame, frameX, frameY, scale) {
 
   const x = Math.round(frameX + anchor.x * scale);
   const y = Math.round(frameY + anchor.y * scale);
+  const arm = active ? 12 : 7;
+  const radius = active ? 5 : 3;
   previewCtx.save();
+  previewCtx.lineCap = 'square';
+  previewCtx.lineJoin = 'miter';
+  previewCtx.strokeStyle = '#05070d';
+  previewCtx.lineWidth = active ? 6 : 4;
+  previewCtx.beginPath();
+  previewCtx.moveTo(x - arm, y);
+  previewCtx.lineTo(x + arm, y);
+  previewCtx.moveTo(x, y - arm);
+  previewCtx.lineTo(x, y + arm);
+  previewCtx.stroke();
   previewCtx.strokeStyle = '#ff6cda';
   previewCtx.fillStyle = '#ff6cda';
-  previewCtx.lineWidth = 2;
+  previewCtx.lineWidth = active ? 3 : 2;
   previewCtx.beginPath();
-  previewCtx.moveTo(x - 7, y);
-  previewCtx.lineTo(x + 7, y);
-  previewCtx.moveTo(x, y - 7);
-  previewCtx.lineTo(x, y + 7);
+  previewCtx.moveTo(x - arm, y);
+  previewCtx.lineTo(x + arm, y);
+  previewCtx.moveTo(x, y - arm);
+  previewCtx.lineTo(x, y + arm);
   previewCtx.stroke();
+  previewCtx.fillStyle = '#05070d';
   previewCtx.beginPath();
-  previewCtx.arc(x, y, 3, 0, Math.PI * 2);
+  previewCtx.arc(x, y, radius + 2, 0, Math.PI * 2);
+  previewCtx.fill();
+  previewCtx.fillStyle = '#ff6cda';
+  previewCtx.beginPath();
+  previewCtx.arc(x, y, radius, 0, Math.PI * 2);
   previewCtx.fill();
   previewCtx.restore();
 }
@@ -2623,15 +2699,46 @@ function shouldRenderGunForAnimation(animationName) {
   return attachmentConfig.playtestHasGun && GUN_ATTACHMENT_ANIMATIONS.has(animationName);
 }
 
-function shouldRenderArmOverlay(animationName) {
-  return Boolean(getArmOverlaySetting(animationName));
+function shouldRenderArmOverlay(animationName, options = {}) {
+  return (
+    (options.force || attachmentConfig.playtestHasGun) &&
+    activeSheet.id === 'empress' &&
+    (options.force || GUN_ARM_OVERLAY_ANIMATIONS.has(animationName))
+  );
 }
 
-function getArmOverlaySetting(animationName) {
-  if (!attachmentConfig.playtestHasGun || activeSheet.id !== 'empress') {
-    return null;
+function getGunArmOverlayFrame(bodyFrame) {
+  if (bodyFrame >= 29 && bodyFrame <= 32) {
+    return bodyFrame + 8;
   }
-  return DEFAULT_EMPRESS_ARM_OVERLAY_CONFIG[animationName] ?? null;
+  if (bodyFrame >= 55 && bodyFrame <= 57) {
+    return bodyFrame + 16;
+  }
+  if (bodyFrame >= 58 && bodyFrame <= 60) {
+    return bodyFrame + 13;
+  }
+  if (bodyFrame >= 61 && bodyFrame <= 64) {
+    return 73;
+  }
+  if (bodyFrame >= 65 && bodyFrame <= 67) {
+    return bodyFrame + 13;
+  }
+  if (bodyFrame >= 68 && bodyFrame <= 70) {
+    return bodyFrame + 10;
+  }
+  if (bodyFrame >= 122 && bodyFrame <= 132) {
+    return bodyFrame + 22;
+  }
+  if (bodyFrame >= 106 && bodyFrame <= 113) {
+    return bodyFrame + 8;
+  }
+  if (bodyFrame >= 133 && bodyFrame <= 143) {
+    return bodyFrame + 11;
+  }
+  if (bodyFrame === 227) {
+    return 228;
+  }
+  return 37;
 }
 
 function hasRenderExtension(render) {
@@ -2788,7 +2895,7 @@ function drawPlaytest(now) {
   drawFrameBitmap(playtestCtx, bitmap, baseX, baseY, scale, playtest.facing);
   if (activeSheet.id !== 'handguns') {
     drawAttachedGun(playtestCtx, baseX, baseY, scale, playtest.facing, frame, animationName);
-    drawSyncedArmOverlay(playtestCtx, baseX, baseY, scale, playtest.facing, animationName, frames, frame);
+    drawSyncedArmOverlay(playtestCtx, baseX, baseY, scale, playtest.facing, animationName, frame);
     drawPlaytestShotFlash(now, baseX, baseY, scale, frame);
   }
 

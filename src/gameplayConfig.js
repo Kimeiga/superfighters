@@ -611,8 +611,8 @@ export const DEFAULT_GAMEPLAY_CONFIG = {
     respawnInvulnerabilityMs: 1400,
   },
   movement: {
-    walkSpeed: 225,
-    runSpeed: 225,
+    walkSpeed: 190,
+    runSpeed: 190,
     crouchSpeed: 0,
     aimSpeed: 78,
     jumpSpeed: 390,
@@ -621,7 +621,7 @@ export const DEFAULT_GAMEPLAY_CONFIG = {
     jumpReleaseVelocity: -260,
     fallGravityMultiplier: 1.08,
     climbSpeed: 155,
-    shootStanceMs: 650,
+    shootStanceMs: 320,
     dashTapMs: 260,
     runHoldMs: 900,
     dashAttackMs: 430,
@@ -758,11 +758,20 @@ function migrateSavedGameplayConfig(saved) {
   if (migrated.movement?.walkSpeed === 255) {
     migrated.movement.walkSpeed = DEFAULT_GAMEPLAY_CONFIG.movement.walkSpeed;
   }
+  if (migrated.movement?.walkSpeed === 225) {
+    migrated.movement.walkSpeed = DEFAULT_GAMEPLAY_CONFIG.movement.walkSpeed;
+  }
   if (migrated.movement?.runSpeed === 320) {
     migrated.movement.runSpeed = DEFAULT_GAMEPLAY_CONFIG.movement.runSpeed;
   }
   if (migrated.movement?.runSpeed === 255) {
     migrated.movement.runSpeed = DEFAULT_GAMEPLAY_CONFIG.movement.runSpeed;
+  }
+  if (migrated.movement?.runSpeed === 225) {
+    migrated.movement.runSpeed = DEFAULT_GAMEPLAY_CONFIG.movement.runSpeed;
+  }
+  if (migrated.movement?.shootStanceMs === 650) {
+    migrated.movement.shootStanceMs = DEFAULT_GAMEPLAY_CONFIG.movement.shootStanceMs;
   }
   if (migrated.movement?.jumpSpeed === 590) {
     migrated.movement.jumpSpeed = DEFAULT_GAMEPLAY_CONFIG.movement.jumpSpeed;

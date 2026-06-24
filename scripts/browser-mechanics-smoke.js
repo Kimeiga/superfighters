@@ -13,7 +13,13 @@ window.__superfightersMechanicsSmoke = (async () => {
     checks.push({ name, pass: Boolean(pass), details });
   };
   const baseAnimationKey = (key) => String(key ?? '').replace(/-(p1|p2)$/, '');
-  const empressFrameOf = (sprite) => Number((sprite?.texture?.key ?? '').match(/(?:empress-frame-|empress-skin-frame-(?:p1|p2)-)(\d+)$/)?.[1] ?? NaN);
+  const empressFrameOf = (sprite) => {
+    const atlasFrame = Number.parseInt(sprite?.frame?.name, 10);
+    if (Number.isFinite(atlasFrame)) {
+      return atlasFrame;
+    }
+    return Number((sprite?.texture?.key ?? '').match(/(?:empress-frame-|empress-skin-frame-(?:p1|p2)-)(\d+)$/)?.[1] ?? NaN);
+  };
 
   const clearGroup = (group) => {
     for (const child of [...group.getChildren()]) {
@@ -140,28 +146,17 @@ window.__superfightersMechanicsSmoke = (async () => {
     weaponIds.every((id) => scene.textures.exists(`weapon-${id}`)),
     { weaponIds },
   );
-  const paletteCells = scene.characterPaletteCells ?? [];
-  const paletteRuns = scene.characterPaletteColorRuns ?? [];
-  const paletteMaps = scene.characterPaletteMaps ?? [];
   check(
-    'character palettes use fixed mini-sprite boxes and 4px swatch maps',
-    paletteCells.length >= 16 &&
-      paletteCells[0]?.x === 1 &&
-      paletteCells[0]?.y === 2606 &&
-      paletteCells.every((cell) => (
-        cell.width === 37 &&
-        cell.height === 46 &&
-        cell.swatchY === cell.y + cell.height + 3 &&
-        cell.swatchSize === 4
-      )) &&
-      paletteRuns[0]?.length >= 6 &&
-      paletteRuns[1]?.length >= 6 &&
-      paletteMaps[1]?.size >= 6,
+    'character palettes load from prebuilt atlases',
+    scene.characterFrameCount === 419 &&
+      scene.textures.get(scene.getCharacterTextureKey(23, 'p1'))?.has('23') &&
+      scene.textures.get(scene.getCharacterTextureKey(419, 'p1'))?.has('419') &&
+      scene.textures.get(scene.getCharacterTextureKey(23, 'p2'))?.has('23'),
     {
-      cells: paletteCells.length,
-      firstCell: paletteCells[0],
-      runCounts: paletteRuns.slice(0, 4).map((runs) => runs.length),
-      mapSizes: paletteMaps.slice(0, 4).map((map) => map.size),
+      frameCount: scene.characterFrameCount,
+      p1Texture: scene.getCharacterTextureKey(23, 'p1'),
+      p2Texture: scene.getCharacterTextureKey(23, 'p2'),
+      textureCount: Object.keys(scene.textures.list ?? {}).length,
     },
   );
   const crateForMarkingCheck = scene.createLevelProp(520, 360, 30, 30, 'crate');
@@ -355,7 +350,7 @@ window.__superfightersMechanicsSmoke = (async () => {
     resetPlayer(p1, 700, 484, 1);
     p1.weapon = scene.makeWeaponState('pistol');
     p1.sprite.play(scene.getPlayerAnimationKey(p1, animationName), true);
-    p1.sprite.setTexture(scene.getCharacterTextureKey(bodyFrame, p1.textureSlot));
+    scene.setCharacterFrame(p1.sprite, bodyFrame, p1.textureSlot);
     scene.updateAimVisuals(p1);
     check(name, empressFrameOf(p1.sprite) === bodyFrame && empressFrameOf(p1.arm) === expectedArmFrame && p1.weaponSprite.visible && p1.arm.visible && p1.sprite.depth < p1.weaponSprite.depth && p1.weaponSprite.depth < p1.arm.depth, {
       bodyFrame: empressFrameOf(p1.sprite),
@@ -379,7 +374,7 @@ window.__superfightersMechanicsSmoke = (async () => {
   resetPlayer(p1, 700, 484, 1);
   p1.weapon = scene.makeWeaponState('pistol');
   p1.sprite.play(scene.getPlayerAnimationKey(p1, 'jumpGunUp'), true);
-  p1.sprite.setTexture(scene.getCharacterTextureKey(134, p1.textureSlot));
+  scene.setCharacterFrame(p1.sprite, 134, p1.textureSlot);
   scene.updateAimVisuals(p1);
   const ladderBefore = { armVisible: p1.arm.visible, weaponVisible: p1.weaponSprite.visible };
   scene.startLadderClimb(p1, fakeLadder, -1, scene.time.now + 55);
@@ -671,7 +666,7 @@ window.__superfightersMechanicsSmoke = (async () => {
 
   scene.addPlayerStun(p2, scene.configData.melee.stunThreshold, 1, scene.configData.melee.dashKnockdownMs);
   scene.updateKnockedPlayer(p2);
-  check('filled stun bar knocks down into a floor pose without sprite rotation', p2.knockedUntil > scene.time.now && p2.sprite.angle === 0 && p2.sprite.texture.key.endsWith('-358'), {
+  check('filled stun bar knocks down into a floor pose without sprite rotation', p2.knockedUntil > scene.time.now && p2.sprite.angle === 0 && empressFrameOf(p2.sprite) === 358, {
     stun: p2.stun,
     knockedUntil: p2.knockedUntil,
     angle: p2.sprite.angle,
@@ -980,7 +975,7 @@ window.__superfightersMechanicsSmoke = (async () => {
 
   resetPlayer(p1, 700, 484, 1);
   scene.applyRemoteSnapshot(p1, makeNetSnapshot(710, 484, { stun: 66, knockedMs: 600, facing: -1 }), { instant: true });
-  check('remote snapshots apply stun and knocked floor pose', p1.stun === 66 && p1.knockedUntil > scene.time.now && p1.sprite.angle === 0 && p1.sprite.texture.key.endsWith('-358'), {
+  check('remote snapshots apply stun and knocked floor pose', p1.stun === 66 && p1.knockedUntil > scene.time.now && p1.sprite.angle === 0 && empressFrameOf(p1.sprite) === 358, {
     stun: p1.stun,
     knockedUntil: p1.knockedUntil,
     angle: p1.sprite.angle,

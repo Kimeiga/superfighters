@@ -271,9 +271,9 @@ textarea {
 
 .boot-skins {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   margin: 2px 0 6px;
-  padding: 10px;
+  padding: 12px;
   border: 1px solid #344257;
   border-radius: 6px;
   background: rgba(8, 13, 22, 0.48);
@@ -281,58 +281,83 @@ textarea {
 
 .boot-skin-row {
   display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: 86px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 6px 12px;
   align-items: center;
 }
 
 .boot-skin-label {
   color: #dbe7ff;
-  font-size: 12px;
+  font-size: 13px;
   text-align: left;
 }
 
-.boot-skin-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+.boot-skin-selector {
+  display: grid;
+  grid-template-columns: 42px minmax(112px, 1fr) 42px 42px;
+  gap: 8px;
+  align-items: center;
   min-width: 0;
 }
 
-.skin-swatch {
-  position: relative;
-  width: 31px;
-  height: 42px;
-  min-height: 0 !important;
-  overflow: hidden;
-  padding: 0;
-  border: 1px solid #40516a;
-  border-radius: 5px;
-  background: #0f1724;
+.skin-preview-canvas {
+  display: block;
+  width: 112px;
+  height: 112px;
+  justify-self: center;
+  image-rendering: pixelated;
 }
 
-.skin-swatch:hover:not(:disabled),
-.skin-swatch.is-selected {
+.boot-skin-name {
+  grid-column: 2;
+  color: #8de7ff;
+  font-size: 11px;
+  text-align: center;
+}
+
+.boot-panel .skin-cycle,
+.boot-panel .skin-random {
+  width: 42px;
+  height: 42px;
+  min-height: 0 !important;
+  padding: 0;
+  border: 1px solid #40516a;
+  border-radius: 50%;
+  background: #172337;
+  color: #ffffff;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.boot-panel .skin-random {
+  font-size: 22px;
+}
+
+.boot-panel .skin-cycle:hover,
+.boot-panel .skin-random:hover {
   border-color: #ffd166;
   box-shadow: 0 0 0 2px rgba(255, 209, 102, 0.2);
 }
 
-.skin-swatch:disabled {
-  opacity: 0.28;
-  cursor: not-allowed;
+.boot-mode-panel {
+  display: grid;
+  gap: 12px;
 }
 
-.skin-swatch-preview {
-  position: absolute;
-  left: 2px;
-  top: 1px;
-  width: 37px;
-  height: 57px;
-  background-repeat: no-repeat;
-  background-position: var(--skin-x) var(--skin-y);
-  image-rendering: auto;
-  transform: scale(0.7);
-  transform-origin: top left;
+.boot-mode-panel[hidden] {
+  display: none;
+}
+
+.boot-mode-panel h2 {
+  margin: 2px 0 0;
+  font-size: clamp(20px, 6vw, 24px);
+}
+
+.boot-setup-actions {
+  display: grid;
+  grid-template-columns: 1fr 0.7fr;
+  gap: 10px;
 }
 
 .start-panel button,
@@ -490,6 +515,24 @@ textarea {
 
   .online-panel {
     padding: 18px;
+  }
+
+  .boot-skin-row {
+    grid-template-columns: 1fr;
+  }
+
+  .boot-skin-label,
+  .boot-skin-name {
+    grid-column: 1;
+    text-align: center;
+  }
+
+  .boot-skin-selector {
+    grid-template-columns: 42px minmax(104px, 1fr) 42px 42px;
+  }
+
+  .boot-setup-actions {
+    grid-template-columns: 1fr;
   }
 }
 

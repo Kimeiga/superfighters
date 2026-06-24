@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import geckos from '@geckos.io/client';
 import { ANIMATION_ORDER, DEFAULT_EMPRESS_ANIMATION_CONFIG, makeFrameList1Based } from './animationConfig.js';
+import { EMPRESS_ATLAS_MANIFEST } from './generated/empressAtlasManifest.js';
 import { DEFAULT_GAMEPLAY_CONFIG, getGameplayConfig } from './gameplayConfig.js';
 import { TILE_DEFS, TILE_INDEX, createCurrentArenaSeed, getDoorInstances, getDoorKey, getSavedLevel, mergeTilesToRects } from './levelData.js';
 import './styles.css';
@@ -67,7 +68,15 @@ const FIRE_DAMAGE = 4;
 const FIRE_DURATION_MS = 3600;
 const BARREL_BURN_MS = 950;
 const BARREL_FLAME_RADIUS = 46;
-const BARREL_EXPLOSION_RADIUS = 128;
+const BARREL_DIRECT_BLAST_RADIUS = 58;
+const BARREL_DIRECT_BLAST_DAMAGE = 24;
+const BARREL_FIRE_PARTICLE_COUNT = 22;
+const PROP_HEALTH = {
+  crate: 70,
+  swingingCrate: 70,
+  barrel: 40,
+  smallExplosive: 20,
+};
 const MELEE_COMBO_ANIMATIONS = {
   melee: [
     { key: 'girl-melee-1', frames: [45, 46, 47, 48], fps: 18, activeDelayMs: 82 },
@@ -140,18 +149,18 @@ const CHARACTER_HAND_POINTS = {
   63: { x: 42, y: 66 },
   64: { x: 42, y: 66 },
   68: { x: 42, y: 67 },
-  69: { x: 42, y: 52 },
-  70: { x: 39, y: 50 },
+  69: { x: 40, y: 60 },
+  70: { x: 41, y: 57 },
   133: { x: 41, y: 57 },
-  134: { x: 41, y: 57 },
-  135: { x: 41, y: 57 },
-  136: { x: 41, y: 57 },
-  137: { x: 41, y: 57 },
-  138: { x: 41, y: 57 },
-  139: { x: 41, y: 57 },
-  140: { x: 41, y: 57 },
-  141: { x: 41, y: 57 },
-  142: { x: 41, y: 57 },
+  134: { x: 42, y: 51 },
+  135: { x: 42, y: 51 },
+  136: { x: 42, y: 51 },
+  137: { x: 42, y: 51 },
+  138: { x: 42, y: 51 },
+  139: { x: 42, y: 51 },
+  140: { x: 42, y: 51 },
+  141: { x: 42, y: 51 },
+  142: { x: 42, y: 51 },
   143: { x: 41, y: 57 },
 };
 const DEFAULT_GUN_GRIP_POINT = { x: 18, y: 35 };
@@ -231,8 +240,11 @@ class FightScene extends Phaser.Scene {
   }
 
   preload() {
+    this.bootOptions = pendingBootOptions ?? {};
+    this.playerSkinIndices = getBootPlayerSkins(this.bootOptions);
     this.load.image(CHARACTER_SOURCE_KEY, assetUrl('assets/empress.png'));
     this.load.image(HANDGUN_SOURCE_KEY, assetUrl('assets/handgun.png'));
+    this.loadCharacterAtlases(this.playerSkinIndices);
   }
 
   create() {
@@ -249,7 +261,7 @@ class FightScene extends Phaser.Scene {
     this.swingingCrates = [];
     this.clouds = [];
     this.levelSpawns = null;
-    this.bootOptions = pendingBootOptions ?? {};
+    this.bootOptions = pendingBootOptions ?? this.bootOptions ?? {};
     this.playerSkinIndices = getBootPlayerSkins(this.bootOptions);
     this.editorLevel = this.bootOptions?.editorLevel ? getSavedLevel() ?? createCurrentArenaSeed() : null;
     this.worldWidth = WORLD_WIDTH;
@@ -589,45 +601,30 @@ class FightScene extends Phaser.Scene {
 
   createCharacterTextures() {
     const sourceImage = this.textures.get(CHARACTER_SOURCE_KEY).getSourceImage();
-    const geometry = detectSheetFrameGeometry(sourceImage, CHARACTER_SHEET, {
-      includeExtensions: true,
-    });
-    const pixels = getImagePixels(sourceImage);
-    const paletteCells = detectCharacterPaletteCells(sourceImage, CHARACTER_SHEET, pixels);
-    const paletteMaps = buildCharacterPaletteMaps(CHARACTER_SHEET, pixels, paletteCells);
-    const paletteColorRuns = paletteCells.map((cell) => extractPaletteColorRuns(CHARACTER_SHEET, pixels, cell));
-    const p1Skin = clampSkinIndex(this.playerSkinIndices?.p1, paletteMaps.length);
-    const p2Skin = clampSkinIndex(this.playerSkinIndices?.p2, paletteMaps.length, p1Skin);
+    const allowSameSkins = Boolean(this.bootOptions?.allowSameSkins);
+    const p1Skin = clampSkinIndex(this.playerSkinIndices?.p1, EMPRESS_ATLAS_MANIFEST.skinCount);
+    const p2Skin = clampSkinIndex(this.playerSkinIndices?.p2, EMPRESS_ATLAS_MANIFEST.skinCount, allowSameSkins ? null : p1Skin);
     this.playerSkinIndices = { p1: p1Skin, p2: p2Skin };
-    this.characterPaletteCells = paletteCells;
-    this.characterPaletteMaps = paletteMaps;
-    this.characterPaletteColorRuns = paletteColorRuns;
 
-    this.characterFrames = geometry.frameCells;
-    this.characterFrameCount = geometry.frameCells.length;
-    const textureSets = [
-      { slot: 'base', paletteMap: null },
-      { slot: 'p1', paletteMap: paletteMaps[p1Skin] ?? null },
-      { slot: 'p2', paletteMap: paletteMaps[p2Skin] ?? null },
-    ];
-    for (const textureSet of textureSets) {
-      for (let index = 0; index < geometry.frameCells.length; index += 1) {
-        const key = this.getCharacterTextureKey(index + 1, textureSet.slot);
-        if (this.textures.exists(key)) {
-          this.textures.remove(key);
-        }
-        this.textures.addCanvas(
-          key,
-          makeFrameCanvas(sourceImage, CHARACTER_SHEET, geometry.frameCells[index], {
-            fixedCanvas: true,
-            paletteMap: textureSet.paletteMap,
-          }),
-        );
-        this.setPixelTextureFilter(key);
-      }
+    this.characterFrames = null;
+    this.characterFrameCount = EMPRESS_ATLAS_MANIFEST.frameCount;
+    this.setPixelTextureFilter(this.getCharacterTextureKey(1, 'p1'));
+    this.setPixelTextureFilter(this.getCharacterTextureKey(1, 'p2'));
+    this.createSkinPreviewTexture('p1', sourceImage, CHARACTER_PALETTE_PREVIEW_CELLS[p1Skin]);
+    this.createSkinPreviewTexture('p2', sourceImage, CHARACTER_PALETTE_PREVIEW_CELLS[p2Skin]);
+  }
+
+  loadCharacterAtlases(skinSelection = {}) {
+    const normalized = normalizeSkinSelection({
+      p1: skinSelection.p1,
+      p2: skinSelection.p2,
+    }, {
+      allowSame: Boolean(this.bootOptions?.allowSameSkins),
+    });
+    for (const slot of ['p1', 'p2']) {
+      const skin = EMPRESS_ATLAS_MANIFEST.skins[normalized[slot]] ?? EMPRESS_ATLAS_MANIFEST.skins[0];
+      this.load.atlas(this.getCharacterTextureKey(1, slot), assetUrl(skin.image), assetUrl(skin.json));
     }
-    this.createSkinPreviewTexture('p1', sourceImage, paletteCells[p1Skin]);
-    this.createSkinPreviewTexture('p2', sourceImage, paletteCells[p2Skin]);
   }
 
   createSkinPreviewTexture(slot, sourceImage, paletteCell) {
@@ -644,10 +641,20 @@ class FightScene extends Phaser.Scene {
   }
 
   getCharacterTextureKey(frame, slot = 'base') {
-    if (slot === 'p1' || slot === 'p2') {
-      return `${CHARACTER_SKIN_TEXTURE_PREFIX}-${slot}-${frame}`;
-    }
-    return `${CHARACTER_TEXTURE_PREFIX}-${frame}`;
+    const textureSlot = slot === 'p2' ? 'p2' : 'p1';
+    return `${CHARACTER_SKIN_TEXTURE_PREFIX}-${textureSlot}`;
+  }
+
+  getCharacterFrameRef(frame, slot = 'p1') {
+    return {
+      key: this.getCharacterTextureKey(frame, slot),
+      frame: String(frame),
+    };
+  }
+
+  setCharacterFrame(sprite, frame, slot = 'p1') {
+    const frameRef = this.getCharacterFrameRef(frame, slot);
+    sprite.setTexture(frameRef.key, frameRef.frame);
   }
 
   generateArmTexture() {
@@ -854,7 +861,7 @@ class FightScene extends Phaser.Scene {
       pickup: 'girl-pickup',
     };
 
-    for (const slot of ['base', 'p1', 'p2']) {
+    for (const slot of ['p1', 'p2']) {
       for (const name of ANIMATION_ORDER) {
         if (!animationKeys[name]) {
           continue;
@@ -866,9 +873,7 @@ class FightScene extends Phaser.Scene {
         }
         this.anims.create({
           key: animationKey,
-          frames: makeFrameList1Based(setting, frameCount).map((frame) => ({
-            key: this.getCharacterTextureKey(frame, slot),
-          })),
+          frames: makeFrameList1Based(setting, frameCount).map((frame) => this.getCharacterFrameRef(frame, slot)),
           frameRate: setting.fps,
           repeat: setting.repeat ? -1 : 0,
         });
@@ -882,9 +887,7 @@ class FightScene extends Phaser.Scene {
           }
           this.anims.create({
             key: animationKey,
-            frames: combo.frames.map((frame) => ({
-              key: this.getCharacterTextureKey(frame, slot),
-            })),
+            frames: combo.frames.map((frame) => this.getCharacterFrameRef(frame, slot)),
             frameRate: combo.fps,
             repeat: 0,
           });
@@ -1296,9 +1299,9 @@ class FightScene extends Phaser.Scene {
     prop.setData('propType', type);
     prop.setData('dynamicProp', isPushableProp);
     prop.setData('destructible', true);
-    prop.setData('health', type === 'crate' || type === 'swingingCrate' ? 24 : 10);
-    prop.setData('explosiveRadius', type === 'barrel' ? BARREL_EXPLOSION_RADIUS : type === 'smallExplosive' ? 72 : 0);
-    prop.setData('explosiveDamage', type === 'barrel' ? 44 : type === 'smallExplosive' ? 26 : 0);
+    prop.setData('health', PROP_HEALTH[type] ?? 20);
+    prop.setData('explosiveRadius', type === 'barrel' ? BARREL_DIRECT_BLAST_RADIUS : type === 'smallExplosive' ? 72 : 0);
+    prop.setData('explosiveDamage', type === 'barrel' ? BARREL_DIRECT_BLAST_DAMAGE : type === 'smallExplosive' ? 26 : 0);
     prop.setData('levelGeometry', false);
     prop.setData('indestructible', false);
     prop.setData('visuals', visuals);
@@ -2194,8 +2197,9 @@ class FightScene extends Phaser.Scene {
   }
 
   createPlayer(config) {
+    const spawnFrame = this.getCharacterFrameRef(23, config.textureSlot);
     const sprite = this.physics.add
-      .sprite(config.spawnX, config.spawnY, this.getCharacterTextureKey(23, config.textureSlot))
+      .sprite(config.spawnX, config.spawnY, spawnFrame.key, spawnFrame.frame)
       .setScale(PLAYER_SCALE)
       .setDepth(10)
       .setOrigin(0.5)
@@ -2207,8 +2211,9 @@ class FightScene extends Phaser.Scene {
     sprite.play(this.getPlayerAnimationKey(config, 'idle'));
     sprite.setFlipX(config.facing < 0);
 
+    const armFrame = this.getCharacterFrameRef(37, config.textureSlot);
     const arm = this.add
-      .sprite(sprite.x, sprite.y, this.getCharacterTextureKey(37, config.textureSlot))
+      .sprite(sprite.x, sprite.y, armFrame.key, armFrame.frame)
       .setScale(PLAYER_SCALE)
       .setDepth(14)
       .setOrigin(0.5)
@@ -4514,13 +4519,25 @@ class FightScene extends Phaser.Scene {
     }
 
     if (this.isInShootStance(player, time)) {
-      this.updateCrouchState(player, grounded, downHeld, time);
       if (grounded) {
         player.sprite.setVelocityX(0);
       }
-      this.updateJumpPhysics(player, grounded, input, time);
+      this.updateAim(player, 0, vertical, delta);
+      const aimOnlyInput = {
+        ...input,
+        down: {
+          ...input.down,
+          jump: false,
+          crouch: false,
+        },
+        released: {
+          ...input.released,
+          jump: false,
+          crouch: false,
+        },
+      };
+      this.updateJumpPhysics(player, grounded, aimOnlyInput, time);
       this.applyBodyPose(player, grounded);
-      this.updateAimVisuals(player);
       this.updatePlayerAnimation(player, grounded, 0, time);
       return;
     }
@@ -4612,7 +4629,7 @@ class FightScene extends Phaser.Scene {
     this.applyBodyPose(player);
     player.sprite.stop();
     player.sprite.setAngle(0);
-    player.sprite.setTexture(this.getCharacterTextureKey(Math.min(358, this.animationFrameCount ?? 358), player.textureSlot));
+    this.setCharacterFrame(player.sprite, Math.min(358, this.animationFrameCount ?? 358), player.textureSlot);
     player.sprite.setFlipX(player.facing < 0);
     player.sprite.setVelocityX(player.sprite.body.velocity.x * 0.96);
   }
@@ -4635,7 +4652,7 @@ class FightScene extends Phaser.Scene {
       : this.findThinPlatformUnderPlayer(player);
     const targetSlope = targetPlatform
       ? null
-      : player.currentThinSlope ?? (player.currentSlope?.thin ? player.currentSlope : null);
+      : player.currentThinSlope ?? (player.currentSlope?.thin ? player.currentSlope : null) ?? this.findThinSlopeUnderPlayer(player);
     if (!targetPlatform && !targetSlope) {
       return false;
     }
@@ -4701,6 +4718,39 @@ class FightScene extends Phaser.Scene {
       const closeToTop = playerBottom >= platformBody.y - 2 && playerBottom <= platformBody.y + 16;
       if (overlapsX && closeToTop) {
         return platform;
+      }
+    }
+    return null;
+  }
+
+  findThinSlopeUnderPlayer(player) {
+    const body = player?.sprite?.body;
+    if (!body || !this.slopeTiles.length) {
+      return null;
+    }
+
+    const footY = body.y + body.height;
+    const tileSize = this.editorLevel?.tileSize ?? 24;
+    const tileY = Math.floor((footY + 3) / tileSize);
+    const sampleXs = this.getBodyFootSampleXs(body);
+
+    for (const sampleX of sampleXs) {
+      const tileX = Math.floor(sampleX / tileSize);
+      for (let y = tileY - 1; y <= tileY + 1; y += 1) {
+        for (let x = tileX - 1; x <= tileX + 1; x += 1) {
+          const slope = this.slopeTileMap.get(`${x},${y}`);
+          if (!slope || slope.side !== 'floor' || !slope.thin) {
+            continue;
+          }
+          if (sampleX < slope.x - 2 || sampleX > slope.x + slope.size + 2) {
+            continue;
+          }
+          const surfaceY = this.getSlopeSurfaceY(slope, sampleX);
+          const closeToTop = footY >= surfaceY - 4 && footY <= surfaceY + 18;
+          if (closeToTop) {
+            return slope;
+          }
+        }
       }
     }
     return null;
@@ -4824,7 +4874,8 @@ class FightScene extends Phaser.Scene {
   }
 
   getAnimationKeyForSlot(baseKey, slot = 'base') {
-    return slot === 'p1' || slot === 'p2' ? `${baseKey}-${slot}` : baseKey;
+    const textureSlot = slot === 'p2' ? 'p2' : 'p1';
+    return `${baseKey}-${textureSlot}`;
   }
 
   getBaseAnimationKey(animationKey) {
@@ -5170,15 +5221,18 @@ class FightScene extends Phaser.Scene {
     const heldGunVisible = Boolean(player.weapon) && (aimVisualActive || this.isGunCarryAnimation(player));
     const visualFacing = aimVisualActive ? player.aimFacing : player.facing;
     const visualAngle = aimVisualActive ? player.aimAngle : visualFacing > 0 ? 0 : Math.PI;
+    const localWeaponAngle = this.getAimOffsetFromAngle(visualAngle, visualFacing);
     const carryAnchor = this.getAimAnchor(player, visualAngle, visualFacing);
     const direction = new Phaser.Math.Vector2(Math.cos(visualAngle), Math.sin(visualAngle));
     const reticle = this.getAimReticlePosition(player, visualAngle);
     const armOverlayVisible = heldGunVisible && this.shouldShowGunArmOverlay(player, aimVisualActive);
 
     player.weaponSprite.setTexture(player.weapon ? `weapon-${player.weapon.id}` : 'weapon-pistol');
+    player.weaponSprite.setOrigin(this.getGunGripOriginX(visualFacing), DEFAULT_GUN_GRIP_POINT.y / HANDGUN_SHEET.frameSize);
     player.weaponSprite.setPosition(carryAnchor.x, carryAnchor.y);
-    player.weaponSprite.setRotation(visualAngle);
-    player.weaponSprite.setFlipY(visualFacing < 0);
+    player.weaponSprite.setRotation(localWeaponAngle);
+    player.weaponSprite.setFlipX(visualFacing < 0);
+    player.weaponSprite.setFlipY(false);
     player.weaponSprite.setVisible(heldGunVisible);
     this.updateGunArmOverlay(player, armOverlayVisible, visualFacing, visualAngle, aimVisualActive);
     player.crosshair.setPosition(reticle.x, reticle.y);
@@ -5205,6 +5259,11 @@ class FightScene extends Phaser.Scene {
 
   getLaserColor(player) {
     return player.id === 'p1' ? 0x53d7ff : 0xff5ec7;
+  }
+
+  getGunGripOriginX(facing) {
+    const gripX = DEFAULT_GUN_GRIP_POINT.x / HANDGUN_SHEET.frameSize;
+    return facing < 0 ? 1 - gripX : gripX;
   }
 
   shouldShowGunArmOverlay(player, aimVisualActive) {
@@ -5241,7 +5300,7 @@ class FightScene extends Phaser.Scene {
       return;
     }
 
-    const bodyFrame = getEmpressFrameNumber(player.sprite.texture.key);
+    const bodyFrame = getEmpressFrameNumber(player.sprite);
     const armFrame = getGunArmOverlayFrame(bodyFrame);
     const offset = this.getAimOffsetFromAngle(angle, facing);
     const rotation = aimVisualActive ? offset : 0;
@@ -5257,8 +5316,9 @@ class FightScene extends Phaser.Scene {
     const originY = Phaser.Math.Clamp((textureSize / 2 + relativePivotY) / textureSize, 0, 1);
 
     player.arm.stop();
+    const armFrameRef = this.getCharacterFrameRef(armFrame, player.textureSlot);
     player.arm
-      .setTexture(this.getCharacterTextureKey(armFrame, player.textureSlot))
+      .setTexture(armFrameRef.key, armFrameRef.frame)
       .setOrigin(originX, originY)
       .setPosition(pivot.x, pivot.y)
       .setScale(PLAYER_SCALE)
@@ -5312,7 +5372,7 @@ class FightScene extends Phaser.Scene {
 
   getAimAnchor(player, angle = player.aimAngle, facing = player.aimFacing || player.facing || (Math.cos(angle) >= 0 ? 1 : -1)) {
     const direction = facing >= 0 ? 1 : -1;
-    const hand = this.getCharacterHandPoint(player, direction);
+    const hand = this.getCharacterHandPoint(player);
     const handX = direction > 0
       ? hand.x
       : CHARACTER_SHEET.frameSize - hand.x;
@@ -5332,7 +5392,7 @@ class FightScene extends Phaser.Scene {
   }
 
   getCharacterHandPoint(player) {
-    const frame = getEmpressFrameNumber(player.sprite.texture.key);
+    const frame = getEmpressFrameNumber(player.sprite);
     return CHARACTER_HAND_POINTS[frame] ?? DEFAULT_CHARACTER_HAND_POINT;
   }
 
@@ -5441,7 +5501,7 @@ class FightScene extends Phaser.Scene {
   }
 
   pointInsideSolidWall(x, y) {
-    return this.platforms.some((platform) => {
+    const insideRectWall = this.platforms.some((platform) => {
       if (!platform?.active || platform.getData?.('thin')) {
         return false;
       }
@@ -5451,6 +5511,7 @@ class FightScene extends Phaser.Scene {
       }
       return x >= body.x && x <= body.x + body.width && y >= body.y && y <= body.y + body.height;
     });
+    return insideRectWall || this.pointInsideSolidSlope(x, y);
   }
 
   spawnBullet(player, weapon, angle, originX, originY) {
@@ -5539,6 +5600,12 @@ class FightScene extends Phaser.Scene {
         this.handleBulletWall(bullet, hit.object);
         return true;
       }
+
+      if (hit.kind === 'slope') {
+        bullet.setPosition(hit.x, hit.y);
+        this.handleBulletWall(bullet);
+        return true;
+      }
     }
 
     return false;
@@ -5581,6 +5648,16 @@ class FightScene extends Phaser.Scene {
       const hit = this.getSegmentRectEntry(segment, getBodyBounds(platform));
       if (hit) {
         hits.push({ ...hit, kind: 'wall', object: platform, priority: 2 });
+      }
+    }
+
+    for (const slope of this.slopeTiles) {
+      if (!slope || slope.thin) {
+        continue;
+      }
+      const hit = this.getSegmentSlopeEntry(segment, slope);
+      if (hit) {
+        hits.push({ ...hit, kind: 'slope', object: slope, priority: 2 });
       }
     }
 
@@ -5698,6 +5775,7 @@ class FightScene extends Phaser.Scene {
     grenade.setData('owner', player.id);
     grenade.setData('fuseEnd', time + remainingFuseMs);
     grenade.setData('timerText', this.createGrenadeTimerText(grenade));
+    this.storeGrenadePreviousBodyPosition(grenade);
 
     player.grenadeCookStartedAt = 0;
     this.clearGrenadeCookText(player);
@@ -5806,7 +5884,10 @@ class FightScene extends Phaser.Scene {
       if (grenade.y > this.worldHeight + 900) {
         timerText?.destroy?.();
         grenade.destroy();
+        continue;
       }
+
+      this.storeGrenadePreviousBodyPosition(grenade);
     }
   }
 
@@ -5816,17 +5897,31 @@ class FightScene extends Phaser.Scene {
       return false;
     }
 
+    const previousBodyX = this.getGrenadePreviousBodyX(grenade, body);
+    const previousBodyY = this.getGrenadePreviousBodyY(grenade, body);
     const footY = body.y + body.height;
+    const previousFootY = previousBodyY + body.height;
     const sampleXs = [
-      body.x + body.width * 0.25,
-      body.x + body.width * 0.5,
-      body.x + body.width * 0.75,
+      { previous: previousBodyX + body.width * 0.25, current: body.x + body.width * 0.25 },
+      { previous: previousBodyX + body.width * 0.5, current: body.x + body.width * 0.5 },
+      { previous: previousBodyX + body.width * 0.75, current: body.x + body.width * 0.75 },
     ];
     const tileSize = this.editorLevel?.tileSize ?? 24;
     const tileY = Math.floor((footY + 3) / tileSize);
-    let bestSurface = Infinity;
+    let bestContact = null;
 
-    for (const sampleX of sampleXs) {
+    const considerContact = (surfaceY, t = 1) => {
+      if (
+        !bestContact ||
+        t < bestContact.t ||
+        (Math.abs(t - bestContact.t) < 0.001 && surfaceY < bestContact.surfaceY)
+      ) {
+        bestContact = { surfaceY, t };
+      }
+    };
+
+    for (const sample of sampleXs) {
+      const sampleX = sample.current;
       const tileX = Math.floor(sampleX / tileSize);
       for (let y = tileY - 1; y <= tileY + 1; y += 1) {
         for (let x = tileX - 1; x <= tileX + 1; x += 1) {
@@ -5841,18 +5936,28 @@ class FightScene extends Phaser.Scene {
           const surfaceY = slope.type === 'up'
             ? slope.y + slope.size - localX
             : slope.y + localX;
-          if (footY >= surfaceY - 5 && footY <= surfaceY + Math.max(14, slope.size * 0.8) && surfaceY < bestSurface) {
-            bestSurface = surfaceY;
+          if (footY >= surfaceY - 5 && footY <= surfaceY + Math.max(14, slope.size * 0.8)) {
+            considerContact(surfaceY, 1);
           }
         }
       }
     }
 
-    if (!Number.isFinite(bestSurface)) {
+    const sweptContact = this.findGrenadeSweptSlopeContact(sampleXs, previousFootY, footY);
+    if (sweptContact) {
+      considerContact(sweptContact.surfaceY, sweptContact.t);
+    }
+
+    const solidSlopeContact = bestContact ? null : this.findGrenadeSweptSolidSlopeContact(sampleXs, previousFootY, footY);
+    if (solidSlopeContact) {
+      bestContact = { surfaceY: solidSlopeContact.y, t: solidSlopeContact.t };
+    }
+
+    if (!bestContact) {
       return false;
     }
 
-    this.setGrenadeBodyTop(grenade, bestSurface - body.height);
+    this.setGrenadeBodyTop(grenade, bestContact.surfaceY - body.height);
     if (body.velocity.y > 0) {
       body.setVelocityY(-Math.min(105, body.velocity.y * this.configData.grenades.bounce));
     }
@@ -5860,6 +5965,181 @@ class FightScene extends Phaser.Scene {
     body.blocked.down = true;
     body.updateCenter();
     return true;
+  }
+
+  findGrenadeSweptSlopeContact(sampleXs, previousFootY, footY) {
+    let bestContact = null;
+    for (const sample of sampleXs) {
+      const startX = sample.previous;
+      const startY = previousFootY;
+      const endX = sample.current;
+      const endY = footY;
+      const minX = Math.min(startX, endX) - 2;
+      const maxX = Math.max(startX, endX) + 2;
+      const minY = Math.min(startY, endY) - 2;
+      const maxY = Math.max(startY, endY) + 2;
+
+      for (const slope of this.slopeTiles) {
+        if (!slope || slope.side !== 'floor' || slope.thin) {
+          continue;
+        }
+        if (slope.x > maxX || slope.x + slope.size < minX || slope.y > maxY || slope.y + slope.size < minY) {
+          continue;
+        }
+
+        const line = this.getSlopeSurfaceLine(slope);
+        const segment = {
+          startX,
+          startY,
+          endX,
+          endY,
+          deltaX: endX - startX,
+          deltaY: endY - startY,
+        };
+        const diagonalHit = getSegmentSegmentEntry(startX, startY, endX, endY, line.x1, line.y1, line.x2, line.y2);
+        const hit = diagonalHit ?? this.getSegmentSlopeEntry(segment, slope);
+        if (!hit) {
+          continue;
+        }
+        const startSurfaceY = this.getSlopeSurfaceY(slope, startX);
+        const endSurfaceY = this.getSlopeSurfaceY(slope, endX);
+        if (diagonalHit && (startY > startSurfaceY + 8 || endY < endSurfaceY - 8)) {
+          continue;
+        }
+        if (!bestContact || hit.t < bestContact.t) {
+          bestContact = { t: hit.t, surfaceY: this.getSlopeSurfaceY(slope, hit.x) };
+        }
+      }
+    }
+    return bestContact;
+  }
+
+  findGrenadeSweptSolidSlopeContact(sampleXs, previousFootY, footY) {
+    let bestContact = null;
+    for (const sample of sampleXs) {
+      const segment = {
+        startX: sample.previous,
+        startY: previousFootY,
+        endX: sample.current,
+        endY: footY,
+        deltaX: sample.current - sample.previous,
+        deltaY: footY - previousFootY,
+      };
+      const minX = Math.min(segment.startX, segment.endX) - 2;
+      const maxX = Math.max(segment.startX, segment.endX) + 2;
+      const minY = Math.min(segment.startY, segment.endY) - 2;
+      const maxY = Math.max(segment.startY, segment.endY) + 2;
+
+      for (const slope of this.slopeTiles) {
+        if (!slope || slope.thin) {
+          continue;
+        }
+        if (slope.x > maxX || slope.x + slope.size < minX || slope.y > maxY || slope.y + slope.size < minY) {
+          continue;
+        }
+        const hit = this.getSegmentSlopeEntry(segment, slope);
+        if (hit && (!bestContact || hit.t < bestContact.t)) {
+          bestContact = hit;
+        }
+      }
+    }
+    return bestContact;
+  }
+
+  getSlopeSurfaceLine(slope) {
+    if (slope.type === 'up') {
+      return {
+        x1: slope.x,
+        y1: slope.y + slope.size,
+        x2: slope.x + slope.size,
+        y2: slope.y,
+      };
+    }
+    return {
+      x1: slope.x,
+      y1: slope.y,
+      x2: slope.x + slope.size,
+      y2: slope.y + slope.size,
+    };
+  }
+
+  getSlopeSurfaceY(slope, x) {
+    const localX = Phaser.Math.Clamp(x - slope.x, 0, slope.size);
+    return slope.type === 'up'
+      ? slope.y + slope.size - localX
+      : slope.y + localX;
+  }
+
+  getSlopeSolidTriangle(slope) {
+    const left = slope.x;
+    const top = slope.y;
+    const right = slope.x + slope.size;
+    const bottom = slope.y + slope.size;
+
+    if (slope.side === 'ceiling') {
+      return slope.type === 'up'
+        ? [{ x: left, y: top }, { x: right, y: top }, { x: left, y: bottom }]
+        : [{ x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }];
+    }
+
+    return slope.type === 'up'
+      ? [{ x: left, y: bottom }, { x: right, y: top }, { x: right, y: bottom }]
+      : [{ x: left, y: top }, { x: right, y: bottom }, { x: left, y: bottom }];
+  }
+
+  getSegmentSlopeEntry(segment, slope) {
+    if (!slope || slope.thin) {
+      return null;
+    }
+
+    const triangle = this.getSlopeSolidTriangle(slope);
+    if (pointInTriangle(segment.startX, segment.startY, triangle)) {
+      return { t: 0, x: segment.startX, y: segment.startY };
+    }
+
+    let bestHit = null;
+    for (let index = 0; index < triangle.length; index += 1) {
+      const a = triangle[index];
+      const b = triangle[(index + 1) % triangle.length];
+      const hit = getSegmentSegmentEntry(segment.startX, segment.startY, segment.endX, segment.endY, a.x, a.y, b.x, b.y);
+      if (hit && (!bestHit || hit.t < bestHit.t)) {
+        bestHit = hit;
+      }
+    }
+    return bestHit;
+  }
+
+  pointInsideSolidSlope(x, y) {
+    return this.slopeTiles.some((slope) => (
+      slope &&
+      !slope.thin &&
+      pointInTriangle(x, y, this.getSlopeSolidTriangle(slope))
+    ));
+  }
+
+  getGrenadePreviousBodyX(grenade, body) {
+    const stored = grenade.getData('previousBodyX');
+    if (Number.isFinite(stored)) {
+      return stored;
+    }
+    return body.prev?.x ?? body.x;
+  }
+
+  getGrenadePreviousBodyY(grenade, body) {
+    const stored = grenade.getData('previousBodyY');
+    if (Number.isFinite(stored)) {
+      return stored;
+    }
+    return body.prev?.y ?? body.y;
+  }
+
+  storeGrenadePreviousBodyPosition(grenade) {
+    const body = grenade?.body;
+    if (!body) {
+      return;
+    }
+    grenade.setData('previousBodyX', body.x);
+    grenade.setData('previousBodyY', body.y);
   }
 
   setGrenadeBodyTop(grenade, topY) {
@@ -7204,10 +7484,12 @@ class FightScene extends Phaser.Scene {
   }
 
   igniteBarrel(prop, ownerId = null) {
+    if (!prop?.active || prop.getData('ignited')) {
+      return;
+    }
     prop.setData('ignited', true);
     prop.setData('ignitedUntil', this.time.now + BARREL_BURN_MS);
     prop.setData('ignitedBy', ownerId);
-    prop.setData('health', 1);
     prop.setFillStyle(COLORS.fire, 1);
 
     const flame = this.add
@@ -7255,13 +7537,72 @@ class FightScene extends Phaser.Scene {
     if (!prop?.active) {
       return;
     }
-    const radius = prop.getData('explosiveRadius') ?? BARREL_EXPLOSION_RADIUS;
-    const explosiveDamage = prop.getData('explosiveDamage') ?? 44;
+    const radius = prop.getData('explosiveRadius') ?? BARREL_DIRECT_BLAST_RADIUS;
+    const explosiveDamage = prop.getData('explosiveDamage') ?? BARREL_DIRECT_BLAST_DAMAGE;
     const ownerId = prop.getData('ignitedBy');
     const explosionX = prop.x;
     const explosionY = prop.y;
     this.breakLevelProp(prop, explosionX, explosionY);
+    this.spawnBarrelFireBurst(explosionX, explosionY, ownerId);
     this.explodeAt(explosionX, explosionY, radius, explosiveDamage, ownerId, true);
+  }
+
+  spawnBarrelFireBurst(x, y, ownerId = null) {
+    for (let i = 0; i < BARREL_FIRE_PARTICLE_COUNT; i += 1) {
+      const angle = Phaser.Math.FloatBetween(Phaser.Math.DegToRad(-168), Phaser.Math.DegToRad(-12));
+      const distance = Phaser.Math.Between(68, 176);
+      const particle = this.add
+        .circle(x, y - Phaser.Math.Between(2, 14), Phaser.Math.Between(4, 8), COLORS.fire, 0.78)
+        .setDepth(21)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      const contactState = { hit: false };
+      this.tweens.add({
+        targets: particle,
+        x: x + Math.cos(angle) * distance,
+        y: y + Math.sin(angle) * distance + Phaser.Math.Between(-20, 28),
+        alpha: 0,
+        scale: Phaser.Math.FloatBetween(0.35, 0.72),
+        duration: Phaser.Math.Between(430, 720),
+        ease: 'Quad.easeOut',
+        onUpdate: () => this.handleFireParticleContact(particle, ownerId, contactState),
+        onComplete: () => particle.destroy(),
+      });
+    }
+  }
+
+  handleFireParticleContact(particle, ownerId = null, contactState = null) {
+    if (!particle?.active || contactState?.hit) {
+      return;
+    }
+
+    for (const player of this.players) {
+      if (!player.sprite?.active || this.time.now < player.rollUntil) {
+        continue;
+      }
+      const distance = Phaser.Math.Distance.Between(particle.x, particle.y, player.sprite.x, player.sprite.y - 14);
+      if (distance <= 20) {
+        this.ignitePlayer(player, ownerId, this.time.now);
+        if (contactState) {
+          contactState.hit = true;
+        }
+        particle.setAlpha(0.18);
+        return;
+      }
+    }
+
+    for (const prop of this.getLevelProps()) {
+      if (!prop?.active || prop.getData('propType') !== 'barrel' || prop.getData('ignited')) {
+        continue;
+      }
+      if (this.circleOverlapsObject(particle.x, particle.y, 7, prop)) {
+        this.igniteBarrel(prop, ownerId);
+        if (contactState) {
+          contactState.hit = true;
+        }
+        particle.setAlpha(0.18);
+        return;
+      }
+    }
   }
 
   ignitePlayer(player, ownerId = null, time = this.time.now) {
@@ -7313,6 +7654,11 @@ class FightScene extends Phaser.Scene {
 
   damageLevelProp(prop, damage, ownerId = null, impactX = prop.x, impactY = prop.y) {
     if (!prop.active || !prop.getData('destructible')) {
+      return;
+    }
+
+    if (prop.getData('ignited')) {
+      this.spawnHitEffect(impactX, impactY, COLORS.fire);
       return;
     }
 
@@ -8598,7 +8944,56 @@ function getBodyBounds(object) {
   return object.getBounds();
 }
 
-function getEmpressFrameNumber(textureKey) {
+function getSegmentSegmentEntry(startX, startY, endX, endY, lineStartX, lineStartY, lineEndX, lineEndY) {
+  const rayX = endX - startX;
+  const rayY = endY - startY;
+  const lineX = lineEndX - lineStartX;
+  const lineY = lineEndY - lineStartY;
+  const denominator = rayX * lineY - rayY * lineX;
+  if (Math.abs(denominator) < 0.0001) {
+    return null;
+  }
+
+  const offsetX = lineStartX - startX;
+  const offsetY = lineStartY - startY;
+  const t = (offsetX * lineY - offsetY * lineX) / denominator;
+  const u = (offsetX * rayY - offsetY * rayX) / denominator;
+  if (t < 0 || t > 1 || u < 0 || u > 1) {
+    return null;
+  }
+
+  return {
+    t,
+    x: startX + rayX * t,
+    y: startY + rayY * t,
+  };
+}
+
+function pointInTriangle(x, y, triangle) {
+  const [a, b, c] = triangle;
+  const sign = (p1, p2, p3) => (
+    (p1.x - p3.x) * (p2.y - p3.y) -
+    (p2.x - p3.x) * (p1.y - p3.y)
+  );
+  const point = { x, y };
+  const d1 = sign(point, a, b);
+  const d2 = sign(point, b, c);
+  const d3 = sign(point, c, a);
+  const hasNegative = d1 < 0 || d2 < 0 || d3 < 0;
+  const hasPositive = d1 > 0 || d2 > 0 || d3 > 0;
+  return !(hasNegative && hasPositive);
+}
+
+function getEmpressFrameNumber(spriteOrTextureKey) {
+  const frameName = spriteOrTextureKey?.frame?.name;
+  if (frameName !== undefined && frameName !== null) {
+    const parsed = Number.parseInt(frameName, 10);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  const textureKey = typeof spriteOrTextureKey === 'string' ? spriteOrTextureKey : spriteOrTextureKey?.texture?.key;
   const match = /(?:^empress-frame-|^empress-skin-frame-(?:p1|p2)-)(\d+)$/.exec(textureKey ?? '');
   return match ? Number.parseInt(match[1], 10) : null;
 }
@@ -8641,9 +9036,9 @@ function clampSkinIndex(value, count = CHARACTER_SKIN_COUNT, avoid = null) {
   return index;
 }
 
-function normalizeSkinSelection(selection = {}) {
+function normalizeSkinSelection(selection = {}, options = {}) {
   const p1 = clampSkinIndex(selection.p1 ?? 0);
-  const p2 = clampSkinIndex(selection.p2 ?? 1, CHARACTER_SKIN_COUNT, p1);
+  const p2 = clampSkinIndex(selection.p2 ?? 1, CHARACTER_SKIN_COUNT, options.allowSame ? null : p1);
   return { p1, p2 };
 }
 
@@ -8670,15 +9065,40 @@ function getBootSkinSelection(overlay) {
   });
 }
 
+function getBootSelectedSkin(overlay) {
+  return clampSkinIndex(overlay?.dataset?.p1Skin ?? 0);
+}
+
+function getCpuSkinSelection(overlay) {
+  const playerSkin = getBootSelectedSkin(overlay);
+  return {
+    p1: playerSkin,
+    p2: getRandomSelectableSkin(playerSkin, playerSkin),
+  };
+}
+
+function getOnlineSkinFallback(overlay, playerId) {
+  const selectedSkin = getBootSelectedSkin(overlay);
+  const fallback = normalizeSkinSelection(getStoredSkinSelection(), { allowSame: true });
+  if (playerId === 'p2') {
+    fallback.p2 = selectedSkin;
+  } else {
+    fallback.p1 = selectedSkin;
+  }
+  return fallback;
+}
+
 function getBootPlayerSkins(options = {}) {
   if (Array.isArray(options.players)) {
     return getSkinsFromOnlinePlayers(options.players, options.skins);
   }
-  return normalizeSkinSelection(options.skins ?? getStoredSkinSelection());
+  return normalizeSkinSelection(options.skins ?? getStoredSkinSelection(), {
+    allowSame: Boolean(options.allowSameSkins),
+  });
 }
 
 function getSkinsFromOnlinePlayers(players, fallback = {}) {
-  const fallbackSelection = normalizeSkinSelection(fallback);
+  const fallbackSelection = normalizeSkinSelection(fallback, { allowSame: true });
   const selection = { ...fallbackSelection };
   if (Array.isArray(players)) {
     for (const player of players) {
@@ -8690,40 +9110,34 @@ function getSkinsFromOnlinePlayers(players, fallback = {}) {
       }
     }
   }
-  return normalizeSkinSelection(selection);
+  return normalizeSkinSelection(selection, { allowSame: true });
 }
 
-function renderSkinPicker(selection) {
-  const normalized = normalizeSkinSelection(selection);
+function renderSkinPicker(selection, options = {}) {
+  const normalized = normalizeSkinSelection(selection, { allowSame: Boolean(options.allowSame) });
+  const players = options.players ?? [
+    { id: 'p1', label: 'P1 Color' },
+    { id: 'p2', label: 'P2 Color' },
+  ];
   return `
-    <section class="boot-skins" aria-label="Character colors">
-      ${renderSkinPickerRow('p1', 'P1 Color', normalized.p1)}
-      ${renderSkinPickerRow('p2', 'P2 Color', normalized.p2)}
+    <section class="boot-skins" aria-label="Character colors" data-allow-same="${options.allowSame ? 'true' : 'false'}">
+      ${players.map((player) => renderSkinPickerRow(player.id, player.label, normalized[player.id] ?? normalized.p1)).join('')}
     </section>
   `;
 }
 
 function renderSkinPickerRow(playerId, label, selectedSkin) {
   return `
-    <div class="boot-skin-row" data-skin-row="${playerId}">
+    <div class="boot-skin-row" data-skin-row="${playerId}" data-skin="${selectedSkin}">
       <div class="boot-skin-label">${label}</div>
-      <div class="boot-skin-grid">
-        ${CHARACTER_PALETTE_PREVIEW_CELLS.map((cell, index) => renderSkinSwatch(playerId, index, cell, index === selectedSkin)).join('')}
+      <div class="boot-skin-selector">
+        <button class="skin-cycle skin-cycle-prev" type="button" data-player="${playerId}" data-skin-action="prev" aria-label="Previous ${label}" title="Previous color">&larr;</button>
+        <canvas class="skin-preview-canvas" width="112" height="112" data-player="${playerId}" data-skin="${selectedSkin}" aria-label="${label} preview"></canvas>
+        <button class="skin-cycle skin-cycle-next" type="button" data-player="${playerId}" data-skin-action="next" aria-label="Next ${label}" title="Next color">&rarr;</button>
+        <button class="skin-random" type="button" data-player="${playerId}" data-skin-action="random" aria-label="Random ${label}" title="Random color">&#8635;</button>
       </div>
+      <div class="boot-skin-name" data-skin-name="${playerId}">Color ${selectedSkin + 1}</div>
     </div>
-  `;
-}
-
-function renderSkinSwatch(playerId, index, cell, selected) {
-  const style = [
-    `--skin-x:${-cell.x}px`,
-    `--skin-y:${-cell.y}px`,
-    `background-image:url(${assetUrl('assets/empress.png')})`,
-  ].join(';');
-  return `
-    <button class="skin-swatch${selected ? ' is-selected' : ''}" type="button" data-player="${playerId}" data-skin="${index}" aria-label="${playerId.toUpperCase()} color ${index + 1}">
-      <span class="skin-swatch-preview" style="${style}"></span>
-    </button>
   `;
 }
 
@@ -8733,36 +9147,73 @@ function bindSkinPicker(overlay) {
     overlay.dataset.p1Skin = String(normalized.p1);
     overlay.dataset.p2Skin = String(normalized.p2);
     saveSkinSelection(normalized);
-    for (const button of overlay.querySelectorAll('.skin-swatch')) {
-      const playerId = button.dataset.player;
-      const skin = Number.parseInt(button.dataset.skin, 10);
-      button.classList.toggle('is-selected', normalized[playerId] === skin);
-      button.disabled = playerId === 'p1'
-        ? normalized.p2 === skin
-        : normalized.p1 === skin;
+    for (const row of overlay.querySelectorAll('[data-skin-row]')) {
+      const playerId = row.dataset.skinRow;
+      const skin = normalized[playerId] ?? 0;
+      row.dataset.skin = String(skin);
+      const canvas = row.querySelector('.skin-preview-canvas');
+      if (canvas) {
+        canvas.dataset.skin = String(skin);
+      }
+      const name = row.querySelector(`[data-skin-name="${playerId}"]`);
+      if (name) {
+        name.textContent = `Color ${skin + 1}`;
+      }
     }
   };
 
   overlay.addEventListener('click', (event) => {
-    const button = event.target.closest?.('.skin-swatch');
+    const button = event.target.closest?.('[data-skin-action]');
     if (!button || !overlay.contains(button)) {
       return;
     }
     const playerId = button.dataset.player;
-    const skin = Number.parseInt(button.dataset.skin, 10);
-    if (!playerId || !Number.isFinite(skin)) {
+    const action = button.dataset.skinAction;
+    if (!playerId || !action) {
       return;
     }
     const selection = getBootSkinSelection(overlay);
     const otherId = playerId === 'p1' ? 'p2' : 'p1';
-    if (selection[otherId] === skin) {
-      selection[otherId] = selection[playerId];
+    const picker = button.closest('.boot-skins');
+    const allowSame = picker?.dataset.allowSame === 'true';
+    if (action === 'random') {
+      selection[playerId] = allowSame
+        ? getRandomSelectableSkin(selection[playerId], null)
+        : getRandomSelectableSkin(selection[playerId], selection[otherId]);
+    } else {
+      selection[playerId] = getNextSelectableSkin(
+        selection[playerId],
+        action === 'next' ? 1 : -1,
+        allowSame ? null : selection[otherId],
+      );
     }
-    selection[playerId] = skin;
     update(selection);
   });
 
   update(getBootSkinSelection(overlay));
+}
+
+function getNextSelectableSkin(currentSkin, direction, blockedSkin) {
+  const count = CHARACTER_SKIN_COUNT;
+  let nextSkin = clampSkinIndex(currentSkin, count);
+  for (let step = 0; step < count; step += 1) {
+    nextSkin = (nextSkin + direction + count) % count;
+    if (nextSkin !== blockedSkin) {
+      return nextSkin;
+    }
+  }
+  return clampSkinIndex(currentSkin, count);
+}
+
+function getRandomSelectableSkin(currentSkin, blockedSkin) {
+  const count = CHARACTER_SKIN_COUNT;
+  let options = Array.from({ length: count }, (_entry, index) => index)
+    .filter((skin) => skin !== blockedSkin && skin !== currentSkin);
+  if (!options.length) {
+    options = Array.from({ length: count }, (_entry, index) => index)
+      .filter((skin) => skin !== blockedSkin);
+  }
+  return options[Math.floor(Math.random() * options.length)] ?? clampSkinIndex(currentSkin, count);
 }
 
 retireServiceWorkers();
@@ -8783,13 +9234,35 @@ function createBootMenu() {
       <canvas class="boot-sprite" width="64" height="64" aria-hidden="true"></canvas>
       <h1>Superfighters</h1>
       <p class="boot-copy">Choose a match type.</p>
-      ${renderSkinPicker(bootSkinSelection)}
-      <div class="boot-actions">
+      <div class="boot-actions" data-mode-menu>
         <button class="boot-cpu" type="button">Play vs CPU</button>
         <button class="boot-local" type="button">Local Multiplayer</button>
         <button class="boot-online" type="button">Online Multiplayer</button>
       </div>
-      <section class="boot-online-panel" hidden>
+      <section class="boot-mode-panel boot-local-panel" data-mode-panel="local" hidden>
+        <h2>Local Multiplayer</h2>
+        ${renderSkinPicker(bootSkinSelection)}
+        <div class="boot-setup-actions">
+          <button class="boot-start-local" type="button">Start Match</button>
+          <button class="boot-back" type="button">Back</button>
+        </div>
+      </section>
+      <section class="boot-mode-panel boot-cpu-panel" data-mode-panel="cpu" hidden>
+        <h2>Play vs CPU</h2>
+        ${renderSkinPicker(bootSkinSelection, {
+          players: [{ id: 'p1', label: 'Your Color' }],
+        })}
+        <div class="boot-setup-actions">
+          <button class="boot-start-cpu" type="button">Start Match</button>
+          <button class="boot-back" type="button">Back</button>
+        </div>
+      </section>
+      <section class="boot-mode-panel boot-online-panel" data-mode-panel="online" hidden>
+        <h2>Online Multiplayer</h2>
+        ${renderSkinPicker(bootSkinSelection, {
+          players: [{ id: 'p1', label: 'Your Color' }],
+          allowSame: true,
+        })}
         <p class="online-server-fixed">Server: ${escapeHtml(getOnlineServerLabel())}</p>
         <div class="online-actions-row">
           <button class="boot-create" type="button">Create Lobby</button>
@@ -8806,6 +9279,9 @@ function createBootMenu() {
         </div>
         <p class="online-status">Offline</p>
         <p class="online-mobile-note">On iPhone, open the invite link in Safari. For less browser chrome, Share, Add to Home Screen, then launch from the icon. Portrait play is supported.</p>
+        <div class="boot-setup-actions">
+          <button class="boot-back" type="button">Back</button>
+        </div>
       </section>
       <nav class="start-links">
         <a href="./debug.html">Debug</a>
@@ -8817,6 +9293,7 @@ function createBootMenu() {
   document.body.appendChild(overlay);
   startBootSpriteAnimation(overlay.querySelector('.boot-sprite'));
   bindSkinPicker(overlay);
+  startBootSkinPreviewAnimations(overlay);
 
   const state = {
     channel: null,
@@ -8828,7 +9305,8 @@ function createBootMenu() {
     playerCount: 0,
     started: false,
   };
-  const onlinePanel = overlay.querySelector('.boot-online-panel');
+  const modeMenu = overlay.querySelector('[data-mode-menu]');
+  const modePanels = [...overlay.querySelectorAll('[data-mode-panel]')];
   const codeInput = overlay.querySelector('.boot-code-input');
   const result = overlay.querySelector('.online-lobby-result');
   const codeDisplay = overlay.querySelector('.online-code-display');
@@ -8838,9 +9316,33 @@ function createBootMenu() {
   const setStatus = (message) => {
     status.textContent = message;
   };
-  const showOnlinePanel = () => {
-    onlinePanel.hidden = false;
-    codeInput.focus();
+  const showModePanel = (mode) => {
+    modeMenu.hidden = true;
+    for (const panel of modePanels) {
+      panel.hidden = panel.dataset.modePanel !== mode;
+    }
+    overlay.dataset.mode = mode;
+    if (mode === 'online') {
+      codeInput.focus();
+    }
+  };
+  const showModeMenu = () => {
+    state.channel?.close();
+    state.channel = null;
+    state.connected = false;
+    state.handlersBound = false;
+    state.code = null;
+    state.playerId = null;
+    state.isHost = false;
+    state.playerCount = 0;
+    state.started = false;
+    updateLobbyUi();
+    setStatus('Offline');
+    modeMenu.hidden = false;
+    for (const panel of modePanels) {
+      panel.hidden = true;
+    }
+    overlay.dataset.mode = 'menu';
   };
   const updateLobbyUi = () => {
     const showInvite = Boolean(state.code && state.isHost);
@@ -8914,6 +9416,7 @@ function createBootMenu() {
     });
     channel.on('match-start', (data) => {
       state.started = true;
+      const fallbackSkins = getOnlineSkinFallback(overlay, state.playerId);
       startGameFromBoot(overlay, {
         mode: 'online',
         channel,
@@ -8921,7 +9424,8 @@ function createBootMenu() {
         playerId: state.playerId,
         playerCount: state.playerCount,
         players: data?.players,
-        skins: getSkinsFromOnlinePlayers(data?.players, getBootSkinSelection(overlay)),
+        skins: getSkinsFromOnlinePlayers(data?.players, fallbackSkins),
+        allowSameSkins: true,
       });
     });
     channel.on('lobby-error', (data) => setStatus(data?.message || 'Lobby error'));
@@ -8934,7 +9438,7 @@ function createBootMenu() {
     try {
       const channel = await ensureChannel();
       setStatus('Creating lobby...');
-      channel.emit('create-lobby', { skinIndex: getBootSkinSelection(overlay).p1 }, { reliable: true });
+      channel.emit('create-lobby', { skinIndex: getBootSelectedSkin(overlay) }, { reliable: true });
     } catch (error) {
       setStatus(error.message || 'Could not connect');
     }
@@ -8949,7 +9453,7 @@ function createBootMenu() {
     try {
       const channel = await ensureChannel();
       setStatus(`Joining ${code}...`);
-      channel.emit('join-lobby', { code, skinIndex: getBootSkinSelection(overlay).p2 }, { reliable: true });
+      channel.emit('join-lobby', { code, skinIndex: getBootSelectedSkin(overlay) }, { reliable: true });
     } catch (error) {
       setStatus(error.message || 'Could not connect');
     }
@@ -8957,13 +9461,24 @@ function createBootMenu() {
 
   overlay.querySelector('.boot-local')?.addEventListener('click', () => {
     state.channel?.close();
-    startGameFromBoot(overlay, { mode: 'local', skins: getBootSkinSelection(overlay) });
+    showModePanel('local');
   });
   overlay.querySelector('.boot-cpu')?.addEventListener('click', () => {
     state.channel?.close();
-    startGameFromBoot(overlay, { mode: 'cpu', skins: getBootSkinSelection(overlay) });
+    showModePanel('cpu');
   });
-  overlay.querySelector('.boot-online')?.addEventListener('click', showOnlinePanel);
+  overlay.querySelector('.boot-online')?.addEventListener('click', () => showModePanel('online'));
+  overlay.querySelector('.boot-start-local')?.addEventListener('click', () => {
+    state.channel?.close();
+    startGameFromBoot(overlay, { mode: 'local', skins: getBootSkinSelection(overlay) });
+  });
+  overlay.querySelector('.boot-start-cpu')?.addEventListener('click', () => {
+    state.channel?.close();
+    startGameFromBoot(overlay, { mode: 'cpu', skins: getCpuSkinSelection(overlay) });
+  });
+  for (const button of overlay.querySelectorAll('.boot-back')) {
+    button.addEventListener('click', showModeMenu);
+  }
   overlay.querySelector('.boot-create')?.addEventListener('click', createLobby);
   overlay.querySelector('.boot-join')?.addEventListener('click', joinLobby);
   codeInput.addEventListener('input', () => {
@@ -8998,7 +9513,7 @@ function createBootMenu() {
   });
 
   if (initialCode) {
-    showOnlinePanel();
+    showModePanel('online');
     window.setTimeout(joinLobby, 250);
   } else if (shouldAutoPlaytestEditorLevel()) {
     startGameFromBoot(overlay, { mode: 'local', editorLevel: true, skins: getBootSkinSelection(overlay) });
@@ -9051,6 +9566,117 @@ function consumeBootOptions() {
 function getInitialLobbyCode() {
   const params = new URLSearchParams(window.location.search);
   return normalizeLobbyCode(params.get('join') || params.get('code') || '');
+}
+
+const bootSkinAtlasCache = new Map();
+const BOOT_SKIN_IDLE_FRAMES = makeFrameList1Based(DEFAULT_EMPRESS_ANIMATION_CONFIG.idle, EMPRESS_ATLAS_MANIFEST.frameCount);
+
+function startBootSkinPreviewAnimations(overlay) {
+  for (const canvas of overlay.querySelectorAll('.skin-preview-canvas')) {
+    startBootSkinPreviewAnimation(canvas);
+  }
+}
+
+function startBootSkinPreviewAnimation(canvas) {
+  if (!canvas) {
+    return;
+  }
+  const context = canvas.getContext('2d');
+  context.imageSmoothingEnabled = false;
+  let activeSkin = null;
+  let activeAtlas = null;
+  let frameIndex = 0;
+  let lastFrameAt = 0;
+  let loadToken = 0;
+
+  const draw = (time) => {
+    if (!canvas.isConnected) {
+      return;
+    }
+
+    const skin = clampSkinIndex(canvas.dataset.skin ?? 0, EMPRESS_ATLAS_MANIFEST.skinCount);
+    if (skin !== activeSkin) {
+      activeSkin = skin;
+      activeAtlas = null;
+      frameIndex = 0;
+      const token = ++loadToken;
+      loadBootSkinAtlas(skin)
+        .then((atlas) => {
+          if (token === loadToken) {
+            activeAtlas = atlas;
+          }
+        })
+        .catch(() => {
+          if (token === loadToken) {
+            activeAtlas = null;
+          }
+        });
+    }
+
+    if (time - lastFrameAt >= 150) {
+      frameIndex += 1;
+      lastFrameAt = time;
+    }
+
+    drawBootSkinPreviewFrame(canvas, context, activeAtlas, BOOT_SKIN_IDLE_FRAMES[frameIndex % BOOT_SKIN_IDLE_FRAMES.length]);
+    window.requestAnimationFrame(draw);
+  };
+
+  window.requestAnimationFrame(draw);
+}
+
+async function loadBootSkinAtlas(skinIndex) {
+  const skin = EMPRESS_ATLAS_MANIFEST.skins[clampSkinIndex(skinIndex, EMPRESS_ATLAS_MANIFEST.skinCount)] ?? EMPRESS_ATLAS_MANIFEST.skins[0];
+  if (!skin) {
+    throw new Error('Missing skin atlas');
+  }
+  if (bootSkinAtlasCache.has(skin.index)) {
+    return bootSkinAtlasCache.get(skin.index);
+  }
+
+  const promise = Promise.all([
+    loadImage(assetUrl(skin.image)),
+    fetch(assetUrl(skin.json)).then((response) => {
+      if (!response.ok) {
+        throw new Error(`Could not load ${skin.json}`);
+      }
+      return response.json();
+    }),
+  ]).then(([image, atlas]) => ({
+    image,
+    frames: atlas.frames ?? {},
+  }));
+  bootSkinAtlasCache.set(skin.index, promise);
+  return promise;
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`Could not load ${src}`));
+    image.src = src;
+  });
+}
+
+function drawBootSkinPreviewFrame(canvas, context, atlas, frameNumber) {
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  if (!atlas) {
+    return;
+  }
+
+  const frameData = atlas.frames[String(frameNumber)] ?? atlas.frames[String(BOOT_SKIN_IDLE_FRAMES[0])];
+  const frame = frameData?.frame;
+  if (!frame) {
+    return;
+  }
+
+  const scale = Math.min((canvas.width * 0.86) / frame.w, (canvas.height * 0.92) / frame.h, 2.1);
+  const width = frame.w * scale;
+  const height = frame.h * scale;
+  const x = (canvas.width - width) / 2;
+  const y = canvas.height - height - 4;
+  context.drawImage(atlas.image, frame.x, frame.y, frame.w, frame.h, x, y, width, height);
 }
 
 function startBootSpriteAnimation(canvas) {

@@ -121,7 +121,7 @@ io.onConnection((channel) => {
     const playerId = lobby.players.has(channel.id)
       ? lobby.players.get(channel.id).playerId
       : nextPlayerId(lobby);
-    addPlayerToLobby(lobby, channel, playerId, sanitizeSkinIndex(data?.skinIndex), playerId === 'p2' ? getUsedSkinIndices(lobby) : null);
+    addPlayerToLobby(lobby, channel, playerId, sanitizeSkinIndex(data?.skinIndex));
     channel.emit('lobby-joined', {
       code,
       playerId,
@@ -353,8 +353,8 @@ function createLobby(channel, skinIndex = 0) {
   return lobby;
 }
 
-function addPlayerToLobby(lobby, channel, playerId, skinIndex = 0, usedSkins = null) {
-  const normalizedSkin = chooseAvailableSkin(skinIndex, usedSkins);
+function addPlayerToLobby(lobby, channel, playerId, skinIndex = 0) {
+  const normalizedSkin = sanitizeSkinIndex(skinIndex);
   channel.join(lobby.code);
   lobby.players.set(channel.id, {
     channelId: channel.id,
@@ -404,24 +404,6 @@ function sanitizeSkinIndex(value) {
     return 0;
   }
   return Math.max(0, Math.min(maxSkinIndex, number));
-}
-
-function getUsedSkinIndices(lobby) {
-  return new Set([...lobby.players.values()].map((player) => sanitizeSkinIndex(player.skinIndex)));
-}
-
-function chooseAvailableSkin(skinIndex, usedSkins = null) {
-  let normalized = sanitizeSkinIndex(skinIndex);
-  if (!usedSkins?.has(normalized)) {
-    return normalized;
-  }
-  for (let offset = 1; offset <= maxSkinIndex; offset += 1) {
-    const candidate = (normalized + offset) % (maxSkinIndex + 1);
-    if (!usedSkins.has(candidate)) {
-      return candidate;
-    }
-  }
-  return normalized;
 }
 
 function generateLobbyCode() {
