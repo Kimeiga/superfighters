@@ -51,6 +51,7 @@ const DEFAULT_ATTACHMENT_CONFIG = {
   characterGunHand: { x: 39, y: 50 },
   characterGunHands: DEFAULT_CHARACTER_GUN_HANDS,
   gunGrip: { x: 18, y: 35 },
+  gunSheet: 'handguns',
   gunFrame: 30,
   previewShowGun: true,
   previewCleanView: true,
@@ -59,7 +60,7 @@ const DEFAULT_ATTACHMENT_CONFIG = {
 const CHARACTER_PALETTE_COUNT = 32;
 const CHARACTER_PALETTE_GRID = {
   x: 1,
-  y: 2606,
+  bottomOffset: 182,
   columns: 16,
   rows: 2,
   stepX: 39,
@@ -110,46 +111,97 @@ const GUN_ARM_OVERLAY_ANIMATIONS = new Set([
   'ladderGunHold',
   'ladderGun',
 ]);
+const DEBUG_ANIMATION_ORDER = [
+  'intro',
+  'idle',
+  'idleAimStraight',
+  'melee',
+  'crouchDown',
+  'crouchDownGun',
+  'crouch',
+  'standUp',
+  'standUpGun',
+  'roll',
+  'rollEnd',
+  'run',
+  'runGun',
+  'jumpPrep',
+  'jumpUp',
+  'jumpPeak',
+  'jumpDown',
+  'jumpLand',
+  'jumpPrepGun',
+  'jumpGunUp',
+  'jumpGunPeak',
+  'jumpGunDown',
+  'jumpGunLand',
+  'jumpMelee',
+  'climbLadderBegin',
+  'climbLadder',
+  'climbLadderEnd',
+  'ladderGunDraw',
+  'ladderGunHold',
+  'ladderMelee',
+  'grenadePrep',
+  'grenadeThrow',
+  'grenadePrepAir',
+  'grenadeThrowAir',
+  'pickup',
+  'die',
+  'dieAir',
+  'deathFall',
+  'deathLand',
+  'victory',
+  'timeoutLoss',
+];
+const CHARACTER_SHEET_BASE = {
+  frameSize: 64,
+  gap: 1,
+  leftOffset: 1,
+  detectRows: true,
+  rowSampleX: 63,
+  rowLightThreshold: 20,
+  cellLightThreshold: 100,
+  cellBackground: [147, 187, 236],
+  extensionBackground: [58, 111, 51],
+  sheetBackground: [27, 89, 153],
+  maxExtension: 96,
+  sheetScale: 1,
+  previewScale: 2,
+  previewCanvasSize: 300,
+  playScale: 2,
+  sheetKind: 'character',
+};
+const GUN_SHEET_BASE = {
+  frameSize: 64,
+  gap: 1,
+  leftOffset: 1,
+  titleHeight: 23,
+  detectRows: true,
+  rowSampleX: 63,
+  rowLightThreshold: 20,
+  cellLightThreshold: 100,
+  cellBackground: [147, 187, 236],
+  sheetBackground: [27, 89, 153],
+  maxExtension: 0,
+  sheetScale: 1,
+  previewScale: 2,
+  previewCanvasSize: 180,
+  playScale: 2,
+  sheetKind: 'gun',
+};
 const SHEETS = {
   empress: {
+    ...CHARACTER_SHEET_BASE,
     id: 'empress',
     label: 'Empress',
     url: assetUrl('assets/empress.png'),
-    frameSize: 64,
-    gap: 1,
-    leftOffset: 1,
-    detectRows: true,
-    rowSampleX: 63,
-    rowLightThreshold: 20,
-    cellLightThreshold: 100,
-    cellBackground: [147, 187, 236],
-    extensionBackground: [58, 111, 51],
-    sheetBackground: [27, 89, 153],
-    maxExtension: 96,
-    sheetScale: 1,
-    previewScale: 2,
-    previewCanvasSize: 300,
-    playScale: 2,
   },
   handguns: {
+    ...GUN_SHEET_BASE,
     id: 'handguns',
     label: 'Handguns',
     url: assetUrl('assets/handgun.png'),
-    frameSize: 64,
-    gap: 1,
-    leftOffset: 1,
-    titleHeight: 23,
-    detectRows: true,
-    rowSampleX: 63,
-    rowLightThreshold: 20,
-    cellLightThreshold: 100,
-    cellBackground: [147, 187, 236],
-    sheetBackground: [27, 89, 153],
-    maxExtension: 0,
-    sheetScale: 1,
-    previewScale: 2,
-    previewCanvasSize: 180,
-    playScale: 2,
   },
   girl: {
     id: 'girl',
@@ -162,6 +214,7 @@ const SHEETS = {
     previewScale: 5,
     previewCanvasSize: 168,
     playScale: 3,
+    sheetKind: 'legacy',
   },
 };
 
@@ -213,7 +266,6 @@ const sheetCtx = sheetCanvas.getContext('2d');
 const previewCtx = previewCanvas.getContext('2d');
 const playtestCtx = playtestCanvas.getContext('2d');
 const image = new Image();
-const handgunImage = new Image();
 const DEFAULT_PREVIEW_ANIMATION = 'crouchDown';
 
 let activeSheet = SHEETS[DEFAULT_SHEET_ID];
@@ -229,8 +281,10 @@ let titleGaps = [];
 let frameCells = [];
 let frameAnchors = {};
 let frameCanvasCache = new Map();
-let handgunFrameCanvasCache = new Map();
-let handgunGeometry = { frameCells: [], frameCount: 0 };
+const gunSheetImages = new Map();
+const gunSheetGeometries = new Map();
+const loadingGunSheets = new Set();
+let gunFrameCanvasCache = new Map();
 let rangeAnchor = null;
 let lastPreviewFrame = null;
 let lastPreviewBox = null;
@@ -243,6 +297,7 @@ let paletteCells = [];
 let paletteColorRuns = [];
 let selectedPaletteSource = 0;
 let selectedPaletteTarget = 1;
+let sheetPaint = null;
 
 const playtest = {
   x: 210,
@@ -276,7 +331,7 @@ const playtest = {
 
 buildSheetTabs();
 loadSheet(DEFAULT_SHEET_ID);
-loadHandgunImage();
+loadGunSheetImages();
 requestAnimationFrame(tickPlaytest);
 
 image.onload = () => {
@@ -323,20 +378,35 @@ image.onerror = () => {
   sheetMeta.textContent = `Could not load ${activeSheet.url}`;
 };
 
-function loadHandgunImage() {
-  handgunImage.onload = () => {
-    handgunGeometry = detectHandgunFrameGeometry();
-    handgunFrameCanvasCache = new Map();
+function loadGunSheetImages() {
+  ensureGunSheetLoaded(attachmentConfig.gunSheet);
+}
+
+function ensureGunSheetLoaded(sheetId = DEFAULT_ATTACHMENT_CONFIG.gunSheet) {
+  const sheet = isGunSheet(SHEETS[sheetId]) ? SHEETS[sheetId] : SHEETS[DEFAULT_ATTACHMENT_CONFIG.gunSheet];
+  if (!sheet || gunSheetImages.has(sheet.id) || loadingGunSheets.has(sheet.id)) {
+    return Boolean(sheet && gunSheetImages.has(sheet.id));
+  }
+
+  loadingGunSheets.add(sheet.id);
+  const gunImage = new Image();
+  gunImage.onload = () => {
+    loadingGunSheets.delete(sheet.id);
+    gunSheetImages.set(sheet.id, gunImage);
+    gunSheetGeometries.set(sheet.id, detectGunFrameGeometry(sheet, gunImage));
+    gunFrameCanvasCache = new Map();
     syncAttachmentControls();
     if (frameCount) {
       drawSheet();
       drawPreview(lastPreviewFrame ?? getPreviewFrame(performance.now()));
     }
   };
-  handgunImage.onerror = () => {
-    setStatus(`Could not load ${assetUrl('assets/handgun.png')}`);
+  gunImage.onerror = () => {
+    loadingGunSheets.delete(sheet.id);
+    setStatus(`Could not load ${sheet.url}`);
   };
-  handgunImage.src = `${assetUrl('assets/handgun.png')}?v=${Date.now()}`;
+  gunImage.src = `${sheet.url}?v=${Date.now()}`;
+  return false;
 }
 
 copyJsonButton.addEventListener('click', async () => {
@@ -436,7 +506,7 @@ attachmentYInput.addEventListener('input', () => {
 
 gunFrameInput.addEventListener('input', () => {
   const frame = Number.parseInt(gunFrameInput.value, 10);
-  attachmentConfig.gunFrame = clamp(Number.isFinite(frame) ? frame : 1, 1, getHandgunFrameCount());
+  attachmentConfig.gunFrame = clamp(Number.isFinite(frame) ? frame : 1, 1, getGunFrameCount());
   gunFrameInput.value = attachmentConfig.gunFrame;
   saveAttachmentConfig();
   restartPreviewAnimation();
@@ -450,7 +520,7 @@ playtestGunInput.addEventListener('change', () => {
   resetPlaytestAnimationPlayback();
 });
 
-sheetCanvas.addEventListener('click', (event) => {
+sheetCanvas.addEventListener('pointerdown', (event) => {
   if (!frameCount) {
     return;
   }
@@ -460,7 +530,9 @@ sheetCanvas.addEventListener('click', (event) => {
     return;
   }
 
-  if (activeSheet.id === 'handguns') {
+  if (isGunSheet(activeSheet)) {
+    ensureGunSheetLoaded(activeSheet.id);
+    attachmentConfig.gunSheet = activeSheet.id;
     attachmentConfig.gunFrame = frame;
     gunFrameInput.value = frame;
     saveAttachmentConfig();
@@ -470,22 +542,30 @@ sheetCanvas.addEventListener('click', (event) => {
     return;
   }
 
-  const setting = config[selectedAnimation];
-  if (event.shiftKey && rangeAnchor !== null) {
-    setting.start = Math.min(rangeAnchor, frame);
-    setting.end = Math.max(rangeAnchor, frame);
-  } else {
-    setting.start = frame;
-    setting.end = frame;
-    setting.frames = '';
-    rangeAnchor = frame;
-  }
+  event.preventDefault();
+  const selectedFrames = new Set(makeFrameList1Based(config[selectedAnimation], frameCount));
+  sheetPaint = {
+    mode: selectedFrames.has(frame) ? 'remove' : 'add',
+    frames: selectedFrames,
+    seen: new Set(),
+  };
+  sheetCanvas.setPointerCapture?.(event.pointerId);
+  paintAnimationFrame(frame);
+});
 
-  syncRowsFromConfig();
-  drawSheet();
-  restartPreviewAnimation();
-  resetPlaytestAnimationPlayback();
-  setStatus(`${activeSheet.label} ${setting.label}: ${setting.start}-${setting.end}`);
+sheetCanvas.addEventListener('pointermove', (event) => {
+  if (!sheetPaint || isGunSheet(activeSheet)) {
+    return;
+  }
+  const frame = getFrameAtPointer(event);
+  if (frame) {
+    event.preventDefault();
+    paintAnimationFrame(frame);
+  }
+});
+
+window.addEventListener('pointerup', () => {
+  sheetPaint = null;
 });
 
 previewCanvas.addEventListener('click', (event) => {
@@ -661,6 +741,14 @@ function loadSheet(sheetId) {
   buildPaletteDebug();
   sheetMeta.textContent = `Loading ${activeSheet.label}`;
   image.src = `${activeSheet.url}?v=${Date.now()}`;
+}
+
+function isCharacterSheet(sheet = activeSheet) {
+  return sheet?.sheetKind === 'character';
+}
+
+function isGunSheet(sheet = activeSheet) {
+  return sheet?.sheetKind === 'gun';
 }
 
 function detectFrameGeometry() {
@@ -1000,9 +1088,8 @@ function getFrameBitmap(frame) {
   return bitmap;
 }
 
-function detectHandgunFrameGeometry() {
-  const sheet = SHEETS.handguns;
-  const pixels = getImagePixels(handgunImage);
+function detectGunFrameGeometry(sheet, gunImage) {
+  const pixels = getImagePixels(gunImage);
   const rowStarts = detectAssetRowStarts(sheet, pixels);
   const cells = [];
   const stride = sheet.frameSize + sheet.gap;
@@ -1012,7 +1099,7 @@ function detectHandgunFrameGeometry() {
   for (let row = 0; row < rowStarts.length; row += 1) {
     const y = rowStarts[row];
     let column = 0;
-    for (let x = leftOffset; x + sheet.frameSize <= handgunImage.naturalWidth; x += stride) {
+    for (let x = leftOffset; x + sheet.frameSize <= gunImage.naturalWidth; x += stride) {
       const lightPixels = countAssetBackgroundPixelsInRect(sheet, pixels, x, y, sheet.frameSize, sheet.frameSize);
       if (lightPixels < sheet.cellLightThreshold) {
         column += 1;
@@ -1065,19 +1152,22 @@ function detectAssetRowStarts(sheet, pixels) {
     .map((run) => run.start);
 }
 
-function getHandgunFrameBitmap(frame) {
-  if (!handgunImage.complete || !handgunImage.naturalWidth) {
+function getGunFrameBitmap(frame, sheetId = attachmentConfig.gunSheet) {
+  const sheet = isGunSheet(SHEETS[sheetId]) ? SHEETS[sheetId] : SHEETS[DEFAULT_ATTACHMENT_CONFIG.gunSheet];
+  const gunImage = gunSheetImages.get(sheet.id);
+  if (!gunImage?.complete || !gunImage.naturalWidth) {
+    ensureGunSheetLoaded(sheet.id);
     return null;
   }
 
-  const clampedFrame = clamp(Math.round(frame), 1, getHandgunFrameCount());
-  const cached = handgunFrameCanvasCache.get(clampedFrame);
+  const clampedFrame = clamp(Math.round(frame), 1, getGunFrameCount(sheet.id));
+  const cacheKey = `${sheet.id}:${clampedFrame}`;
+  const cached = gunFrameCanvasCache.get(cacheKey);
   if (cached) {
     return cached;
   }
 
-  const sheet = SHEETS.handguns;
-  const source = handgunGeometry.frameCells[clampedFrame - 1];
+  const source = gunSheetGeometries.get(sheet.id)?.frameCells?.[clampedFrame - 1];
   if (!source) {
     return null;
   }
@@ -1087,7 +1177,7 @@ function getHandgunFrameBitmap(frame) {
   canvas.height = sheet.frameSize;
   const context = canvas.getContext('2d', { willReadFrequently: true });
   context.imageSmoothingEnabled = false;
-  context.drawImage(handgunImage, source.x, source.y, sheet.frameSize, sheet.frameSize, 0, 0, sheet.frameSize, sheet.frameSize);
+  context.drawImage(gunImage, source.x, source.y, sheet.frameSize, sheet.frameSize, 0, 0, sheet.frameSize, sheet.frameSize);
 
   const imageData = context.getImageData(0, 0, sheet.frameSize, sheet.frameSize);
   for (let index = 0; index < imageData.data.length; index += 4) {
@@ -1098,12 +1188,13 @@ function getHandgunFrameBitmap(frame) {
   context.putImageData(imageData, 0, 0);
 
   const bitmap = { canvas, source };
-  handgunFrameCanvasCache.set(clampedFrame, bitmap);
+  gunFrameCanvasCache.set(cacheKey, bitmap);
   return bitmap;
 }
 
-function getHandgunFrameCount() {
-  return Math.max(1, handgunGeometry.frameCount || 1);
+function getGunFrameCount(sheetId = attachmentConfig.gunSheet) {
+  const sheet = isGunSheet(SHEETS[sheetId]) ? SHEETS[sheetId] : SHEETS[DEFAULT_ATTACHMENT_CONFIG.gunSheet];
+  return Math.max(1, gunSheetGeometries.get(sheet.id)?.frameCount || 1);
 }
 
 function countCellBackgroundPixels(pixels, startX, startY) {
@@ -1212,7 +1303,7 @@ function loadSheetAnimationConfig(sheet) {
 }
 
 function migrateSavedSheetAnimationConfig(sheet, saved) {
-  if (sheet.id !== 'empress') {
+  if (!isCharacterSheet(sheet)) {
     return saved;
   }
 
@@ -1270,12 +1361,12 @@ function resetActiveSheetAnimationConfig() {
 }
 
 function sheetStorageKey(sheet) {
-  const version = sheet.id === 'empress' ? 'v2' : 'v1';
+  const version = isCharacterSheet(sheet) ? 'v2' : 'v1';
   return `${SHEET_CONFIG_STORAGE_PREFIX}.${sheet.id}.${version}`;
 }
 
 function anchorStorageKey(sheet) {
-  const version = sheet.id === 'empress' ? 'v2' : 'v1';
+  const version = isCharacterSheet(sheet) ? 'v2' : 'v1';
   return `${SHEET_CONFIG_STORAGE_PREFIX}.${sheet.id}.anchors.${version}`;
 }
 
@@ -1314,6 +1405,10 @@ function loadAttachmentConfig() {
     configToLoad.gunFrame = DEFAULT_ATTACHMENT_CONFIG.gunFrame;
   }
 
+  if (!isGunSheet(SHEETS[configToLoad.gunSheet])) {
+    configToLoad.gunSheet = DEFAULT_ATTACHMENT_CONFIG.gunSheet;
+  }
+
   for (const frame of ['62', '63', '64']) {
     const point = configToLoad.characterGunHands[frame];
     if (point?.x === 39 && point?.y === 50) {
@@ -1329,7 +1424,7 @@ function saveAttachmentConfig() {
 }
 
 function getSheetDefaultAnimationConfig(sheet) {
-  return sheet.id === 'empress' ? DEFAULT_EMPRESS_ANIMATION_CONFIG : DEFAULT_ANIMATION_CONFIG;
+  return isCharacterSheet(sheet) ? DEFAULT_EMPRESS_ANIMATION_CONFIG : DEFAULT_ANIMATION_CONFIG;
 }
 
 function createExportPayload() {
@@ -1376,10 +1471,10 @@ function createCurrentAnimationFrameValuesPayload() {
       return [String(frame), { x: Math.round(point.x), y: Math.round(point.y) }];
     })),
     explicitCharacterGunHands: Object.fromEntries(frames
-      .filter((frame) => attachmentConfig.characterGunHands?.[String(frame)])
+    .filter((frame) => attachmentConfig.characterGunHands?.[String(frame)])
       .map((frame) => [String(frame), attachmentConfig.characterGunHands[String(frame)]])),
     gun: {
-      sheet: 'handguns',
+      sheet: attachmentConfig.gunSheet,
       frame: attachmentConfig.gunFrame,
       grip: {
         x: Math.round(attachmentConfig.gunGrip.x),
@@ -1393,11 +1488,85 @@ function createCurrentAnimationFrameValuesPayload() {
   return payload;
 }
 
+function paintAnimationFrame(frame) {
+  if (!sheetPaint || sheetPaint.seen.has(frame)) {
+    return;
+  }
+
+  sheetPaint.seen.add(frame);
+  if (sheetPaint.mode === 'remove') {
+    sheetPaint.frames.delete(frame);
+  } else {
+    sheetPaint.frames.add(frame);
+  }
+
+  setAnimationFramesFromSet(selectedAnimation, sheetPaint.frames);
+  syncRowsFromConfig();
+  drawSheet();
+  restartPreviewAnimation();
+  resetPlaytestAnimationPlayback();
+  const setting = config[selectedAnimation];
+  const verb = sheetPaint.mode === 'remove' ? 'Removed' : 'Added';
+  setStatus(`${verb} frame ${frame} for ${setting.label}.`);
+}
+
+function setAnimationFramesFromSet(animationName, frameSet) {
+  const setting = config[animationName];
+  if (!setting) {
+    return;
+  }
+
+  const frames = Array.from(frameSet)
+    .map((frame) => clamp(Math.round(frame), 1, Math.max(1, frameCount)))
+    .filter((frame, index, all) => all.indexOf(frame) === index)
+    .sort((a, b) => a - b);
+
+  if (!frames.length) {
+    setting.start = 1;
+    setting.end = 1;
+    setting.frames = '';
+    return;
+  }
+
+  setting.start = frames[0];
+  setting.end = frames[frames.length - 1];
+  setting.frames = isContiguousFrameList(frames) ? '' : formatFramePattern(frames);
+}
+
+function isContiguousFrameList(frames) {
+  for (let index = 1; index < frames.length; index += 1) {
+    if (frames[index] !== frames[index - 1] + 1) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function formatFramePattern(frames) {
+  const parts = [];
+  let rangeStart = frames[0];
+  let previous = frames[0];
+  for (let index = 1; index <= frames.length; index += 1) {
+    const frame = frames[index];
+    if (frame === previous + 1) {
+      previous = frame;
+      continue;
+    }
+    parts.push(rangeStart === previous ? String(rangeStart) : `${rangeStart}-${previous}`);
+    rangeStart = frame;
+    previous = frame;
+  }
+  return parts.join(',');
+}
+
 function buildRows() {
   animationRows.innerHTML = '';
 
-  for (const name of ANIMATION_ORDER) {
+  for (const name of DEBUG_ANIMATION_ORDER) {
     const setting = config[name];
+    if (!setting) {
+      continue;
+    }
     const row = document.createElement('div');
     row.className = `animation-row${name === selectedAnimation ? ' selected' : ''}`;
     row.dataset.animation = name;
@@ -1641,7 +1810,7 @@ function selectAnimation(name) {
 }
 
 function refreshPaletteDebugState() {
-  if (activeSheet.id !== 'empress' || !image.naturalWidth) {
+  if (!isCharacterSheet(activeSheet) || !image.naturalWidth) {
     paletteCells = [];
     paletteColorRuns = [];
     selectedPaletteSource = 0;
@@ -1662,16 +1831,17 @@ function refreshPaletteDebugState() {
 
 function detectCharacterPaletteCells(pixels) {
   const cells = [];
+  const gridY = pixels.height - CHARACTER_PALETTE_GRID.bottomOffset;
   for (let index = 0; index < CHARACTER_PALETTE_COUNT; index += 1) {
     const column = index % CHARACTER_PALETTE_GRID.columns;
     const row = Math.floor(index / CHARACTER_PALETTE_GRID.columns);
     const cell = {
       x: CHARACTER_PALETTE_GRID.x + column * CHARACTER_PALETTE_GRID.stepX,
-      y: CHARACTER_PALETTE_GRID.y + row * CHARACTER_PALETTE_GRID.stepY,
+      y: gridY + row * CHARACTER_PALETTE_GRID.stepY,
       width: CHARACTER_PALETTE_GRID.previewWidth,
       height: CHARACTER_PALETTE_GRID.previewHeight,
       swatchX: CHARACTER_PALETTE_GRID.x + column * CHARACTER_PALETTE_GRID.stepX + CHARACTER_PALETTE_GRID.swatchLeftPadding,
-      swatchY: CHARACTER_PALETTE_GRID.y + row * CHARACTER_PALETTE_GRID.stepY + CHARACTER_PALETTE_GRID.previewHeight + CHARACTER_PALETTE_GRID.swatchTopGap,
+      swatchY: gridY + row * CHARACTER_PALETTE_GRID.stepY + CHARACTER_PALETTE_GRID.previewHeight + CHARACTER_PALETTE_GRID.swatchTopGap,
       swatchSize: CHARACTER_PALETTE_GRID.swatchSize,
       swatchCount: CHARACTER_PALETTE_GRID.swatchCount,
     };
@@ -1683,9 +1853,7 @@ function detectCharacterPaletteCells(pixels) {
     ) {
       continue;
     }
-    if (countSpritePixelsInRect(pixels, cell.x, cell.y, cell.width, cell.height) >= 180) {
-      cells.push(cell);
-    }
+    cells.push(cell);
   }
   return cells;
 }
@@ -1762,7 +1930,7 @@ function buildPaletteDebug() {
     return;
   }
 
-  const visible = activeSheet.id === 'empress' && paletteCells.length > 1;
+  const visible = isCharacterSheet(activeSheet) && paletteCells.length > 1;
   palettePanel.hidden = !visible;
   if (!visible) {
     paletteGrid.innerHTML = '';
@@ -2042,11 +2210,11 @@ function drawSheet() {
   sheetCtx.imageSmoothingEnabled = false;
   sheetCtx.drawImage(image, 0, 0, sheetCanvas.width, sheetCanvas.height);
 
-  const selectedFrames = activeSheet.id === 'handguns'
+  const selectedFrames = isGunSheet(activeSheet)
     ? new Set([clamp(attachmentConfig.gunFrame, 1, frameCount)])
     : new Set(makeFrameList1Based(config[selectedAnimation], frameCount));
   const defaultSetting = getSheetDefaultAnimationConfig(activeSheet)[selectedAnimation];
-  const defaultFrames = activeSheet.id === 'handguns'
+  const defaultFrames = isGunSheet(activeSheet)
     ? new Set()
     : new Set(defaultSetting ? makeFrameList1Based(defaultSetting, frameCount) : []);
 
@@ -2093,7 +2261,7 @@ function drawSheet() {
 }
 
 function drawPaletteSheetOverlay(scale) {
-  if (activeSheet.id !== 'empress' || !paletteOverlayInput.checked || !paletteCells.length) {
+  if (!isCharacterSheet(activeSheet) || !paletteOverlayInput.checked || !paletteCells.length) {
     return;
   }
 
@@ -2176,7 +2344,7 @@ function getPreviewFrame(now) {
 }
 
 function getPreviewPlaybackState(now) {
-  if (activeSheet.id === 'handguns') {
+  if (isGunSheet(activeSheet)) {
     const frame = clamp(attachmentConfig.gunFrame, 1, Math.max(1, frameCount));
     const frames = [frame];
     manualPreviewFrameIndex = 0;
@@ -2186,7 +2354,7 @@ function getPreviewPlaybackState(now) {
       repeats: false,
       staticFrame: frame,
       frameIndex: 0,
-      signature: `handguns|${frame}|${now > 0}`,
+      signature: `${activeSheet.id}|${frame}|${now > 0}`,
       meta: `Gun Frame ${frame} (1/1)`,
     };
   }
@@ -2229,7 +2397,7 @@ function getCurrentPreviewFrames() {
   if (!frameCount) {
     return [1];
   }
-  if (activeSheet.id === 'handguns') {
+  if (isGunSheet(activeSheet)) {
     return [clamp(attachmentConfig.gunFrame, 1, Math.max(1, frameCount))];
   }
   return makeFrameList1Based(config[selectedAnimation], frameCount);
@@ -2372,7 +2540,7 @@ function drawPreview(frame) {
   lastPreviewBox = { frame, x, y, scale };
   lastPreviewGunBox = null;
   const cleanView = Boolean(attachmentConfig.previewCleanView);
-  if (activeSheet.id === 'handguns') {
+  if (isGunSheet(activeSheet)) {
     if (!cleanView && attachmentModeInput.value !== 'gunGrip') {
       drawGunGripGizmo(x, y, scale);
     }
@@ -2402,7 +2570,7 @@ function drawPreview(frame) {
 
 function drawActiveAttachmentGizmo(frame, frameX, frameY, scale) {
   const mode = attachmentModeInput.value;
-  if (activeSheet.id === 'handguns' || mode === 'gunGrip') {
+  if (isGunSheet(activeSheet) || mode === 'gunGrip') {
     drawGunGripGizmo(frameX, frameY, scale, true);
     return;
   }
@@ -2414,11 +2582,11 @@ function drawActiveAttachmentGizmo(frame, frameX, frameY, scale) {
 }
 
 function drawAttachedGun(context, frameX, frameY, scale, facing, frame, animationName, recordPreviewBox = false, options = {}) {
-  if (!(options.force || shouldRenderGunForAnimation(animationName)) || !handgunImage.complete || !handgunImage.naturalWidth) {
+  if (!(options.force || shouldRenderGunForAnimation(animationName))) {
     return;
   }
 
-  const gun = getHandgunFrameBitmap(attachmentConfig.gunFrame);
+  const gun = getGunFrameBitmap(attachmentConfig.gunFrame);
   if (!gun) {
     return;
   }
@@ -2635,10 +2803,11 @@ function syncAttachmentControls(frame = lastPreviewFrame ?? getPreviewFrame(perf
   attachmentFrameInput.value = clampedFrame;
   attachmentXInput.value = Math.round(point.x);
   attachmentYInput.value = Math.round(point.y);
-  const handgunFrameCount = getHandgunFrameCount();
-  gunFrameInput.max = handgunFrameCount;
-  if (handgunGeometry.frameCount) {
-    attachmentConfig.gunFrame = clamp(attachmentConfig.gunFrame, 1, handgunFrameCount);
+  ensureGunSheetLoaded(attachmentConfig.gunSheet);
+  const gunFrameCount = getGunFrameCount();
+  gunFrameInput.max = gunFrameCount;
+  if (gunSheetGeometries.get(attachmentConfig.gunSheet)?.frameCount) {
+    attachmentConfig.gunFrame = clamp(attachmentConfig.gunFrame, 1, gunFrameCount);
   }
   gunFrameInput.value = attachmentConfig.gunFrame;
   previewGunInput.checked = Boolean(attachmentConfig.previewShowGun);
@@ -2702,7 +2871,7 @@ function shouldRenderGunForAnimation(animationName) {
 function shouldRenderArmOverlay(animationName, options = {}) {
   return (
     (options.force || attachmentConfig.playtestHasGun) &&
-    activeSheet.id === 'empress' &&
+    isCharacterSheet(activeSheet) &&
     (options.force || GUN_ARM_OVERLAY_ANIMATIONS.has(animationName))
   );
 }
@@ -2761,7 +2930,7 @@ function formatRenderMeta(render) {
 }
 
 function drawColliderOverlay(spriteX, spriteY) {
-  if (activeSheet.id === 'handguns') {
+  if (isGunSheet(activeSheet)) {
     return;
   }
 
@@ -2893,7 +3062,7 @@ function drawPlaytest(now) {
   playtestCtx.fillRect(0, getPlaytestFloorY() - 4, playtestCanvas.width, 4);
 
   drawFrameBitmap(playtestCtx, bitmap, baseX, baseY, scale, playtest.facing);
-  if (activeSheet.id !== 'handguns') {
+  if (!isGunSheet(activeSheet)) {
     drawAttachedGun(playtestCtx, baseX, baseY, scale, playtest.facing, frame, animationName);
     drawSyncedArmOverlay(playtestCtx, baseX, baseY, scale, playtest.facing, animationName, frame);
     drawPlaytestShotFlash(now, baseX, baseY, scale, frame);
@@ -3097,10 +3266,10 @@ function getPlaytestFloorY() {
 }
 
 function updateColliderMeta() {
-  if (activeSheet.id === 'handguns') {
+  if (isGunSheet(activeSheet)) {
     colliderMeta.textContent =
       `Magenta: gun grip ${Math.round(attachmentConfig.gunGrip.x)},${Math.round(attachmentConfig.gunGrip.y)}\n` +
-      `Selected gun frame: ${attachmentConfig.gunFrame}`;
+      `Selected ${activeSheet.label} frame: ${attachmentConfig.gunFrame}`;
     return;
   }
 

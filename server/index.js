@@ -13,6 +13,7 @@ const udpMin = Number(process.env.GECKOS_UDP_MIN || 20000);
 const udpMax = Number(process.env.GECKOS_UDP_MAX || udpMin);
 const basePath = normalizeBasePath(process.env.BASE_PATH || process.env.VITE_BASE_PATH || '/');
 const maxSkinIndex = 31;
+const validCharacterIds = new Set(['empress']);
 const lobbies = new Map();
 
 const app = express();
@@ -94,7 +95,7 @@ io.addServer(httpServer);
 
 io.onConnection((channel) => {
   channel.on('create-lobby', (data) => {
-    const lobby = createLobby(channel, sanitizeSkinIndex(data?.skinIndex));
+    const lobby = createLobby(channel, sanitizeSkinIndex(data?.skinIndex), sanitizeCharacterId(data?.characterId));
     channel.emit('lobby-created', {
       code: lobby.code,
       playerId: 'p1',
@@ -121,7 +122,7 @@ io.onConnection((channel) => {
     const playerId = lobby.players.has(channel.id)
       ? lobby.players.get(channel.id).playerId
       : nextPlayerId(lobby);
-    addPlayerToLobby(lobby, channel, playerId, sanitizeSkinIndex(data?.skinIndex));
+    addPlayerToLobby(lobby, channel, playerId, sanitizeSkinIndex(data?.skinIndex), sanitizeCharacterId(data?.characterId));
     channel.emit('lobby-joined', {
       code,
       playerId,
@@ -335,7 +336,7 @@ function getCurrentHashedAssetPath(requestPath) {
   return currentAsset ? path.join(assetsDir, currentAsset) : null;
 }
 
-function createLobby(channel, skinIndex = 0) {
+function createLobby(channel, skinIndex = 0, characterId = 'empress') {
   const code = generateLobbyCode();
   const lobby = {
     code,
@@ -349,17 +350,19 @@ function createLobby(channel, skinIndex = 0) {
     started: false,
   };
   lobbies.set(code, lobby);
-  addPlayerToLobby(lobby, channel, 'p1', skinIndex);
+  addPlayerToLobby(lobby, channel, 'p1', skinIndex, characterId);
   return lobby;
 }
 
-function addPlayerToLobby(lobby, channel, playerId, skinIndex = 0) {
+function addPlayerToLobby(lobby, channel, playerId, skinIndex = 0, characterId = 'empress') {
   const normalizedSkin = sanitizeSkinIndex(skinIndex);
+  const normalizedCharacter = sanitizeCharacterId(characterId);
   channel.join(lobby.code);
   lobby.players.set(channel.id, {
     channelId: channel.id,
     playerId,
     skinIndex: normalizedSkin,
+    characterId: normalizedCharacter,
     joinedAt: Date.now(),
   });
 }
@@ -395,6 +398,7 @@ function publicPlayer(player) {
     playerId: player.playerId,
     channelId: player.channelId,
     skinIndex: sanitizeSkinIndex(player.skinIndex),
+    characterId: sanitizeCharacterId(player.characterId),
   };
 }
 
@@ -404,6 +408,11 @@ function sanitizeSkinIndex(value) {
     return 0;
   }
   return Math.max(0, Math.min(maxSkinIndex, number));
+}
+
+function sanitizeCharacterId(value) {
+  const id = String(value ?? 'empress');
+  return validCharacterIds.has(id) ? id : 'empress';
 }
 
 function generateLobbyCode() {

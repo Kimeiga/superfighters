@@ -672,6 +672,8 @@ export const DEFAULT_GAMEPLAY_CONFIG = {
   pickups: {
     spawnEveryMs: 4500,
     maxOnMap: 8,
+    availableMs: 30000,
+    blinkMs: 10000,
   },
   grenades: {
     startCount: 3,
