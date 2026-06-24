@@ -231,7 +231,9 @@ class FightScene extends Phaser.Scene {
     this.levelSpawns = null;
     this.bootOptions = pendingBootOptions ?? this.bootOptions ?? {};
     this.playerSkinIndices = getBootPlayerSkins(this.bootOptions);
-    this.editorLevel = this.bootOptions?.editorLevel ? getSavedLevel() ?? createCurrentArenaSeed() : null;
+    this.editorLevel = this.bootOptions?.editorLevel
+      ? this.getBootEditorLevel()
+      : null;
     this.worldWidth = WORLD_WIDTH;
     this.worldHeight = WORLD_HEIGHT;
     this.configData = getGameplayConfig();
@@ -373,6 +375,13 @@ class FightScene extends Phaser.Scene {
     const editorWorldHeight = this.editorLevel ? this.editorLevel.height * this.editorLevel.tileSize : 0;
     this.worldWidth = Math.max(WORLD_WIDTH, this.viewportWidth, editorWorldWidth);
     this.worldHeight = Math.max(WORLD_HEIGHT, this.viewportHeight, editorWorldHeight);
+  }
+
+  getBootEditorLevel() {
+    if (this.bootOptions?.useSavedLevel) {
+      return getSavedLevel() ?? createCurrentArenaSeed();
+    }
+    return createCurrentArenaSeed();
   }
 
   getViewportWidth() {
@@ -9703,6 +9712,7 @@ function createBootMenu() {
     startGameFromBoot(overlay, {
       mode: 'local',
       editorLevel: true,
+      useSavedLevel: true,
       skins: getBootSkinSelection(overlay),
     });
   }
