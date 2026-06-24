@@ -1303,11 +1303,7 @@ class FightScene extends Phaser.Scene {
     this.platforms.push(prop);
 
     if (type === 'crate' || type === 'swingingCrate') {
-      const halfX = (prop.displayWidth - 7) / 2;
-      const halfY = (prop.displayHeight - 7) / 2;
-      addVisual(this.add.rectangle(prop.x, prop.y, prop.displayWidth - 7, prop.displayHeight - 7, 0x000000, 0).setStrokeStyle(2, 0x5e3f29, 0.95));
-      addVisual(this.add.line(prop.x, prop.y, -halfX, -halfY, halfX, halfY, 0x5e3f29, 0.92));
-      addVisual(this.add.line(prop.x, prop.y, halfX, -halfY, -halfX, halfY, 0x5e3f29, 0.92));
+      addVisual(this.createCrateMarkings(prop));
     } else if (type === 'barrel') {
       addVisual(this.add.rectangle(prop.x, prop.y - prop.displayHeight * 0.24, prop.displayWidth, 3, 0xffd166, 0.95), 0, -prop.displayHeight * 0.24);
       addVisual(this.add.rectangle(prop.x, prop.y + prop.displayHeight * 0.24, prop.displayWidth, 3, 0xffd166, 0.95), 0, prop.displayHeight * 0.24);
@@ -1332,6 +1328,27 @@ class FightScene extends Phaser.Scene {
     }
 
     return prop;
+  }
+
+  createCrateMarkings(prop) {
+    const graphics = this.add.graphics({ x: prop.x, y: prop.y }).setDepth(prop.depth + 0.1);
+    const inset = Math.max(3, Math.min(prop.displayWidth, prop.displayHeight) * 0.12);
+    const left = -prop.displayWidth / 2 + inset;
+    const right = prop.displayWidth / 2 - inset;
+    const top = -prop.displayHeight / 2 + inset;
+    const bottom = prop.displayHeight / 2 - inset;
+
+    graphics.lineStyle(2, 0x5e3f29, 0.95);
+    graphics.strokeRect(left, top, right - left, bottom - top);
+    graphics.lineStyle(2, 0x5e3f29, 0.92);
+    graphics.beginPath();
+    graphics.moveTo(left, top);
+    graphics.lineTo(right, bottom);
+    graphics.moveTo(right, top);
+    graphics.lineTo(left, bottom);
+    graphics.strokePath();
+
+    return graphics;
   }
 
   findSwingAnchor(tileX, tileY, fallbackX, fallbackY, tileSize) {

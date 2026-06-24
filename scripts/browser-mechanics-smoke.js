@@ -137,6 +137,15 @@ window.__superfightersMechanicsSmoke = (async () => {
     weaponIds.every((id) => scene.textures.exists(`weapon-${id}`)),
     { weaponIds },
   );
+  const crateForMarkingCheck = scene.createLevelProp(520, 360, 30, 30, 'crate');
+  const crateVisuals = crateForMarkingCheck.getData('visuals') ?? [];
+  const crateMarking = crateVisuals.find((visual) => visual.type === 'Graphics');
+  check('crate X markings are drawn as a centered graphics overlay', Boolean(crateMarking) && !crateVisuals.some((visual) => visual.type === 'Line') && Math.abs(crateMarking.x - crateForMarkingCheck.x) < 0.01 && Math.abs(crateMarking.y - crateForMarkingCheck.y) < 0.01, {
+    visualTypes: crateVisuals.map((visual) => visual.type),
+    crate: { x: crateForMarkingCheck.x, y: crateForMarkingCheck.y },
+    marking: crateMarking ? { x: crateMarking.x, y: crateMarking.y } : null,
+  });
+  scene.removeLevelProp(crateForMarkingCheck);
   const smoothFilter = Phaser.Textures.FilterMode.LINEAR;
   check(
     'game textures use smooth filtering for zoomed camera readability',
