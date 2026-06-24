@@ -63,6 +63,29 @@
                 Copy Frame Values
               </button>
               <p id="colliderMeta" class="collider-meta">Collider</p>
+              <section id="palettePanel" class="palette-panel" hidden>
+                <div class="palette-header">
+                  <h3>Palette Debug</h3>
+                  <label class="preview-toggle">
+                    <input id="paletteOverlayInput" type="checkbox" checked />
+                    Sheet Boxes
+                  </label>
+                </div>
+                <div class="palette-controls">
+                  <label>
+                    Source
+                    <select id="paletteSourceInput"></select>
+                  </label>
+                  <label>
+                    Target
+                    <select id="paletteTargetInput"></select>
+                  </label>
+                  <button id="copyPaletteButton" type="button">Copy Palette JSON</button>
+                </div>
+                <p id="paletteMeta" class="palette-meta">Palette cells</p>
+                <div id="paletteGrid" class="palette-grid" aria-label="Detected palettes"></div>
+                <div id="paletteMap" class="palette-map" aria-label="Palette color map"></div>
+              </section>
               <div class="attachment-panel">
                 <h3>Attachment Gizmo</h3>
                 <div class="anchor-grid">

@@ -43,6 +43,20 @@ const CHARACTER_TEXTURE_PREFIX = 'empress-frame';
 const CHARACTER_SKIN_TEXTURE_PREFIX = 'empress-skin-frame';
 const CHARACTER_SKIN_STORAGE_KEY = 'superfighters.characterSkins';
 const CHARACTER_SKIN_COUNT = 32;
+const CHARACTER_PALETTE_GRID = {
+  x: 1,
+  y: 2606,
+  columns: 16,
+  rows: 2,
+  stepX: 39,
+  stepY: 59,
+  previewWidth: 37,
+  previewHeight: 46,
+  swatchLeftPadding: 1,
+  swatchTopGap: 3,
+  swatchSize: 4,
+  swatchCount: 9,
+};
 const HANDGUN_SOURCE_KEY = 'handgun-source';
 const PROJECTILE_TEXTURE_KEY = 'projectile-glow';
 const GRENADE_TIMER_FONT = '14px';
@@ -90,10 +104,19 @@ const CHARACTER_SHEET = {
   maxExtension: 96,
 };
 const CHARACTER_PALETTE_PREVIEW_CELLS = Array.from({ length: CHARACTER_SKIN_COUNT }, (_entry, index) => ({
-  x: 1 + (index % 16) * 39,
-  y: index < 16 ? 2606 : 2665,
-  width: 37,
-  height: 57,
+  x: CHARACTER_PALETTE_GRID.x + (index % CHARACTER_PALETTE_GRID.columns) * CHARACTER_PALETTE_GRID.stepX,
+  y: CHARACTER_PALETTE_GRID.y + Math.floor(index / CHARACTER_PALETTE_GRID.columns) * CHARACTER_PALETTE_GRID.stepY,
+  width: CHARACTER_PALETTE_GRID.previewWidth,
+  height: CHARACTER_PALETTE_GRID.previewHeight,
+  swatchX: CHARACTER_PALETTE_GRID.x +
+    (index % CHARACTER_PALETTE_GRID.columns) * CHARACTER_PALETTE_GRID.stepX +
+    CHARACTER_PALETTE_GRID.swatchLeftPadding,
+  swatchY: CHARACTER_PALETTE_GRID.y +
+    Math.floor(index / CHARACTER_PALETTE_GRID.columns) * CHARACTER_PALETTE_GRID.stepY +
+    CHARACTER_PALETTE_GRID.previewHeight +
+    CHARACTER_PALETTE_GRID.swatchTopGap,
+  swatchSize: CHARACTER_PALETTE_GRID.swatchSize,
+  swatchCount: CHARACTER_PALETTE_GRID.swatchCount,
 }));
 const HANDGUN_SHEET = {
   frameSize: 64,
@@ -572,11 +595,13 @@ class FightScene extends Phaser.Scene {
     const pixels = getImagePixels(sourceImage);
     const paletteCells = detectCharacterPaletteCells(sourceImage, CHARACTER_SHEET, pixels);
     const paletteMaps = buildCharacterPaletteMaps(CHARACTER_SHEET, pixels, paletteCells);
+    const paletteColorRuns = paletteCells.map((cell) => extractPaletteColorRuns(CHARACTER_SHEET, pixels, cell));
     const p1Skin = clampSkinIndex(this.playerSkinIndices?.p1, paletteMaps.length);
     const p2Skin = clampSkinIndex(this.playerSkinIndices?.p2, paletteMaps.length, p1Skin);
     this.playerSkinIndices = { p1: p1Skin, p2: p2Skin };
     this.characterPaletteCells = paletteCells;
     this.characterPaletteMaps = paletteMaps;
+    this.characterPaletteColorRuns = paletteColorRuns;
 
     this.characterFrames = geometry.frameCells;
     this.characterFrameCount = geometry.frameCells.length;
@@ -8031,6 +8056,11 @@ function getImagePixels(sourceImage) {
 }
 
 function detectCharacterPaletteCells(sourceImage, sheet, pixels) {
+  const fixedCells = detectFixedCharacterPaletteCells(pixels);
+  if (fixedCells.length >= 2) {
+    return fixedCells;
+  }
+
   const scanTop = Math.max(0, sourceImage.naturalHeight - 180);
   const scanRight = Math.min(sourceImage.naturalWidth, 760);
   const scanHeight = sourceImage.naturalHeight - scanTop;
@@ -8101,13 +8131,41 @@ function detectCharacterPaletteCells(sourceImage, sheet, pixels) {
   return cells.length >= 2 ? cells : CHARACTER_PALETTE_PREVIEW_CELLS;
 }
 
+function detectFixedCharacterPaletteCells(pixels) {
+  const cells = [];
+  for (let index = 0; index < CHARACTER_SKIN_COUNT; index += 1) {
+    const cell = CHARACTER_PALETTE_PREVIEW_CELLS[index];
+    if (
+      !cell ||
+      cell.x + cell.width > pixels.width ||
+      cell.y + cell.height > pixels.height ||
+      cell.swatchX + cell.swatchCount * cell.swatchSize > pixels.width ||
+      cell.swatchY + cell.swatchSize > pixels.height
+    ) {
+      continue;
+    }
+    if (countSpritePixelsInRect(CHARACTER_SHEET, pixels, cell.x, cell.y, cell.width, cell.height) >= 180) {
+      cells.push({ ...cell });
+    }
+  }
+  return cells;
+}
+
 function buildCharacterPaletteMaps(sheet, pixels, paletteCells) {
   if (!paletteCells.length) {
     return [new Map()];
   }
 
   const baseCell = paletteCells[0];
+  const baseRuns = extractPaletteColorRuns(sheet, pixels, baseCell);
   return paletteCells.map((targetCell) => {
+    const targetRuns = extractPaletteColorRuns(sheet, pixels, targetCell);
+    const stripMap = buildPaletteMapFromColorRuns(baseRuns, targetRuns);
+    const diffMap = buildPaletteMapFromSpriteDiff(sheet, pixels, baseCell, targetCell, stripMap);
+    if (diffMap.size >= 3) {
+      return diffMap;
+    }
+
     const replacementCounts = new Map();
     const width = Math.min(baseCell.width, targetCell.width);
     const height = Math.min(baseCell.height, targetCell.height);
@@ -8154,6 +8212,138 @@ function buildCharacterPaletteMaps(sheet, pixels, paletteCells) {
     }
     return paletteMap;
   });
+}
+
+function extractPaletteColorRuns(sheet, pixels, cell) {
+  const runs = [];
+  const swatchSize = cell.swatchSize ?? CHARACTER_PALETTE_GRID.swatchSize;
+  const swatchCount = cell.swatchCount ?? CHARACTER_PALETTE_GRID.swatchCount;
+  const swatchX = cell.swatchX ?? cell.x + CHARACTER_PALETTE_GRID.swatchLeftPadding;
+  const swatchY = cell.swatchY ?? cell.y + cell.height + CHARACTER_PALETTE_GRID.swatchTopGap;
+
+  for (let swatch = 0; swatch < swatchCount; swatch += 1) {
+    const x = swatchX + swatch * swatchSize;
+    const y = swatchY;
+    const key = getDominantPaletteColorKeyInRect(sheet, pixels, x, y, swatchSize, swatchSize);
+    if (!key) {
+      continue;
+    }
+    runs.push({
+      x,
+      y,
+      width: swatchSize,
+      height: swatchSize,
+      color: parseRgbKey(key),
+      key,
+      swatch,
+    });
+  }
+
+  return runs;
+}
+
+function buildPaletteMapFromSpriteDiff(sheet, pixels, baseCell, targetCell, seedMap = new Map()) {
+  const replacementCounts = new Map();
+  const width = Math.min(baseCell.width, targetCell.width);
+  const height = Math.min(baseCell.height, targetCell.height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const baseX = baseCell.x + x;
+      const baseY = baseCell.y + y;
+      const targetX = targetCell.x + x;
+      const targetY = targetCell.y + y;
+      if (
+        !isPaletteSpritePixel(sheet, pixels, baseX, baseY) ||
+        !isPaletteSpritePixel(sheet, pixels, targetX, targetY)
+      ) {
+        continue;
+      }
+      const baseIndex = (baseY * pixels.width + baseX) * 4;
+      const targetIndex = (targetY * pixels.width + targetX) * 4;
+      const sourceKey = rgbKey(pixels.data[baseIndex], pixels.data[baseIndex + 1], pixels.data[baseIndex + 2]);
+      const targetKey = rgbKey(pixels.data[targetIndex], pixels.data[targetIndex + 1], pixels.data[targetIndex + 2]);
+      if (sourceKey === targetKey || seedMap.has(sourceKey)) {
+        continue;
+      }
+      if (!replacementCounts.has(sourceKey)) {
+        replacementCounts.set(sourceKey, new Map());
+      }
+      const targetCounts = replacementCounts.get(sourceKey);
+      const entry = targetCounts.get(targetKey) ?? {
+        color: [pixels.data[targetIndex], pixels.data[targetIndex + 1], pixels.data[targetIndex + 2]],
+        count: 0,
+      };
+      entry.count += 1;
+      targetCounts.set(targetKey, entry);
+    }
+  }
+
+  const paletteMap = new Map(seedMap);
+  for (const [sourceKey, targetCounts] of replacementCounts.entries()) {
+    let best = null;
+    for (const entry of targetCounts.values()) {
+      if (!best || entry.count > best.count) {
+        best = entry;
+      }
+    }
+    if (best && best.count >= 2) {
+      paletteMap.set(sourceKey, best.color);
+    }
+  }
+  return paletteMap;
+}
+
+function buildPaletteMapFromColorRuns(baseRuns, targetRuns) {
+  const paletteMap = new Map();
+  const count = Math.min(baseRuns.length, targetRuns.length);
+  for (let index = 0; index < count; index += 1) {
+    const source = baseRuns[index];
+    const target = targetRuns[index];
+    if (!source || !target || paletteMap.has(source.key)) {
+      continue;
+    }
+    paletteMap.set(source.key, target.color);
+  }
+  return paletteMap;
+}
+
+function getDominantPaletteColorKeyInRect(sheet, pixels, startX, startY, width, height) {
+  const counts = new Map();
+  for (let y = startY; y < startY + height; y += 1) {
+    for (let x = startX; x < startX + width; x += 1) {
+      if (!isPaletteSpritePixel(sheet, pixels, x, y)) {
+        continue;
+      }
+      const index = (y * pixels.width + x) * 4;
+      const key = rgbKey(pixels.data[index], pixels.data[index + 1], pixels.data[index + 2]);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  return getDominantPaletteColorKey(counts);
+}
+
+function getDominantPaletteColorKey(counts) {
+  let bestKey = null;
+  let bestCount = 0;
+  for (const [key, count] of counts.entries()) {
+    if (count > bestCount) {
+      bestKey = key;
+      bestCount = count;
+    }
+  }
+  return bestCount >= 2 ? bestKey : null;
+}
+
+function countSpritePixelsInRect(sheet, pixels, startX, startY, width, height) {
+  let count = 0;
+  for (let y = startY; y < startY + height; y += 1) {
+    for (let x = startX; x < startX + width; x += 1) {
+      if (isSpritePixel(sheet, pixels, x, y)) {
+        count += 1;
+      }
+    }
+  }
+  return count;
 }
 
 function detectAssetRowStarts(sourceImage, sheet, pixels) {
@@ -8276,6 +8466,20 @@ function isNearColor(data, index, color, tolerance = 3) {
 
 function rgbKey(red, green, blue) {
   return `${red},${green},${blue}`;
+}
+
+function parseRgbKey(key) {
+  return key.split(',').map((part) => Number.parseInt(part, 10));
+}
+
+function colorKeysNear(leftKey, rightKey, tolerance = 3) {
+  const left = parseRgbKey(leftKey);
+  const right = parseRgbKey(rightKey);
+  return (
+    Math.abs(left[0] - right[0]) <= tolerance &&
+    Math.abs(left[1] - right[1]) <= tolerance &&
+    Math.abs(left[2] - right[2]) <= tolerance
+  );
 }
 
 function collapseContiguousRuns(values) {

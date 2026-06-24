@@ -137,6 +137,30 @@ window.__superfightersMechanicsSmoke = (async () => {
     weaponIds.every((id) => scene.textures.exists(`weapon-${id}`)),
     { weaponIds },
   );
+  const paletteCells = scene.characterPaletteCells ?? [];
+  const paletteRuns = scene.characterPaletteColorRuns ?? [];
+  const paletteMaps = scene.characterPaletteMaps ?? [];
+  check(
+    'character palettes use fixed mini-sprite boxes and 4px swatch maps',
+    paletteCells.length >= 16 &&
+      paletteCells[0]?.x === 1 &&
+      paletteCells[0]?.y === 2606 &&
+      paletteCells.every((cell) => (
+        cell.width === 37 &&
+        cell.height === 46 &&
+        cell.swatchY === cell.y + cell.height + 3 &&
+        cell.swatchSize === 4
+      )) &&
+      paletteRuns[0]?.length >= 6 &&
+      paletteRuns[1]?.length >= 6 &&
+      paletteMaps[1]?.size >= 6,
+    {
+      cells: paletteCells.length,
+      firstCell: paletteCells[0],
+      runCounts: paletteRuns.slice(0, 4).map((runs) => runs.length),
+      mapSizes: paletteMaps.slice(0, 4).map((map) => map.size),
+    },
+  );
   const crateForMarkingCheck = scene.createLevelProp(520, 360, 30, 30, 'crate');
   const crateVisuals = crateForMarkingCheck.getData('visuals') ?? [];
   const crateMarking = crateVisuals.find((visual) => visual.type === 'Graphics');

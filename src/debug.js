@@ -57,6 +57,21 @@ const DEFAULT_ATTACHMENT_CONFIG = {
   previewCleanView: false,
   playtestHasGun: true,
 };
+const CHARACTER_PALETTE_COUNT = 32;
+const CHARACTER_PALETTE_GRID = {
+  x: 1,
+  y: 2606,
+  columns: 16,
+  rows: 2,
+  stepX: 39,
+  stepY: 59,
+  previewWidth: 37,
+  previewHeight: 46,
+  swatchLeftPadding: 1,
+  swatchTopGap: 3,
+  swatchSize: 4,
+  swatchCount: 9,
+};
 const GUN_ATTACHMENT_ANIMATIONS = new Set([
   'idleAimStraight',
   'idleAimUp',
@@ -157,6 +172,14 @@ const sheetMeta = document.querySelector('#sheetMeta');
 const previewTitle = document.querySelector('#previewTitle');
 const previewMeta = document.querySelector('#previewMeta');
 const colliderMeta = document.querySelector('#colliderMeta');
+const palettePanel = document.querySelector('#palettePanel');
+const paletteOverlayInput = document.querySelector('#paletteOverlayInput');
+const paletteSourceInput = document.querySelector('#paletteSourceInput');
+const paletteTargetInput = document.querySelector('#paletteTargetInput');
+const copyPaletteButton = document.querySelector('#copyPaletteButton');
+const paletteMeta = document.querySelector('#paletteMeta');
+const paletteGrid = document.querySelector('#paletteGrid');
+const paletteMap = document.querySelector('#paletteMap');
 const playtestMeta = document.querySelector('#playtestMeta');
 const statusText = document.querySelector('#statusText');
 const anchorFrameInput = document.querySelector('#anchorFrameInput');
@@ -198,6 +221,10 @@ let manualPreviewFrameIndex = 0;
 let previewAnimationStartedAt = performance.now();
 let previewPlaybackSignature = '';
 let previewStarted = false;
+let paletteCells = [];
+let paletteColorRuns = [];
+let selectedPaletteSource = 0;
+let selectedPaletteTarget = 1;
 
 const playtest = {
   x: 210,
@@ -243,6 +270,7 @@ image.onload = () => {
   frameCells = geometry.frameCells;
   frameCount = frameCells.length;
   frameCanvasCache = new Map();
+  refreshPaletteDebugState();
   clampConfigToAvailableFrames();
 
   sheetCanvas.width = image.naturalWidth * activeSheet.sheetScale;
@@ -261,6 +289,7 @@ image.onload = () => {
     `${titleGaps.length} title gaps${activeSheet.titleHeight ? `, title height ${activeSheet.titleHeight}px` : ''}`;
 
   buildRows();
+  buildPaletteDebug();
   buildGameplayTuning();
   selectAnimation(config[selectedAnimation] ? selectedAnimation : DEFAULT_PREVIEW_ANIMATION);
   syncAttachmentControls();
@@ -513,6 +542,42 @@ copyFrameValuesButton.addEventListener('click', async () => {
   }
 });
 
+paletteOverlayInput.addEventListener('change', () => {
+  drawSheet();
+});
+
+paletteSourceInput.addEventListener('change', () => {
+  selectedPaletteSource = clamp(
+    Number.parseInt(paletteSourceInput.value, 10) || 0,
+    0,
+    Math.max(0, paletteCells.length - 1),
+  );
+  buildPaletteDebug();
+  drawSheet();
+});
+
+paletteTargetInput.addEventListener('change', () => {
+  selectedPaletteTarget = clamp(
+    Number.parseInt(paletteTargetInput.value, 10) || 0,
+    0,
+    Math.max(0, paletteCells.length - 1),
+  );
+  buildPaletteDebug();
+  drawSheet();
+});
+
+copyPaletteButton.addEventListener('click', async () => {
+  const payload = createPaletteDebugPayload();
+  const json = JSON.stringify(payload, null, 2);
+  try {
+    await navigator.clipboard.writeText(json);
+    setStatus(`Copied ${payload.colorPairs.length} palette color pairs.`);
+  } catch {
+    window.prompt('Copy palette debug JSON', json);
+    setStatus(`Prepared ${payload.colorPairs.length} palette color pairs.`);
+  }
+});
+
 window.addEventListener('keydown', (event) => {
   if (isTypingIntoField(event.target) || !isPlaytestKey(event.code)) {
     return;
@@ -567,7 +632,10 @@ function loadSheet(sheetId) {
   previewAnimationStartedAt = performance.now();
   previewPlaybackSignature = '';
   frameCount = 0;
+  paletteCells = [];
+  paletteColorRuns = [];
   buildSheetTabs();
+  buildPaletteDebug();
   sheetMeta.textContent = `Loading ${activeSheet.label}`;
   image.src = `${activeSheet.url}?v=${Date.now()}`;
 }
@@ -1549,6 +1617,388 @@ function selectAnimation(name) {
   drawSheet();
 }
 
+function refreshPaletteDebugState() {
+  if (activeSheet.id !== 'empress' || !image.naturalWidth) {
+    paletteCells = [];
+    paletteColorRuns = [];
+    selectedPaletteSource = 0;
+    selectedPaletteTarget = 0;
+    return;
+  }
+
+  const pixels = getSheetPixels();
+  paletteCells = detectCharacterPaletteCells(pixels);
+  paletteColorRuns = paletteCells.map((cell) => extractPaletteColorRuns(pixels, cell));
+  selectedPaletteSource = clamp(selectedPaletteSource, 0, Math.max(0, paletteCells.length - 1));
+  selectedPaletteTarget = clamp(
+    selectedPaletteTarget === selectedPaletteSource ? selectedPaletteSource + 1 : selectedPaletteTarget,
+    0,
+    Math.max(0, paletteCells.length - 1),
+  );
+}
+
+function detectCharacterPaletteCells(pixels) {
+  const cells = [];
+  for (let index = 0; index < CHARACTER_PALETTE_COUNT; index += 1) {
+    const column = index % CHARACTER_PALETTE_GRID.columns;
+    const row = Math.floor(index / CHARACTER_PALETTE_GRID.columns);
+    const cell = {
+      x: CHARACTER_PALETTE_GRID.x + column * CHARACTER_PALETTE_GRID.stepX,
+      y: CHARACTER_PALETTE_GRID.y + row * CHARACTER_PALETTE_GRID.stepY,
+      width: CHARACTER_PALETTE_GRID.previewWidth,
+      height: CHARACTER_PALETTE_GRID.previewHeight,
+      swatchX: CHARACTER_PALETTE_GRID.x + column * CHARACTER_PALETTE_GRID.stepX + CHARACTER_PALETTE_GRID.swatchLeftPadding,
+      swatchY: CHARACTER_PALETTE_GRID.y + row * CHARACTER_PALETTE_GRID.stepY + CHARACTER_PALETTE_GRID.previewHeight + CHARACTER_PALETTE_GRID.swatchTopGap,
+      swatchSize: CHARACTER_PALETTE_GRID.swatchSize,
+      swatchCount: CHARACTER_PALETTE_GRID.swatchCount,
+    };
+    if (
+      cell.x + cell.width > pixels.width ||
+      cell.y + cell.height > pixels.height ||
+      cell.swatchX + cell.swatchCount * cell.swatchSize > pixels.width ||
+      cell.swatchY + cell.swatchSize > pixels.height
+    ) {
+      continue;
+    }
+    if (countSpritePixelsInRect(pixels, cell.x, cell.y, cell.width, cell.height) >= 180) {
+      cells.push(cell);
+    }
+  }
+  return cells;
+}
+
+function countSpritePixelsInRect(pixels, startX, startY, width, height) {
+  let count = 0;
+  for (let y = startY; y < startY + height; y += 1) {
+    for (let x = startX; x < startX + width; x += 1) {
+      if (isSpritePixel(pixels, x, y)) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+function extractPaletteColorRuns(pixels, cell) {
+  const runs = [];
+  const swatchSize = cell.swatchSize ?? CHARACTER_PALETTE_GRID.swatchSize;
+  const swatchCount = cell.swatchCount ?? CHARACTER_PALETTE_GRID.swatchCount;
+  const swatchX = cell.swatchX ?? cell.x + CHARACTER_PALETTE_GRID.swatchLeftPadding;
+  const swatchY = cell.swatchY ?? cell.y + cell.height + CHARACTER_PALETTE_GRID.swatchTopGap;
+
+  for (let swatch = 0; swatch < swatchCount; swatch += 1) {
+    const x = swatchX + swatch * swatchSize;
+    const y = swatchY;
+    const key = getDominantColorKeyInRect(pixels, x, y, swatchSize, swatchSize);
+    if (!key) {
+      continue;
+    }
+    runs.push({
+      x,
+      y,
+      width: swatchSize,
+      height: swatchSize,
+      color: parseRgbKey(key),
+      key,
+      swatch,
+    });
+  }
+
+  return runs;
+}
+
+function getDominantColorKeyInRect(pixels, startX, startY, width, height) {
+  const counts = new Map();
+  for (let y = startY; y < startY + height; y += 1) {
+    for (let x = startX; x < startX + width; x += 1) {
+      if (!isSpritePixel(pixels, x, y)) {
+        continue;
+      }
+      const index = (y * pixels.width + x) * 4;
+      const key = rgbKey(pixels.data[index], pixels.data[index + 1], pixels.data[index + 2]);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  return getDominantColorKey(counts);
+}
+
+function getDominantColorKey(counts) {
+  let bestKey = null;
+  let bestCount = 0;
+  for (const [key, count] of counts.entries()) {
+    if (count > bestCount) {
+      bestKey = key;
+      bestCount = count;
+    }
+  }
+  return bestCount >= 2 ? bestKey : null;
+}
+
+function buildPaletteDebug() {
+  if (!palettePanel) {
+    return;
+  }
+
+  const visible = activeSheet.id === 'empress' && paletteCells.length > 1;
+  palettePanel.hidden = !visible;
+  if (!visible) {
+    paletteGrid.innerHTML = '';
+    paletteMap.innerHTML = '';
+    paletteMeta.textContent = 'Palette cells';
+    return;
+  }
+
+  syncPaletteSelect(paletteSourceInput, selectedPaletteSource);
+  syncPaletteSelect(paletteTargetInput, selectedPaletteTarget);
+  renderPaletteGrid();
+  renderPaletteColorMap();
+}
+
+function syncPaletteSelect(select, selectedIndex) {
+  const currentValue = String(selectedIndex);
+  if (select.options.length !== paletteCells.length) {
+    select.innerHTML = '';
+    for (let index = 0; index < paletteCells.length; index += 1) {
+      const option = document.createElement('option');
+      option.value = String(index);
+      option.textContent = `Palette ${index + 1}`;
+      select.append(option);
+    }
+  }
+  select.value = currentValue;
+}
+
+function renderPaletteGrid() {
+  paletteGrid.innerHTML = '';
+  for (let index = 0; index < paletteCells.length; index += 1) {
+    const cell = paletteCells[index];
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = [
+      'palette-cell-button',
+      index === selectedPaletteSource ? 'is-source' : '',
+      index === selectedPaletteTarget ? 'is-target' : '',
+    ].filter(Boolean).join(' ');
+    button.title = `Palette ${index + 1}: ${cell.x},${cell.y} ${cell.width}x${cell.height}`;
+    button.addEventListener('click', (event) => {
+      if (event.shiftKey || event.altKey) {
+        selectedPaletteSource = index;
+      } else {
+        selectedPaletteTarget = index;
+      }
+      buildPaletteDebug();
+      drawSheet();
+    });
+
+    const preview = document.createElement('span');
+    preview.className = 'palette-cell-preview';
+    preview.style.backgroundImage = `url("${activeSheet.url}")`;
+    preview.style.backgroundPosition = `-${cell.x}px -${cell.y}px`;
+    preview.style.backgroundSize = `${image.naturalWidth}px ${image.naturalHeight}px`;
+
+    const label = document.createElement('span');
+    label.className = 'palette-cell-index';
+    label.textContent = String(index + 1);
+    button.append(preview, label);
+    paletteGrid.append(button);
+  }
+}
+
+function renderPaletteColorMap() {
+  const sourceRuns = paletteColorRuns[selectedPaletteSource] ?? [];
+  const targetRuns = paletteColorRuns[selectedPaletteTarget] ?? [];
+  const pairs = createPaletteColorPairs(selectedPaletteSource, selectedPaletteTarget);
+  const diff = analyzePaletteSpriteDiff(selectedPaletteSource, selectedPaletteTarget, pairs);
+  paletteMeta.textContent =
+    `${paletteCells.length} palette cells. ` +
+    `Source ${selectedPaletteSource + 1}: ${sourceRuns.length} swatches. ` +
+    `Target ${selectedPaletteTarget + 1}: ${targetRuns.length} swatches. ` +
+    `Mapped ${pairs.length} colors, ${diff.unmappedChanged} unmapped changed pixels. Shift/Option-click a palette to set source.`;
+
+  paletteMap.innerHTML = '';
+  for (const pair of pairs) {
+    const item = document.createElement('div');
+    item.className = 'palette-color-pair';
+    item.title = `${rgbToHex(pair.from)} -> ${rgbToHex(pair.to)} (${pair.source})`;
+    const source = document.createElement('span');
+    source.style.background = rgbCss(pair.from);
+    const target = document.createElement('span');
+    target.style.background = rgbCss(pair.to);
+    item.append(source, target);
+    paletteMap.append(item);
+  }
+}
+
+function createPaletteColorPairs(sourceIndex, targetIndex) {
+  const sourceRuns = paletteColorRuns[sourceIndex] ?? [];
+  const targetRuns = paletteColorRuns[targetIndex] ?? [];
+  const count = Math.min(sourceRuns.length, targetRuns.length);
+  const seen = new Set();
+  const pairs = [];
+  for (let index = 0; index < count; index += 1) {
+    const from = sourceRuns[index]?.color;
+    const to = targetRuns[index]?.color;
+    if (!from || !to) {
+      continue;
+    }
+    const key = rgbKey(from[0], from[1], from[2]);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    pairs.push({ from, to, source: 'swatch' });
+  }
+  pairs.push(...createPaletteSpriteDiffPairs(sourceIndex, targetIndex, seen));
+  return pairs;
+}
+
+function createPaletteSpriteDiffPairs(sourceIndex, targetIndex, seen = new Set()) {
+  const source = paletteCells[sourceIndex];
+  const target = paletteCells[targetIndex];
+  if (!source || !target) {
+    return [];
+  }
+
+  const pixels = getSheetPixels();
+  const replacementCounts = new Map();
+  const width = Math.min(source.width, target.width);
+  const height = Math.min(source.height, target.height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const sourceX = source.x + x;
+      const sourceY = source.y + y;
+      const targetX = target.x + x;
+      const targetY = target.y + y;
+      if (!isSpritePixel(pixels, sourceX, sourceY) || !isSpritePixel(pixels, targetX, targetY)) {
+        continue;
+      }
+      const sourceIndexPx = (sourceY * pixels.width + sourceX) * 4;
+      const targetIndexPx = (targetY * pixels.width + targetX) * 4;
+      const sourceKey = rgbKey(pixels.data[sourceIndexPx], pixels.data[sourceIndexPx + 1], pixels.data[sourceIndexPx + 2]);
+      const targetKey = rgbKey(pixels.data[targetIndexPx], pixels.data[targetIndexPx + 1], pixels.data[targetIndexPx + 2]);
+      if (sourceKey === targetKey || seen.has(sourceKey)) {
+        continue;
+      }
+      if (!replacementCounts.has(sourceKey)) {
+        replacementCounts.set(sourceKey, new Map());
+      }
+      const targetCounts = replacementCounts.get(sourceKey);
+      const entry = targetCounts.get(targetKey) ?? {
+        color: [pixels.data[targetIndexPx], pixels.data[targetIndexPx + 1], pixels.data[targetIndexPx + 2]],
+        count: 0,
+      };
+      entry.count += 1;
+      targetCounts.set(targetKey, entry);
+    }
+  }
+
+  const pairs = [];
+  for (const [sourceKey, targetCounts] of replacementCounts.entries()) {
+    let best = null;
+    for (const entry of targetCounts.values()) {
+      if (!best || entry.count > best.count) {
+        best = entry;
+      }
+    }
+    if (best && best.count >= 2) {
+      seen.add(sourceKey);
+      pairs.push({ from: parseRgbKey(sourceKey), to: best.color, source: 'sprite-diff', count: best.count });
+    }
+  }
+  return pairs;
+}
+
+function analyzePaletteSpriteDiff(sourceIndex, targetIndex, pairs = createPaletteColorPairs(sourceIndex, targetIndex)) {
+  const source = paletteCells[sourceIndex];
+  const target = paletteCells[targetIndex];
+  if (!source || !target) {
+    return { compared: 0, changed: 0, mappedChanged: 0, unmappedChanged: 0, unmappedColors: [] };
+  }
+
+  const pairMap = new Map(pairs.map((pair) => [rgbKey(pair.from[0], pair.from[1], pair.from[2]), rgbKey(pair.to[0], pair.to[1], pair.to[2])]));
+  const pixels = getSheetPixels();
+  const unmappedCounts = new Map();
+  const width = Math.min(source.width, target.width);
+  const height = Math.min(source.height, target.height);
+  let compared = 0;
+  let changed = 0;
+  let mappedChanged = 0;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const sourceX = source.x + x;
+      const sourceY = source.y + y;
+      const targetX = target.x + x;
+      const targetY = target.y + y;
+      if (!isSpritePixel(pixels, sourceX, sourceY) || !isSpritePixel(pixels, targetX, targetY)) {
+        continue;
+      }
+      compared += 1;
+      const sourceIndexPx = (sourceY * pixels.width + sourceX) * 4;
+      const targetIndexPx = (targetY * pixels.width + targetX) * 4;
+      const sourceKey = rgbKey(pixels.data[sourceIndexPx], pixels.data[sourceIndexPx + 1], pixels.data[sourceIndexPx + 2]);
+      const targetKey = rgbKey(pixels.data[targetIndexPx], pixels.data[targetIndexPx + 1], pixels.data[targetIndexPx + 2]);
+      if (sourceKey === targetKey) {
+        continue;
+      }
+      changed += 1;
+      if (pairMap.get(sourceKey) === targetKey) {
+        mappedChanged += 1;
+        continue;
+      }
+      const issueKey = `${sourceKey}->${targetKey}`;
+      unmappedCounts.set(issueKey, (unmappedCounts.get(issueKey) ?? 0) + 1);
+    }
+  }
+
+  const unmappedColors = [...unmappedCounts.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 12)
+    .map(([key, count]) => {
+      const [from, to] = key.split('->');
+      return { from: rgbToHex(parseRgbKey(from)), to: rgbToHex(parseRgbKey(to)), count };
+    });
+
+  return {
+    compared,
+    changed,
+    mappedChanged,
+    unmappedChanged: changed - mappedChanged,
+    unmappedColors,
+  };
+}
+
+function createPaletteDebugPayload() {
+  const source = paletteCells[selectedPaletteSource] ?? null;
+  const target = paletteCells[selectedPaletteTarget] ?? null;
+  return {
+    sheet: activeSheet.id,
+    sourcePalette: selectedPaletteSource + 1,
+    targetPalette: selectedPaletteTarget + 1,
+    source,
+    target,
+    sourceSwatches: (paletteColorRuns[selectedPaletteSource] ?? []).map(formatPaletteRun),
+    targetSwatches: (paletteColorRuns[selectedPaletteTarget] ?? []).map(formatPaletteRun),
+    colorPairs: createPaletteColorPairs(selectedPaletteSource, selectedPaletteTarget).map((pair) => ({
+      from: rgbToHex(pair.from),
+      to: rgbToHex(pair.to),
+      source: pair.source,
+      count: pair.count,
+    })),
+    spriteDiff: analyzePaletteSpriteDiff(selectedPaletteSource, selectedPaletteTarget),
+  };
+}
+
+function formatPaletteRun(run) {
+  return {
+    x: run.x,
+    y: run.y,
+    width: run.width,
+    height: run.height,
+    swatch: run.swatch,
+    color: rgbToHex(run.color),
+  };
+}
+
 function syncRowsFromConfig() {
   for (const input of animationRows.querySelectorAll('input')) {
     const { animation, field } = input.dataset;
@@ -1614,6 +2064,53 @@ function drawSheet() {
       sheetCtx.textBaseline = 'top';
       sheetCtx.fillText(String(frame), x + 6, y + 5);
     }
+  }
+
+  drawPaletteSheetOverlay(scale);
+}
+
+function drawPaletteSheetOverlay(scale) {
+  if (activeSheet.id !== 'empress' || !paletteOverlayInput.checked || !paletteCells.length) {
+    return;
+  }
+
+  sheetCtx.save();
+  sheetCtx.font = '10px FusionPixel12, monospace';
+  sheetCtx.textBaseline = 'top';
+  for (let index = 0; index < paletteCells.length; index += 1) {
+    const cell = paletteCells[index];
+    const isSource = index === selectedPaletteSource;
+    const isTarget = index === selectedPaletteTarget;
+    const color = isSource && isTarget ? '#ff6cda' : isSource ? '#35f2ff' : isTarget ? '#ffd166' : 'rgba(255,255,255,0.52)';
+    const x = cell.x * scale;
+    const y = cell.y * scale;
+    const width = cell.width * scale;
+    const height = cell.height * scale;
+    sheetCtx.strokeStyle = color;
+    sheetCtx.lineWidth = isSource || isTarget ? Math.max(2, 3 * scale) : Math.max(1, scale);
+    sheetCtx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+    sheetCtx.fillStyle = 'rgba(12, 18, 29, 0.82)';
+    sheetCtx.fillRect(x + 2, y + 2, 22, 14);
+    sheetCtx.fillStyle = '#ffffff';
+    sheetCtx.fillText(String(index + 1), x + 5, y + 4);
+  }
+
+  drawPaletteRunOverlay(selectedPaletteSource, '#35f2ff', scale);
+  drawPaletteRunOverlay(selectedPaletteTarget, '#ffd166', scale);
+  sheetCtx.restore();
+}
+
+function drawPaletteRunOverlay(paletteIndex, color, scale) {
+  const runs = paletteColorRuns[paletteIndex] ?? [];
+  sheetCtx.strokeStyle = color;
+  sheetCtx.lineWidth = Math.max(1, 2 * scale);
+  for (const run of runs) {
+    sheetCtx.strokeRect(
+      run.x * scale + 0.5,
+      run.y * scale + 0.5,
+      run.width * scale - 1,
+      run.height * scale - 1,
+    );
   }
 }
 
@@ -2560,6 +3057,32 @@ function isTypingIntoField(target) {
   return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName);
 }
 
+function rgbKey(red, green, blue) {
+  return `${red},${green},${blue}`;
+}
+
+function parseRgbKey(key) {
+  return key.split(',').map((part) => Number.parseInt(part, 10));
+}
+
+function colorKeysNear(leftKey, rightKey, tolerance = 3) {
+  const left = parseRgbKey(leftKey);
+  const right = parseRgbKey(rightKey);
+  return (
+    Math.abs(left[0] - right[0]) <= tolerance &&
+    Math.abs(left[1] - right[1]) <= tolerance &&
+    Math.abs(left[2] - right[2]) <= tolerance
+  );
+}
+
+function rgbCss(color) {
+  return `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+}
+
+function rgbToHex(color) {
+  return `#${color.map((part) => clamp(Math.round(part), 0, 255).toString(16).padStart(2, '0')).join('')}`;
+}
+
 function hexToRgba(hex, alpha) {
   const value = hex.replace('#', '');
   const red = Number.parseInt(value.slice(0, 2), 16);
@@ -2604,6 +3127,7 @@ function setPath(object, path, value) {
 window.__superfightersDebug = {
   exportMapping: () => createExportPayload(),
   exportCurrentFrameValues: () => createCurrentAnimationFrameValuesPayload(),
+  exportPaletteDebug: () => createPaletteDebugPayload(),
   getFrameSource: (frame) => getFrameSource(frame),
   getFrameBitmapInfo: (frame) => {
     const bitmap = getFrameBitmap(frame);

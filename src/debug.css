@@ -374,6 +374,136 @@ textarea {
   line-height: 1.45;
 }
 
+.palette-panel {
+  margin-top: 12px;
+  border-top: 1px solid #263448;
+  padding-top: 10px;
+}
+
+.palette-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.palette-header h3 {
+  margin: 0;
+  color: #8de7ff;
+  font-size: 13px;
+}
+
+.palette-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(130px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.palette-controls label {
+  display: grid;
+  gap: 4px;
+  color: #b7c2d2;
+  font-size: 11px;
+}
+
+.palette-controls select,
+.palette-controls button {
+  min-height: 32px;
+  border: 1px solid #344257;
+  border-radius: 5px;
+  background: #0d1420;
+  color: #ffffff;
+  padding: 7px 8px;
+}
+
+.palette-controls button {
+  grid-column: 1 / -1;
+  cursor: pointer;
+}
+
+.palette-meta {
+  min-height: 32px;
+  margin: 8px 0 0;
+  color: #dbe7ff;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.palette-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(43px, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.palette-cell-button {
+  position: relative;
+  min-height: 54px;
+  border: 1px solid #344257;
+  border-radius: 5px;
+  background: #0d1420;
+  color: #ffffff;
+  padding: 2px;
+  cursor: pointer;
+}
+
+.palette-cell-button.is-source {
+  border-color: #35f2ff;
+}
+
+.palette-cell-button.is-target {
+  border-color: #ffd166;
+}
+
+.palette-cell-button.is-source.is-target {
+  border-color: #ff6cda;
+}
+
+.palette-cell-preview {
+  display: block;
+  width: 37px;
+  height: 46px;
+  margin: 0 auto;
+  background-repeat: no-repeat;
+  background-size: auto;
+  image-rendering: pixelated;
+}
+
+.palette-cell-index {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  min-width: 14px;
+  border-radius: 3px;
+  background: rgba(12, 18, 29, 0.86);
+  color: #ffffff;
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
+}
+
+.palette-map {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.palette-color-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 28px;
+  overflow: hidden;
+  border: 1px solid #344257;
+  border-radius: 5px;
+  background: #0d1420;
+}
+
+.palette-color-pair span {
+  min-width: 0;
+}
+
 .animation-rows {
   display: grid;
   gap: 8px;
