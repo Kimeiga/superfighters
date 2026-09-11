@@ -1,0 +1,113 @@
+name: Prototype arcade delivery
+on:
+  push:
+    branches: [prototype-arcade-20260911]
+    paths: [.github/workflows/prototype-arcade-delivery.yml]
+permissions:
+  contents: write
+jobs:
+  deliver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Repair directional input and add regression tests
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('prototype-arcade')
+          for name,old,new in [
+            ('lib/util.mjs','if (length > 2) {','if ((input.dx || input.dy) ? length > 0 : length > 2) {'),
+            ('games/scrap-sumo.mjs','if(d>3){','if((input.dx||input.dy)?d>0:d>3){')]:
+            p=root/name;s=p.read_text()
+            if old in s:
+              assert s.count(old)==1, name
+              p.write_text(s.replace(old,new))
+            else: assert new in s, name
+          p=root/'tests/games.test.mjs'
+          s=p.read_text()
+          s+='\nimport {move} from "../lib/util.mjs";\ntest("unit directional input moves the player",()=>{const p={x:300,y:300};move(p,{dx:1,dy:0},.05);assert.ok(p.x>300);});\n'
+          p.write_text(s)
+          (root/'LIVE.md').write_text('''# Play the prototypes
+
+          Live arcade: https://haki-s-playtest-arcade-58ip5f.v2.appdeploy.ai/
+
+          Use Play solo + AI, or Create friend room and Copy invite. The three solo games have optional AI autopilot. All ten have touch and keyboard controls.
+
+          The hosted fallback runs simulation in the host browser. Keep the host tab open and active. Closing the host closes that room. The included native Node server instead runs an authoritative simulation and supports host-control transfer. These are simplified Canvas prototypes, not Unity projects or complete games.
+
+          Railway authentication is connected, but project creation was blocked by the expired account trial. No plan was purchased. Ten new remote GitHub repositories were not created: source remains on this isolated branch, and the delivery workflow exports ten independent local Git repositories for download.
+
+          The live fallback adapter and the native server are separate implementations. Local native-server tests do not prove live AppDeploy multiplayer behavior. The deployment reported no frontend or backend errors, but a two-device hosted playtest remains necessary.
+          ''')
+          PY
+      - name: Verify and rebuild
+        working-directory: prototype-arcade
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npm run check
+          npm test
+          python3 scripts/bundle.py
+      - name: Export separate projects
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil,subprocess,json,re,zipfile
+          root=Path('prototype-arcade');out=Path('_delivery');out.mkdir()
+          ignored=shutil.ignore_patterns('node_modules','.git','*.log','*.pid','playwright-results','browser_test.py','deployment')
+          shutil.copytree(root,out/'prototype-arcade',ignore=ignored)
+          shutil.copytree(root/'deployment',out/'prototype-arcade/deployment',dirs_exist_ok=True) if (root/'deployment').exists() else None
+          ids=['grab-shift','misprint','haunt-for-hire','upstairs-is-on-fire','we-are-the-floor','do-not-open','yesterdays-crew','sink-different','scrap-sumo','pet-sitting-is-easy']
+          projects=out/'ten-game-repositories';projects.mkdir()
+          for game in ids:
+            dest=projects/('prototype-'+game)
+            shutil.copytree(root,dest,ignore=ignored)
+            for p in (dest/'games').glob('*.mjs'):
+              if p.stem!=game:p.unlink()
+            p=dest/'lib/registry.mjs';s=p.read_text()
+            s=re.sub(r'^import \* as .* from .*;\n','',s,flags=re.M)
+            s="import * as selected from '../games/"+game+".mjs';\n"+re.sub(r'export const games = \[.*?\];','export const games = [selected];',s)
+            p.write_text(s)
+            p=dest/'web/main.mjs';s=p.read_text().replace("const id=hash.get('game')||fromPath||(location.hash===''?window.ARCADE_DEFAULT_GAME:null);","const id=hash.get('game')||fromPath||"+json.dumps(game)+';')
+            s=s.replace('10 PLAYABLE EXPERIMENTS','PLAYABLE PROTOTYPE').replace('7 multiplayer games · 3 solo experiments','Standalone prototype')
+            p.write_text(s)
+            p=dest/'package.json';pkg=json.loads(p.read_text());pkg['name']='prototype-'+game;p.write_text(json.dumps(pkg,indent=2)+'\n')
+            for p in (dest/'tests').glob('*'):p.unlink()
+            (dest/'tests/games.test.mjs').write_text('''import test from 'node:test';
+          import assert from 'node:assert/strict';
+          import {games,step} from '../lib/registry.mjs';
+          for(const game of games)test(game.meta.title+' simulation',()=>{const s=game.init(42);for(let n=0;n<14000&&s.status==='playing';n++)step(game,s,[],s.players.map(()=>true),.05);assert.notEqual(s.status,'playing');});
+          ''')
+            (dest/'README.md').write_text('# '+game+' prototype\n\nStandalone source project for Hakan Alpay. Run `npm install`, `npm test`, then `npm start`. Open http://localhost:3000. Or open arcade-offline.html for local play with AI.\n\nThis folder is an independent local Git repository, not an already-created GitHub repository. After authenticating the GitHub CLI, publish it with `gh repo create prototype-'+game+' --private --source=. --remote=origin --push`.\n\nAI uses game-specific rules without API calls. This is a compact 2D mechanical prototype, not a finished Unity game. See LIVE.md for hosting differences.\n')
+            subprocess.run(['python3','scripts/bundle.py'],cwd=dest,check=True)
+            subprocess.run(['node','--test','tests/games.test.mjs'],cwd=dest,check=True)
+            subprocess.run(['git','init','-b','main'],cwd=dest,check=True,stdout=subprocess.DEVNULL)
+            subprocess.run(['git','add','.'],cwd=dest,check=True)
+            subprocess.run(['git','-c','user.name=Prototype Export','-c','user.email=prototype@localhost','commit','-m','Initial standalone playable prototype'],cwd=dest,check=True,stdout=subprocess.DEVNULL)
+            shutil.make_archive(str(out/('prototype-'+game)),'zip',root_dir=projects,base_dir='prototype-'+game)
+          shutil.make_archive(str(out/'ten-game-repositories'),'zip',root_dir=out,base_dir='ten-game-repositories')
+          shutil.make_archive(str(out/'arcade-source'),'zip',root_dir=out,base_dir='prototype-arcade')
+          shutil.copy(root/'arcade-offline.html',out/'arcade-offline.html')
+          # Check every archive can be read and passes its CRC checks.
+          for p in out.glob('*.zip'):
+            with zipfile.ZipFile(p) as z:assert z.testzip() is None,p
+          PY
+      - name: Publish repaired source only to the prototype branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add prototype-arcade
+          git diff --cached --quiet || git commit -m 'Fix directional controls and regenerate tested game bundles [skip ci]'
+          git push origin HEAD:prototype-arcade-20260911
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ten-playable-game-prototypes
+          path: |
+            _delivery/*.zip
+            _delivery/arcade-offline.html
+          retention-days: 30
