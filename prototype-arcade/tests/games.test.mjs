@@ -36,3 +36,6 @@ for (const game of games) {
 test('Misprint: installed stamps calculate actual left-to-right combinations',()=>{
   assert.equal(evaluate([0,2,2,-1,-1]).total,21);
 });
+
+import {move} from "../lib/util.mjs";
+test("unit directional input moves the player",()=>{const p={x:300,y:300};move(p,{dx:1,dy:0},.05);assert.ok(p.x>300);});

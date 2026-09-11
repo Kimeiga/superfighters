@@ -30,7 +30,7 @@ export function move(p, input = {}, dt, speed = 230, bounds = [40, 100, 920, 545
   let dy = Number(input.dy) || 0;
   if (!dx && !dy && input.target) {dx = input.target.x - p.x; dy = input.target.y - p.y;}
   const length = Math.hypot(dx, dy);
-  if (length > 2) {
+  if ((input.dx || input.dy) ? length > 0 : length > 2) {
     const step = Math.min(speed * dt, input.dx || input.dy ? speed * dt : length);
     p.x += dx / length * step; p.y += dy / length * step;
   }

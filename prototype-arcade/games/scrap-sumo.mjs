@@ -10,7 +10,7 @@ export function update(s,inputs,dt){
  if(s.phase==='build'){s.buildTime-=dt;s.players.forEach((p,i)=>{const input=inputs[i]||{};if(Number.isInteger(input.tool))p.tool=clamp(input.tool,0,4);const cell=cellAt(input,BX,BY,BZ,3,3);if(input.a&&cell>=0&&cell!==4&&!p.ready)p.parts[cell]=p.tool;if(input.c&&cell>=0&&cell!==4&&!p.ready)p.parts[cell]=-1;if(input.b){if(p.parts.every(v=>v<0))p.parts[7]=0;p.ready=true;}});if(s.players.every(p=>p.ready)||s.buildTime<=0)startRound(s);return;}
  if(s.phase==='between'){s.wait-=dt;if(s.wait<=0){s.round++;startRound(s);}return;}
  s.roundTime-=dt;
- s.players.forEach((p,i)=>{if(!p.alive)return;const input=inputs[i]||{},a=stats(p);let dx=input.dx||0,dy=input.dy||0;if(!dx&&!dy&&input.target){dx=input.target.x-p.x;dy=input.target.y-p.y;}const d=Math.hypot(dx,dy);if(d>3){dx/=d;dy/=d;p.vx+=dx*a.thrust*dt;p.vy+=dy*a.thrust*dt;p.angle=Math.atan2(dy,dx);}
+ s.players.forEach((p,i)=>{if(!p.alive)return;const input=inputs[i]||{},a=stats(p);let dx=input.dx||0,dy=input.dy||0;if(!dx&&!dy&&input.target){dx=input.target.x-p.x;dy=input.target.y-p.y;}const d=Math.hypot(dx,dy);if((input.dx||input.dy)?d>0:d>3){dx/=d;dy/=d;p.vx+=dx*a.thrust*dt;p.vy+=dy*a.thrust*dt;p.angle=Math.atan2(dy,dx);}
   if(input.a&&p.cooldown<=0){p.vx+=Math.cos(p.angle||0)*a.dash;p.vy+=Math.sin(p.angle||0)*a.dash;p.cooldown=3;burst(s,p.x,p.y,'BOOST',COLORS[i]);}
   if(input.b&&p.cooldown<=0){p.vx*=-.8;p.vy*=-.8;p.cooldown=.4;}
   const drag=input.c?6:1.1+a.drag;p.vx*=Math.exp(-drag*dt);p.vy*=Math.exp(-drag*dt);p.x+=p.vx*dt;p.y+=p.vy*dt;if(Math.hypot(p.x-480,p.y-345)>242){p.alive=false;burst(s,p.x,p.y,'OUT','#ff9c92');}
