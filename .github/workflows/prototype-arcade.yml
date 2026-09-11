@@ -1,0 +1,55 @@
+name: Prototype arcade source verification
+on:
+  push:
+    branches: [prototype-arcade-20260911]
+    paths: ['prototype-arcade-import/READY']
+permissions:
+  contents: write
+jobs:
+  unpack-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: prototype-arcade-20260911
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify and unpack authored source
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma
+          from pathlib import Path
+          folder = Path('prototype-arcade-import')
+          chunks = sorted(folder.glob('part-*.txt'))
+          if len(chunks) != 4:
+              raise SystemExit('Expected exactly four source chunks')
+          packed = base64.b64decode(''.join(p.read_text().strip() for p in chunks), validate=True)
+          expected = folder.joinpath('READY').read_text().strip()
+          if hashlib.sha256(packed).hexdigest() != expected:
+              raise SystemExit('Source payload checksum mismatch')
+          files = json.loads(lzma.decompress(packed))
+          root = Path('prototype-arcade').resolve()
+          for name, content in files.items():
+              destination = (root / name).resolve()
+              if not destination.is_relative_to(root) or not isinstance(content, str):
+                  raise SystemExit('Unsafe source path')
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              destination.write_text(content, encoding='utf-8')
+          print(f'Imported {len(files)} authored source files')
+          PY
+      - name: Test and bundle
+        working-directory: prototype-arcade
+        run: |
+          npm install --ignore-scripts
+          npm run check
+          npm test
+          python3 scripts/bundle.py
+      - name: Publish verified source on the isolated branch
+        run: |
+          git config user.name 'Prototype Arcade Build'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add prototype-arcade
+          git diff --cached --quiet || git commit -m 'Publish tested ten-game arcade source and offline build'
+          git push origin HEAD:prototype-arcade-20260911
