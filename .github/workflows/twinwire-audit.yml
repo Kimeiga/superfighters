@@ -1,0 +1,44 @@
+name: Twinwire server audit
+on:
+  push:
+    branches: [upgrade/twinwire-2.2-20261026]
+    paths: [.github/workflows/twinwire-audit.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Inspect the existing game server without changing it
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$VPS_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts
+          ssh -o BatchMode=yes -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE' | tee server-audit.txt
+          set -euo pipefail
+          date -Is
+          node --version
+          free -m
+          systemctl show superfighters -p ActiveState -p NRestarts -p WorkingDirectory -p ExecStart
+          app=$(systemctl show superfighters -p WorkingDirectory --value)
+          test -d "$app"
+          git -C "$app" rev-parse HEAD
+          git -C "$app" status --porcelain
+          ss -lntup | grep -E '9208|20000|node' || true
+          REMOTE
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: server-audit
+          path: server-audit.txt
+          retention-days: 7
