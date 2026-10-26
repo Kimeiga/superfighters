@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
-import geckos from '@geckos.io/client';
+import {createEventClient} from 'twinwire/client';
+import {NAMESPACE,LATEST} from './networkConfig.js';
 import { ANIMATION_ORDER, DEFAULT_EMPRESS_ANIMATION_CONFIG, makeFrameList1Based } from './animationConfig.js';
 import { EMPRESS_ATLAS_MANIFEST } from './generated/empressAtlasManifest.js';
 import { DEFAULT_GAMEPLAY_CONFIG, getGameplayConfig } from './gameplayConfig.js';
@@ -250,6 +251,8 @@ class FightScene extends Phaser.Scene {
     this.localOnlinePlayerId = null;
     this.onlineLobbyCode = null;
     this.onlineChannel = null;
+    this.onlinePeers = new Map();
+    this.onlineRecoveryHeld = false;
     this.onlineInputSeq = 0;
     this.onlineLastInputPayload = '';
     this.onlineLastInputSentAt = 0;
@@ -501,6 +504,16 @@ class FightScene extends Phaser.Scene {
       return;
     }
 
+    if(this.onlineMode && this.onlineReady){
+      const recovering=this.onlineChannel?.net.status!=='online' ||
+        [...this.onlinePeers.values()].some(peer=>!peer.online) ||
+        (!this.onlineIsHost && !this.onlineChannel.ready('host-snapshot'));
+      if(recovering){
+        this.onlineRecoveryHeld=true;this.physics.world.pause();
+        this.updateUiLayer();this.drawHud(time);return;
+      }
+      if(this.onlineRecoveryHeld){this.onlineRecoveryHeld=false;this.physics.world.resume();}
+    }
     this.updateMovingPlatforms(time);
     this.updateDynamicProps();
     this.updateSwingingCrates(delta);
@@ -2588,6 +2601,7 @@ class FightScene extends Phaser.Scene {
     this.cpuPlayerId = null;
     this.onlineMode = true;
     this.onlineReady = false;
+    for(const player of options.players??[])this.handleOnlinePeerPresence({...player,online:player.online!==false});
     this.modeSelected = true;
     this.matchPaused = true;
     this.onlineChannel = options.channel ?? null;
@@ -2800,7 +2814,7 @@ class FightScene extends Phaser.Scene {
 
   restartMatch() {
     if (this.onlineMode && this.onlineChannel) {
-      this.onlineChannel.emit('restart-match', { lobbyCode: this.onlineLobbyCode }, { reliable: true });
+      this.onlineChannel.emit('restart-match', { lobbyCode: this.onlineLobbyCode });
       this.showMessage('Rematch requested', 700);
       return;
     }
@@ -2923,7 +2937,7 @@ class FightScene extends Phaser.Scene {
       this.setOnlineStatus('Creating lobby...');
       channel.emit('create-lobby', {
         skinIndex: this.playerSkinIndices?.p1 ?? 0,
-      }, { reliable: true });
+      });
     } catch (error) {
       this.setOnlineStatus(error.message || 'Could not connect');
     }
@@ -2942,7 +2956,7 @@ class FightScene extends Phaser.Scene {
       channel.emit('join-lobby', {
         code: lobbyCode,
         skinIndex: this.playerSkinIndices?.p2 ?? 1,
-      }, { reliable: true });
+      });
     } catch (error) {
       this.setOnlineStatus(error.message || 'Could not connect');
     }
@@ -2959,7 +2973,7 @@ class FightScene extends Phaser.Scene {
     }
 
     this.setOnlineStatus('Starting game...');
-    this.onlineChannel.emit('start-match', { lobbyCode: this.onlineLobbyCode }, { reliable: true });
+    this.onlineChannel.emit('start-match', { lobbyCode: this.onlineLobbyCode });
   }
 
   ensureOnlineConnection() {
@@ -2967,10 +2981,11 @@ class FightScene extends Phaser.Scene {
       return Promise.resolve(this.onlineChannel);
     }
 
+    if(this.onlineChannel && !['closed','lost'].includes(this.onlineChannel.net.status))return waitOnlineChannel(this.onlineChannel);
     this.disconnectOnlineChannel();
     const config = parseOnlineServerConfig();
     this.setOnlineStatus(`Connecting to ${config.label}...`);
-    const channel = geckos(config.options);
+    const channel = makeOnlineChannel(config.options);
     this.onlineChannel = channel;
 
     return new Promise((resolve, reject) => {
@@ -2995,12 +3010,16 @@ class FightScene extends Phaser.Scene {
     }
     this.onlineHandlersBound = true;
 
+    channel.onConnect(()=>{this.onlineConnected=true;this.setOnlineStatus(this.onlineLobbyCode?'Reconnected to '+this.onlineLobbyCode:'Connected. Create or join a lobby.');});
+    channel.onPause=()=>{this.onlineConnected=false;this.holdOnlineRecovery();this.setOnlineStatus('Reconnecting to the same match…');};
+    channel.onReset=()=>{this.resetOnlineInputs();this.onlinePeers.clear();this.onlineLastHostSnapshotServerTime=0;this.onlineLastInputPayload='';this.holdOnlineRecovery();};
+    channel.on('peer-presence',data=>this.handleOnlinePeerPresence(data));
     channel.on('lobby-created', (data) => this.handleOnlineLobbyAssigned(data, 'created'));
     channel.on('lobby-joined', (data) => this.handleOnlineLobbyAssigned(data, 'joined'));
     channel.on('lobby-state', (data) => this.handleOnlineLobbyState(data));
     channel.on('match-start', (data) => this.handleOnlineMatchStart(data));
-    channel.on('player-input', (data) => this.handleOnlinePlayerInput(data));
-    channel.on('player-snapshot', (data) => this.handleOnlinePlayerSnapshot(data));
+    for(const id of ['p1','p2']) channel.on('input-'+id,data=>this.handleOnlinePlayerInput(data));
+    for(const id of ['p1','p2']) channel.on('snapshot-'+id,data=>this.handleOnlinePlayerSnapshot(data));
     channel.on('host-snapshot', (data) => this.handleOnlineHostSnapshot(data));
     channel.on('restart-match', (data) => this.handleOnlineRestartMatch(data));
     channel.on('lobby-error', (data) => {
@@ -3008,19 +3027,45 @@ class FightScene extends Phaser.Scene {
       this.showMessage(data?.message || 'Lobby error', 900);
     });
     channel.onDisconnect(() => {
+      if(this.onlineChannel!==channel)return;
       this.onlineConnected = false;
       this.onlineReady = false;
-      this.onlineMode = false;
-      this.setOnlineStatus('Disconnected from online server.');
-      this.showMessage('Online disconnected', 1200);
+      this.onlineChannel=null;this.onlineHandlersBound=false;
+      this.onlineLobbyCode=null;this.onlineLobbyStarted=false;this.onlineLobbyPlayerCount=0;
+      this.beginOnlineFlow();
+      this.setOnlineStatus('This session ended. Create or join a new lobby.');
     });
   }
 
+  holdOnlineRecovery(){
+    if(this.onlineMode && this.onlineReady){this.onlineRecoveryHeld=true;this.physics.world.pause();}
+    for(const player of this.players){player.remoteInputDown=createInputDown();player.remoteSnapshotBuffer=[];}
+  }
+
+  handleOnlinePeerPresence(data){
+    if(!['p1','p2'].includes(data?.playerId)||!Number.isSafeInteger(data.epoch))return;
+    const previous=this.onlinePeers.get(data.playerId);
+    if(previous && data.epoch<previous.epoch)return;
+    this.onlinePeers.set(data.playerId,{epoch:data.epoch,online:Boolean(data.online)});
+    const player=this.getPlayerById(data.playerId);
+    if(player && (!data.online || previous?.epoch!==data.epoch)){
+      player.remoteInputDown=createInputDown();player.remoteInputSeq=0;
+      player.remoteSnapshotBuffer=[];player.remoteLastSnapshotServerTime=0;
+    }
+    if(!data.online)this.holdOnlineRecovery();
+  }
+
+  acceptOnlineOwner(data,id){
+    const peer=this.onlinePeers.get(id);
+    return Boolean(peer?.online && peer.epoch===data?.peerEpoch);
+  }
+
   disconnectOnlineChannel() {
-    this.onlineChannel?.close();
+    const previous=this.onlineChannel;
     this.onlineChannel = null;
     this.onlineConnected = false;
     this.onlineHandlersBound = false;
+    previous?.close();
   }
 
   handleOnlineLobbyAssigned(data, action) {
@@ -3054,6 +3099,7 @@ class FightScene extends Phaser.Scene {
   }
 
   handleOnlineLobbyState(data) {
+    for(const player of data?.players??[])this.handleOnlinePeerPresence({...player,online:player.online!==false});
     if (data?.code) {
       this.onlineLobbyCode = data.code;
       this.updateOnlineInviteDisplay();
@@ -3061,6 +3107,10 @@ class FightScene extends Phaser.Scene {
     const count = data?.players?.length ?? 0;
     this.onlineLobbyPlayerCount = count;
     this.onlineLobbyStarted = Boolean(data?.started);
+    if(count<2 && this.onlineLobbyStarted){
+      this.disconnectOnlineChannel();this.onlineLobbyCode=null;this.onlineLobbyStarted=false;
+      this.beginOnlineFlow();this.setOnlineStatus('Your opponent left. Create or join a new lobby.');return;
+    }
     this.updateOnlineStartButton();
     if (count < 2) {
       this.onlineReady = false;
@@ -3093,19 +3143,19 @@ class FightScene extends Phaser.Scene {
   }
 
   handleOnlinePlayerInput(data) {
-    if (!data || data.playerId === this.localOnlinePlayerId) {
-      return;
+    if (!data || data.playerId === this.localOnlinePlayerId || !this.acceptOnlineOwner(data,data.playerId)) {
+      return false;
     }
     if (Number.isFinite(Number(data.roundId)) && Number(data.roundId) !== this.onlineRoundId) {
-      return;
+      return false;
     }
     const player = this.getPlayerById(data.playerId);
     if (!player) {
-      return;
+      return false;
     }
     const seq = safeClientInteger(data.seq);
     if (seq && seq <= (player.remoteInputSeq ?? 0)) {
-      return;
+      return false;
     }
     player.remoteInputSeq = seq;
     player.remoteInputDown = sanitizeInputDown(data.input);
@@ -3113,29 +3163,29 @@ class FightScene extends Phaser.Scene {
 
   handleOnlinePlayerSnapshot(data) {
     if (!data || data.playerId === this.localOnlinePlayerId) {
-      return;
+      return false;
     }
     if (Number.isFinite(Number(data.roundId)) && Number(data.roundId) !== this.onlineRoundId) {
-      return;
+      return false;
     }
     const player = this.getPlayerById(data.playerId);
     if (!player || !data.snapshot) {
-      return;
+      return false;
     }
     const serverTime = safeClientInteger(data.serverTime);
     this.queueRemoteSnapshot(player, data.snapshot, serverTime);
   }
 
   handleOnlineHostSnapshot(data) {
-    if (!data || this.onlineIsHost) {
-      return;
+    if (!data || this.onlineIsHost || !this.acceptOnlineOwner(data,'p1') || !data.snapshots?.p1 || !data.snapshots?.p2) {
+      return false;
     }
     if (Number.isFinite(Number(data.roundId)) && Number(data.roundId) !== this.onlineRoundId) {
-      return;
+      return false;
     }
     const serverTime = safeClientInteger(data.serverTime);
     if (serverTime && serverTime < this.onlineLastHostSnapshotServerTime) {
-      return;
+      return false;
     }
     this.onlineLastHostSnapshotServerTime = serverTime;
 
@@ -8314,15 +8364,26 @@ function getDefaultOnlineServerText() {
 }
 
 function parseOnlineServerConfig() {
-  const value = getDefaultOnlineServerText();
-  const parsed = new URL(value.includes('://') ? value : `${window.location.protocol}//${value}`);
-  return {
-    label: parsed.host,
-    options: {
-      url: `${parsed.protocol}//${parsed.hostname}`,
-      port: Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80)),
-    },
-  };
+  const value=import.meta.env.VITE_TWINWIRE_URL || getDefaultOnlineServerText();
+  const parsed=new URL(value.includes('://')?value:window.location.protocol+'//'+value);
+  parsed.protocol=parsed.protocol==='https:'||parsed.protocol==='wss:'?'wss:':'ws:';
+  if(!parsed.pathname.endsWith('/connect'))parsed.pathname=(parsed.pathname==='/'?import.meta.env.BASE_URL:parsed.pathname).replace(/\/$/,'')+'/connect';
+  return {label:parsed.host,options:{url:parsed.href,room:NAMESPACE,latest:LATEST,stateMaxAgeMs:500,rtc:new URLSearchParams(location.search).get('rtc')==='0'?false:undefined}};
+}
+
+function makeOnlineChannel(options){
+  const channel=createEventClient(options);channel.net.bindPageLifecycle();return channel;
+}
+
+function waitOnlineChannel(channel){
+  return new Promise((resolve,reject)=>{
+    const end=performance.now()+30_000;
+    const check=()=>{
+      if(channel.net.status==='online'){resolve(channel);return;}
+      if(['closed','lost'].includes(channel.net.status)||performance.now()>end){reject(new Error('Connection unavailable. Try again.'));return;}
+      setTimeout(check,50);
+    };check();
+  });
 }
 
 function safeClientInteger(value) {
@@ -9534,13 +9595,14 @@ function createBootMenu() {
     startButton.disabled = !(showInvite && state.playerCount >= 2 && !state.started);
   };
   const ensureChannel = () => {
+    if(state.channel && !['closed','lost'].includes(state.channel.net.status))return waitOnlineChannel(state.channel);
     if (state.channel && state.connected) {
       return Promise.resolve(state.channel);
     }
 
     const config = parseOnlineServerConfig();
     setStatus(`Connecting to ${config.label}...`);
-    const channel = geckos(config.options);
+    const channel = makeOnlineChannel(config.options);
     state.channel = channel;
 
     return new Promise((resolve, reject) => {
@@ -9562,7 +9624,7 @@ function createBootMenu() {
       return;
     }
     state.handlersBound = true;
-
+    channel.onPause=()=>{state.connected=false;setStatus('Reconnecting to the same lobby…');};
     const handleLobbyAssigned = (data, action) => {
       state.code = data.code;
       state.playerId = data.playerId;
@@ -9622,7 +9684,7 @@ function createBootMenu() {
       setStatus('Creating lobby...');
       channel.emit('create-lobby', {
         skinIndex: getBootSelectedSkin(overlay),
-      }, { reliable: true });
+      });
     } catch (error) {
       setStatus(error.message || 'Could not connect');
     }
@@ -9640,7 +9702,7 @@ function createBootMenu() {
       channel.emit('join-lobby', {
         code,
         skinIndex: getBootSelectedSkin(overlay),
-      }, { reliable: true });
+      });
     } catch (error) {
       setStatus(error.message || 'Could not connect');
     }
@@ -9702,7 +9764,7 @@ function createBootMenu() {
       return;
     }
     setStatus('Starting game...');
-    state.channel.emit('start-match', { lobbyCode: state.code }, { reliable: true });
+    state.channel.emit('start-match', { lobbyCode: state.code });
   });
 
   if (initialCode) {
