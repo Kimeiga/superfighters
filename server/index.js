@@ -81,7 +81,11 @@ app.use((request, response) => {
 const io = await createEventServer({
   namespace:NAMESPACE, latest:LATEST, port, host:'0.0.0.0', http:app,
   path:basePath+'connect', resumeGraceMs:30_000, maxSessions:128,
-  origins:origin => process.env.PUBLIC_ORIGIN ? origin===process.env.PUBLIC_ORIGIN : /^https?:\/\//.test(origin),
+  origins:origin => {
+    if(!/^https?:\/\//.test(origin))return false;
+    const allowed=(process.env.PUBLIC_ORIGIN||'*').split(',').map(value=>value.trim());
+    return allowed.includes('*')||allowed.includes(origin);
+  },
   rtc:process.env.RTC==='0' ? undefined : await createNativeRtcFactory({port:udpMin}),
 });
 

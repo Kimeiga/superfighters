@@ -8,7 +8,7 @@ import {NAMESPACE,LATEST} from '../src/networkConfig.js';
 const reserve=net.createServer();await new Promise(r=>reserve.listen(0,'127.0.0.1',r));const port=reserve.address().port;await new Promise(r=>reserve.close(r));
 const rtc=process.env.TEST_RTC==='1',base='http://127.0.0.1:'+port;
 if(rtc)globalThis.RTCPeerConnection=(await import('node-datachannel/polyfill')).RTCPeerConnection;
-const child=spawn(process.execPath,['server/index.js'],{env:{...process.env,PORT:String(port),RTC:rtc?'1':'0',TWINWIRE_UDP_PORT:String(port+1),BASE_PATH:'/superfighters/'},stdio:['ignore','pipe','pipe']});
+const child=spawn(process.execPath,['server/index.js'],{env:{...process.env,PORT:String(port),RTC:rtc?'1':'0',TWINWIRE_UDP_PORT:String(port+1),BASE_PATH:'/superfighters/',PUBLIC_ORIGIN:'*'},stdio:['ignore','pipe','pipe']});
 let log='';for(const stream of [child.stdout,child.stderr])stream.on('data',d=>{log=(log+d).slice(-10000);});
 const clients=[],sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function wait(fn,timeout=12000){const end=performance.now()+timeout;while(!await fn()){if(performance.now()>end)throw Error('Timed out: '+log);await sleep(10);}}
