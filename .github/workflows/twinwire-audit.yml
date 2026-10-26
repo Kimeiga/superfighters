@@ -32,8 +32,9 @@ jobs:
           systemctl show superfighters -p ActiveState -p NRestarts -p WorkingDirectory -p ExecStart
           app=$(systemctl show superfighters -p WorkingDirectory --value)
           test -d "$app"
-          git -C "$app" rev-parse HEAD
-          git -C "$app" status --porcelain
+          if test -d "$app/.git"; then git -C "$app" rev-parse HEAD; git -C "$app" status --porcelain; else cat "$app/BUILD_REVISION"; fi
+          pid=$(systemctl show superfighters -p MainPID --value)
+          tr '\0' '\n' < "/proc/$pid/environ" | grep -E '^(PUBLIC_ORIGIN|BASE_PATH|PORT|RTC|TWINWIRE_UDP_PORT)=' || true
           ss -lntup | grep -E '9208|20000|node' || true
           REMOTE
       - uses: actions/upload-artifact@v7
