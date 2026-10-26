@@ -1,16 +1,16 @@
-import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import geckos from '@geckos.io/server';
+import {createEventServer, createNativeRtcFactory} from 'twinwire/server';
+import {NAMESPACE,LATEST} from '../src/networkConfig.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const distDir = path.join(rootDir, 'dist');
 const port = Number(process.env.PORT || process.env.GECKOS_PORT || 9208);
-const udpMin = Number(process.env.GECKOS_UDP_MIN || 20000);
-const udpMax = Number(process.env.GECKOS_UDP_MAX || udpMin);
+const udpMin = Number(process.env.TWINWIRE_UDP_PORT || process.env.GECKOS_UDP_MIN || 20000);
+const udpMax = udpMin;
 const basePath = normalizeBasePath(process.env.BASE_PATH || process.env.VITE_BASE_PATH || '/');
 const maxSkinIndex = 31;
 const validCharacterIds = new Set(['empress']);
@@ -43,6 +43,7 @@ if (basePath !== '/') {
 app.get('/health', (_request, response) => {
   response.json({
     ok: true,
+    twinwire:'2.2.0', wire:4, sessions:io.game.sessions.size,
     lobbies: lobbies.size,
     udpRange: [udpMin, udpMax],
   });
@@ -77,24 +78,18 @@ app.use((request, response) => {
   response.sendFile(path.join(distDir, 'index.html'));
 });
 
-const httpServer = http.createServer(app);
-const io = geckos({
-  cors: {
-    origin: process.env.PUBLIC_ORIGIN || '*',
-  },
-  ordered: false,
-  maxRetransmits: 0,
-  portRange: {
-    min: udpMin,
-    max: udpMax,
-  },
-  multiplex: true,
+const io = await createEventServer({
+  namespace:NAMESPACE, latest:LATEST, port, host:'0.0.0.0', http:app,
+  path:basePath+'connect', resumeGraceMs:30_000, maxSessions:128,
+  origins:origin => process.env.PUBLIC_ORIGIN ? origin===process.env.PUBLIC_ORIGIN : /^https?:\/\//.test(origin),
+  rtc:process.env.RTC==='0' ? undefined : await createNativeRtcFactory({port:udpMin}),
 });
-
-io.addServer(httpServer);
 
 io.onConnection((channel) => {
   channel.on('create-lobby', (data) => {
+    const previous=getLobbyForChannel(channel);
+    if(previous?.started){channel.emit('lobby-error',{message:'Leave this match before creating another lobby'});return;}
+    detachPlayer(channel);
     const lobby = createLobby(channel, sanitizeSkinIndex(data?.skinIndex), sanitizeCharacterId(data?.characterId));
     channel.emit('lobby-created', {
       code: lobby.code,
@@ -103,7 +98,7 @@ io.onConnection((channel) => {
       started: lobby.started,
       roundId: lobby.roundId,
       players: [...lobby.players.values()].map(publicPlayer),
-    }, { reliable: true });
+    });
     emitLobbyState(lobby);
   });
 
@@ -111,14 +106,22 @@ io.onConnection((channel) => {
     const code = normalizeCode(data?.code);
     const lobby = lobbies.get(code);
     if (!lobby) {
-      channel.emit('lobby-error', { message: 'Lobby not found' }, { reliable: true });
+      channel.emit('lobby-error', { message: 'Lobby not found' });
       return;
     }
     if (lobby.players.size >= 2 && !lobby.players.has(channel.id)) {
-      channel.emit('lobby-error', { message: 'Lobby is full' }, { reliable: true });
+      channel.emit('lobby-error', { message: 'Lobby is full' });
       return;
     }
 
+    if(lobby.started && !lobby.players.has(channel.id)){
+      channel.emit('lobby-error',{message:'This match has already started'});return;
+    }
+    const previous=getLobbyForChannel(channel);
+    if(previous && previous!==lobby){
+      if(previous.started){channel.emit('lobby-error',{message:'Leave this match before joining another lobby'});return;}
+      detachPlayer(channel);
+    }
     const playerId = lobby.players.has(channel.id)
       ? lobby.players.get(channel.id).playerId
       : nextPlayerId(lobby);
@@ -130,26 +133,27 @@ io.onConnection((channel) => {
       started: lobby.started,
       roundId: lobby.roundId,
       players: [...lobby.players.values()].map(publicPlayer),
-    }, { reliable: true });
+    });
     emitLobbyState(lobby);
   });
 
   channel.on('start-match', () => {
     const lobby = getLobbyForChannel(channel);
     if (!lobby) {
-      channel.emit('lobby-error', { message: 'Lobby not found' }, { reliable: true });
+      channel.emit('lobby-error', { message: 'Lobby not found' });
       return;
     }
     const player = lobby.players.get(channel.id);
     if (player?.playerId !== 'p1') {
-      channel.emit('lobby-error', { message: 'Only the host can start the game' }, { reliable: true });
+      channel.emit('lobby-error', { message: 'Only the host can start the game' });
       return;
     }
     if (lobby.players.size < 2) {
-      channel.emit('lobby-error', { message: 'Waiting for opponent' }, { reliable: true });
+      channel.emit('lobby-error', { message: 'Waiting for opponent' });
       return;
     }
 
+    if(lobby.started) return;
     lobby.started = true;
     lobby.inputs.clear();
     lobby.inputSeqs.clear();
@@ -161,7 +165,7 @@ io.onConnection((channel) => {
       roundId: lobby.roundId,
       players: [...lobby.players.values()].map(publicPlayer),
       serverTime: Date.now(),
-    }, { reliable: true });
+    });
   });
 
   channel.on('player-input', (data) => {
@@ -186,6 +190,7 @@ io.onConnection((channel) => {
     }
     const packet = {
       playerId: player.playerId,
+      peerEpoch:channel.session.epoch,
       roundId: lobby.roundId,
       seq,
       t: safeInteger(data?.t),
@@ -193,7 +198,7 @@ io.onConnection((channel) => {
       serverTime: Date.now(),
     };
     lobby.inputs.set(player.playerId, packet);
-    io.room(lobby.code).emit('player-input', packet);
+    io.room(lobby.code).emit('input-'+player.playerId, packet);
   });
 
   channel.on('player-snapshot', (data) => {
@@ -210,13 +215,14 @@ io.onConnection((channel) => {
     }
     const packet = {
       playerId: player.playerId,
+      peerEpoch:channel.session.epoch,
       roundId: lobby.roundId,
       t: safeInteger(data?.t),
       snapshot: sanitizeSnapshot(data?.snapshot),
       serverTime: Date.now(),
     };
     lobby.snapshots.set(player.playerId, packet);
-    io.room(lobby.code).emit('player-snapshot', packet);
+    io.room(lobby.code).emit('snapshot-'+player.playerId, packet);
   });
 
   channel.on('host-snapshot', (data) => {
@@ -228,8 +234,10 @@ io.onConnection((channel) => {
     if (player?.playerId !== 'p1') {
       return;
     }
+    if(!data?.snapshots?.p1 || !data?.snapshots?.p2) return;
     const packet = {
       hostPlayerId: 'p1',
+      peerEpoch:channel.session.epoch,
       roundId: lobby.roundId,
       t: safeInteger(data?.t),
       snapshots: sanitizeSnapshotMap(data?.snapshots),
@@ -255,29 +263,28 @@ io.onConnection((channel) => {
       code: lobby.code,
       roundId: lobby.roundId,
       serverTime: Date.now(),
-    }, { reliable: true });
+    });
   });
 
-  channel.onDisconnect(() => {
-    const lobby = getLobbyForChannel(channel);
-    if (!lobby) {
-      return;
-    }
-    lobby.players.delete(channel.id);
-    channel.leave();
-    if (lobby.players.size === 0) {
-      lobbies.delete(lobby.code);
-      return;
-    }
+  channel.onPause=()=>{
+    const lobby=getLobbyForChannel(channel);if(!lobby)return;
+    const player=lobby.players.get(channel.id);lobby.inputs.delete(player.playerId);
+    io.room(lobby.code).emit('peer-presence',{playerId:player.playerId,online:false,epoch:channel.session.epoch});
+  };
+  channel.onResume=()=>{
+    const lobby=getLobbyForChannel(channel);if(!lobby)return;
+    const player=lobby.players.get(channel.id);
     emitLobbyState(lobby);
-  });
+    io.room(lobby.code).emit('peer-presence',{playerId:player.playerId,online:true,epoch:channel.session.epoch});
+    // No lobby-joined or match-start replay: these reset input sequences/round physics.
+    // A new current host snapshot, not cached history, unlocks guest playback.
+  };
+  channel.onDisconnect(()=>detachPlayer(channel));
 });
 
-httpServer.listen(port, () => {
-  console.log(`Superfighters server listening on http://0.0.0.0:${port}`);
-  console.log(`Serving game at ${basePath}`);
-  console.log(`Geckos UDP port range ${udpMin}-${udpMax}`);
-});
+const listeningPort=await io.listen();
+console.log('Superfighters Twinwire listening on http://0.0.0.0:'+listeningPort+' at '+basePath);
+export {io,lobbies};
 
 function normalizeBasePath(value) {
   const cleaned = String(value || '/').trim().replace(/^\/+|\/+$/g, '');
@@ -336,6 +343,12 @@ function getCurrentHashedAssetPath(requestPath) {
   return currentAsset ? path.join(assetsDir, currentAsset) : null;
 }
 
+function detachPlayer(channel){
+ const lobby=getLobbyForChannel(channel);if(!lobby)return;
+ lobby.players.delete(channel.id);channel.leave(lobby.code);
+ if(!lobby.players.size)lobbies.delete(lobby.code);else emitLobbyState(lobby);
+}
+
 function createLobby(channel, skinIndex = 0, characterId = 'empress') {
   const code = generateLobbyCode();
   const lobby = {
@@ -385,7 +398,7 @@ function emitLobbyState(lobby) {
     hostPlayerId: 'p1',
     roundId: lobby.roundId,
     serverTime: Date.now(),
-  }, { reliable: true });
+  });
 }
 
 function nextPlayerId(lobby) {
@@ -397,6 +410,8 @@ function publicPlayer(player) {
   return {
     playerId: player.playerId,
     channelId: player.channelId,
+    online:io.channels.get(player.channelId)?.connected??false,
+    epoch:io.channels.get(player.channelId)?.session.epoch??0,
     skinIndex: sanitizeSkinIndex(player.skinIndex),
     characterId: sanitizeCharacterId(player.characterId),
   };

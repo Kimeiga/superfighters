@@ -1,14 +1,39 @@
-name: Deploy
+name: Deploy paired Twinwire release
 
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: superfighters-production
+  cancel-in-progress: false
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Verify retained gameplay sessions on both paths
+        run: |
+          npm run test:multiplayer
+          TEST_RTC=1 npm run test:multiplayer
+      - name: Build the matching client
+        env:
+          VITE_BASE_PATH: /superfighters/
+          VITE_TWINWIRE_URL: wss://hakanalpay.com/superfighters/connect
+        run: npm run build
+      - name: Package the paired release
+        run: tar -czf superfighters-release.tgz dist server src/networkConfig.js package.json package-lock.json tools/deploy-release.sh
       - name: Add SSH key
         run: |
           install -m 700 -d ~/.ssh
@@ -16,18 +41,19 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Deploy to VPS
+      - name: Stage, switch and verify with rollback
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_APP_DIR: ${{ secrets.VPS_APP_DIR }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
-          ssh -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" <<'EOF'
           set -euo pipefail
-          cd "${{ secrets.VPS_APP_DIR }}"
-          git fetch origin main
-          git reset --hard origin/main
-          set -a
-          . ./.env
-          set +a
-          npm ci
-          NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=1024}" npm run build
-          systemctl restart superfighters
-          systemctl --no-pager --full status superfighters
-          EOF
+          scp -P "$VPS_PORT" superfighters-release.tgz "$VPS_USER@$VPS_HOST:/tmp/superfighters-$RELEASE_SHA.tgz"
+          ssh -o BatchMode=yes -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_APP_DIR' '$RELEASE_SHA' '/tmp/superfighters-$RELEASE_SHA.tgz'" < tools/deploy-release.sh | tee deployment-receipt.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: production-deployment-receipt
+          path: deployment-receipt.txt
