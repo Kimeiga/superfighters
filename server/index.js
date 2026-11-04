@@ -3,6 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import {createEventServer, createNativeRtcFactory} from 'twinwire/server';
+import {VERSION as WIRE_VERSION} from 'twinwire';
+import twinwirePackage from 'twinwire/package.json' with {type:'json'};
 import {NAMESPACE,LATEST} from '../src/networkConfig.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -43,7 +45,7 @@ if (basePath !== '/') {
 app.get('/health', (_request, response) => {
   response.json({
     ok: true,
-    twinwire:'2.2.0', wire:4, sessions:io.game.sessions.size,
+    twinwire:twinwirePackage.version, wire:WIRE_VERSION, sessions:io.game.sessions.size,
     lobbies: lobbies.size,
     udpRange: [udpMin, udpMax],
   });

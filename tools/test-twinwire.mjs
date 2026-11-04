@@ -50,7 +50,7 @@ try{
  b.c.emit('player-input',{roundId,seq:30,input:{shoot:true}});await sleep(100);assert.equal(a.last('input-p2').seq,31);
  a.c.emit('host-snapshot',{roundId,snapshots:{p1:snapshot(31),p2:snapshot(131)},pickups:[]});
  await wait(()=>b.c.ready('host-snapshot')&&b.last('host-snapshot')?.snapshots.p2.x===131);
- const health=await fetch(base+'/health').then(r=>r.json());assert.equal(health.twinwire,'2.2.0');assert.equal(health.sessions,2);assert.equal(health.lobbies,1);
+ const health=await fetch(base+'/health').then(r=>r.json());assert.equal(health.twinwire,'3.0.0');assert.equal(health.sessions,2);assert.equal(health.lobbies,1);
  console.log(JSON.stringify({ok:true,transport:rtc?'rtc':'ws',independentOwnerStreams:true,sameSessionAndRound:true,presenceEpochFence:true,freshWorldAfterResume:true,roundId}));
 }finally{
  clients.forEach(c=>c.close());if(child.exitCode===null){const ended=once(child,'exit');child.kill();await ended;}

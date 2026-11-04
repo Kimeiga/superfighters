@@ -16,7 +16,7 @@
   "dependencies": {
     "express": "^5.2.1",
     "phaser": "^3.90.0",
-    "twinwire": "2.2.0"
+    "twinwire": "3.0.0"
   },
   "devDependencies": {
     "pngjs": "^7.0.0",
