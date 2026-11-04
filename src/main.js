@@ -8368,7 +8368,7 @@ function parseOnlineServerConfig() {
   const parsed=new URL(value.includes('://')?value:window.location.protocol+'//'+value);
   parsed.protocol=parsed.protocol==='https:'||parsed.protocol==='wss:'?'wss:':'ws:';
   if(!parsed.pathname.endsWith('/connect'))parsed.pathname=(parsed.pathname==='/'?import.meta.env.BASE_URL:parsed.pathname).replace(/\/$/,'')+'/connect';
-  return {label:parsed.host,options:{url:parsed.href,room:NAMESPACE,latest:LATEST,stateMaxAgeMs:500,rtc:new URLSearchParams(location.search).get('rtc')==='0'?false:undefined}};
+  return {label:parsed.host,options:{url:parsed.href,room:NAMESPACE,latest:LATEST,stateMaxAgeMs:500,rtc:new URLSearchParams(location.search).get('rtc')==='0'?false:undefined,webtransport:new URLSearchParams(location.search).get('rtc')==='0'?false:undefined}};
 }
 
 function makeOnlineChannel(options){

@@ -29,7 +29,7 @@ for attempt in $(seq 1 40); do
   sleep 0.25
 done
 test "$ready" = true
-node --input-type=module -e "import fs from 'node:fs';const h=JSON.parse(fs.readFileSync('staged-health.json'));if(h.twinwire!=='2.2.0'||h.wire!==4)throw Error('Staged identity mismatch');"
+node --input-type=module -e "import fs from 'node:fs';const h=JSON.parse(fs.readFileSync('staged-health.json'));if(h.twinwire!=='3.0.0'||h.wire!==5)throw Error('Staged identity mismatch');"
 stop_smoke
 trap - EXIT
 if test -L "$app"; then
@@ -48,7 +48,7 @@ if ! systemctl restart superfighters; then rollback; exit 1; fi
 healthy=false
 for attempt in $(seq 1 40); do
   if curl --fail --silent http://127.0.0.1:9208/health > live-health.json; then
-    if node --input-type=module -e "import fs from 'node:fs';if(JSON.parse(fs.readFileSync('live-health.json')).twinwire!=='2.2.0')process.exit(1);"; then healthy=true; break; fi
+    if node --input-type=module -e "import fs from 'node:fs';if(JSON.parse(fs.readFileSync('live-health.json')).twinwire!=='3.0.0')process.exit(1);"; then healthy=true; break; fi
   fi
   sleep 0.25
 done
